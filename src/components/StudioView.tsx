@@ -55,7 +55,12 @@ import {
   updateSceneRole,
 } from "../engine/sceneOps";
 import { renderProjectFrame } from "../engine/canvasRenderer";
-import { checkWebCodecsSupport, exportProjectToMp4 } from "../engine/exportEngine";
+import {
+  ExportCancelledError,
+  checkWebCodecsSupport,
+  estimateExportSizeBytes,
+  exportProjectToMp4,
+} from "../engine/exportEngine";
 import {
   aiCopilotPatch,
   checkSidecars,
@@ -162,6 +167,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function formatEta(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return "Menghitung...";
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  if (totalSec < 60) return `${totalSec} dtk`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${mins}m ${secs}d`;
+}
+
 export default function StudioView({
   initialProject,
   byokStatus,
@@ -223,10 +237,14 @@ export default function StudioView({
   const [resolution, setResolution] = useState<"1080p" | "720p">("1080p");
   const [exportFps, setExportFps] = useState<30 | 60>(30);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportStage, setExportStage] = useState<"idle" | "init" | "encoding" | "muxing" | "done">("idle");
   const [exportPct, setExportPct] = useState(0);
   const [exportMessage, setExportMessage] = useState("");
+  const [exportElapsedMs, setExportElapsedMs] = useState(0);
+  const [exportEtaMs, setExportEtaMs] = useState<number | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1170,6 +1188,10 @@ export default function StudioView({
     }
   }
 
+  function handleCancelExport() {
+    exportAbortRef.current?.abort();
+  }
+
   async function handleExport() {
     setExportError(null);
     setExportResult(null);
@@ -1183,9 +1205,15 @@ export default function StudioView({
     const savePath = await pickExportSavePath(`${safeSlug}_9x16`);
     if (!savePath) return;
 
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+
     setIsPlaying(false);
     setIsExporting(true);
+    setExportStage("init");
     setExportPct(0);
+    setExportElapsedMs(0);
+    setExportEtaMs(null);
     setExportMessage("Memulai pipeline export...");
 
     try {
@@ -1196,15 +1224,28 @@ export default function StudioView({
         generateDemoAudio,
         outputPath: savePath,
         videoElement: footagePath ? videoRef.current : null,
-        onProgress: (pct, _stage, msg) => {
-          setExportPct(pct);
-          setExportMessage(msg);
+        signal: controller.signal,
+        onProgress: (upd) => {
+          setExportPct(upd.percent);
+          setExportStage(upd.stage);
+          setExportMessage(upd.message);
+          if (upd.elapsedMs !== undefined) setExportElapsedMs(upd.elapsedMs);
+          if (upd.etaMs !== undefined) setExportEtaMs(upd.etaMs);
         },
       });
+      setExportStage("done");
       setExportResult(result);
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
+      if (err instanceof ExportCancelledError) {
+        setExportStage("idle");
+        setExportPct(0);
+        setExportEtaMs(null);
+        setExportMessage("Export dibatalkan.");
+      } else {
+        setExportError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
+      exportAbortRef.current = null;
       setIsExporting(false);
     }
   }
@@ -1391,9 +1432,9 @@ export default function StudioView({
 
       {/* FLOATING MODULAR BENTO-STUDIO WORKSPACE */}
       <main className="flex min-h-0 flex-1 gap-2.5 overflow-hidden p-2.5">
-        {/* 1. Far-Left Slim Icon Rail (60px) */}
+        {/* 1. Far-Left Slim Icon Rail (62px) */}
         <nav
-          className="ui-panel flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-xl py-2.5"
+          className="ui-panel flex w-[62px] shrink-0 flex-col items-center gap-1 rounded-xl py-2.5"
           aria-label="Alat Studio"
         >
           {RAIL_ITEMS.map((item) => {
@@ -1404,7 +1445,7 @@ export default function StudioView({
                 key={item.id}
                 type="button"
                 onClick={() => setLeftTab(item.id)}
-                className="relative flex w-[48px] flex-col items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-medium transition-colors cursor-pointer"
+                className="relative flex w-[52px] flex-col items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-medium transition-colors cursor-pointer"
                 style={{
                   backgroundColor: active ? "var(--bg-elevated)" : "transparent",
                   color: active ? "var(--text-primary)" : "var(--text-muted)",
@@ -2362,7 +2403,7 @@ export default function StudioView({
                 <span className="font-mono-num text-[11px] font-semibold">9:16 · 1080×1920</span>
                 {activeScene && (
                   <span
-                    className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10px] font-semibold uppercase"
+                    className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-semibold uppercase"
                     style={{
                       backgroundColor: "var(--bg-elevated)",
                       border: "1px solid var(--border-subtle)",
@@ -2468,7 +2509,7 @@ export default function StudioView({
           <div className="ui-panel flex h-[138px] shrink-0 flex-col overflow-hidden rounded-xl">
             {/* Time Ruler */}
             <div
-              className="flex h-6 shrink-0 items-center justify-between border-b px-3 font-mono-num text-[10px]"
+              className="flex h-6 shrink-0 items-center justify-between border-b px-3 font-mono-num text-[11px]"
               style={{
                 borderColor: "var(--border-subtle)",
                 backgroundColor: "var(--bg-elevated)",
@@ -2486,7 +2527,7 @@ export default function StudioView({
             <div className="flex min-h-0 flex-1">
               {/* Row Labels */}
               <div
-                className="flex w-16 shrink-0 flex-col justify-center gap-2 border-r px-2.5 text-[10px] font-semibold"
+                className="flex w-16 shrink-0 flex-col justify-center gap-2 border-r px-2.5 text-[11px] font-semibold"
                 style={{
                   borderColor: "var(--border-subtle)",
                   color: "var(--text-muted)",
@@ -2522,7 +2563,7 @@ export default function StudioView({
                           }}
                           className="flex h-full min-w-0 flex-col justify-center overflow-hidden rounded-md px-2.5"
                         >
-                          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide">
                             <span
                               className="h-1.5 w-1.5 shrink-0 rounded-full"
                               style={{ backgroundColor: roleColor(scene.role) }}
@@ -2532,7 +2573,7 @@ export default function StudioView({
                             </span>
                           </div>
                           <div
-                            className="truncate text-[10px]"
+                            className="truncate text-[11px]"
                             style={{ color: "var(--text-muted)" }}
                           >
                             {scene.text}
@@ -2551,7 +2592,7 @@ export default function StudioView({
                     }}
                   >
                     <span
-                      className="shrink-0 text-[10px] font-medium"
+                      className="shrink-0 text-[11px] font-medium"
                       style={{ color: "var(--text-secondary)" }}
                     >
                       {audioPath
@@ -2571,7 +2612,7 @@ export default function StudioView({
                       ))}
                     </div>
                     <span
-                      className="shrink-0 font-mono-num text-[10px]"
+                      className="shrink-0 font-mono-num text-[11px]"
                       style={{ color: "var(--text-muted)" }}
                     >
                       {!project.globalStyle.bgm.preset || project.globalStyle.bgm.preset === "none"
@@ -2701,7 +2742,7 @@ export default function StudioView({
                       </div>
                       <div className="mt-2.5 flex items-center justify-between">
                         <span
-                          className="font-mono-num text-[10px]"
+                          className="font-mono-num text-[11px]"
                           style={{ color: "var(--text-muted)" }}
                         >
                           {item.time}
@@ -2883,7 +2924,7 @@ export default function StudioView({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold">Text-to-Video Footage</span>
                   <span
-                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold"
+                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold"
                     style={{
                       backgroundColor: "var(--accent-soft)",
                       color: "var(--accent)",
@@ -3025,6 +3066,43 @@ export default function StudioView({
                 </div>
               </div>
 
+              {/* Pre-Export Spec Summary */}
+              <div
+                className="grid grid-cols-3 gap-2 rounded-lg p-3 text-xs"
+                style={{
+                  backgroundColor: "var(--bg-elevated)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div>
+                  <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Durasi
+                  </div>
+                  <div className="mt-0.5 font-mono-num font-semibold">
+                    {formatTimecode(totalDurationMs)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Estimasi Ukuran
+                  </div>
+                  <div className="mt-0.5 font-mono-num font-semibold">
+                    ~{formatBytes(estimateExportSizeBytes(totalDurationMs, resolution, exportFps))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Track Audio
+                  </div>
+                  <div className="mt-0.5 font-mono-num font-semibold">
+                    {project.scenes.reduce((acc, s) => acc + s.sfx.length, 0)} SFX
+                    {project.globalStyle.bgm.preset && project.globalStyle.bgm.preset !== "none"
+                      ? " · BGM"
+                      : ""}
+                  </div>
+                </div>
+              </div>
+
               {!audioPath && (
                 <label
                   className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
@@ -3045,18 +3123,54 @@ export default function StudioView({
 
               {(isExporting || exportMessage) && (
                 <div
-                  className="rounded-lg p-3"
+                  className="rounded-lg p-3.5 space-y-2.5"
                   style={{
                     backgroundColor: "var(--bg-elevated)",
                     border: "1px solid var(--border-subtle)",
                   }}
                 >
-                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                  {/* 3-Stage Export Pipeline Indicator */}
+                  <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+                    {[
+                      { id: "init", label: "1. Siapkan Klip" },
+                      { id: "encoding", label: "2. Encode H.264" },
+                      { id: "muxing", label: "3. Mix FFmpeg" },
+                    ].map((st) => {
+                      const order = { idle: 0, init: 1, encoding: 2, muxing: 3, done: 4 };
+                      const curOrder = order[exportStage];
+                      const stOrder = order[st.id as "init" | "encoding" | "muxing"];
+                      const active = curOrder === stOrder;
+                      const done = curOrder > stOrder;
+                      return (
+                        <div
+                          key={st.id}
+                          className="rounded px-2 py-1 text-center font-medium"
+                          style={{
+                            backgroundColor: active
+                              ? "var(--accent-soft)"
+                              : "var(--bg-panel)",
+                            color: done
+                              ? "var(--success)"
+                              : active
+                                ? "var(--accent)"
+                                : "var(--text-muted)",
+                            border: active
+                              ? "1px solid var(--accent)"
+                              : "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          {st.label}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold">Progress Render</span>
-                    <span className="font-mono-num">{Math.round(exportPct)}%</span>
+                    <span className="font-mono-num font-semibold">{Math.round(exportPct)}%</span>
                   </div>
                   <div
-                    className="h-1.5 w-full overflow-hidden rounded-full"
+                    className="h-2 w-full overflow-hidden rounded-full"
                     style={{ backgroundColor: "var(--bg-panel)" }}
                   >
                     <div
@@ -3067,9 +3181,21 @@ export default function StudioView({
                       }}
                     />
                   </div>
-                  <p className="mt-2 text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                    {exportMessage}
-                  </p>
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="truncate" style={{ color: "var(--text-secondary)" }}>
+                      {exportMessage}
+                    </span>
+                    {isExporting && (
+                      <span className="shrink-0 font-mono-num" style={{ color: "var(--text-muted)" }}>
+                        Sisa ~{formatEta(exportEtaMs)}
+                      </span>
+                    )}
+                    {!isExporting && exportElapsedMs > 0 && exportStage === "done" && (
+                      <span className="shrink-0 font-mono-num" style={{ color: "var(--success)" }}>
+                        Selesai dalam {formatEta(exportElapsedMs)}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -3127,24 +3253,39 @@ export default function StudioView({
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={isExporting}
-                  onClick={() => setShowExportModal(false)}
-                  className="ui-btn-secondary h-9 rounded-md px-3.5 text-xs font-medium disabled:opacity-40 cursor-pointer"
-                >
-                  Tutup
-                </button>
-                <button
-                  type="button"
-                  disabled={isExporting}
-                  onClick={handleExport}
-                  className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  {isExporting ? `Rendering ${Math.round(exportPct)}%` : "Mulai Export MP4"}
-                </button>
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Safe Zone otomatis disembunyikan
+                </span>
+                <div className="flex items-center gap-2">
+                  {isExporting ? (
+                    <button
+                      type="button"
+                      onClick={handleCancelExport}
+                      className="ui-btn-secondary h-9 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
+                      style={{ color: "var(--danger)" }}
+                    >
+                      Batalkan
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowExportModal(false)}
+                      className="ui-btn-secondary h-9 rounded-md px-3.5 text-xs font-medium cursor-pointer"
+                    >
+                      Tutup
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isExporting}
+                    onClick={handleExport}
+                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    {isExporting ? `Rendering ${Math.round(exportPct)}%` : "Mulai Export MP4"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -18,6 +18,23 @@ import {
   type SfxMixEvent,
 } from "../lib/tauriBridge";
 
+export class ExportCancelledError extends Error {
+  constructor() {
+    super("Export dibatalkan oleh pengguna.");
+    this.name = "ExportCancelledError";
+  }
+}
+
+export interface ExportProgressUpdate {
+  percent: number;
+  stage: "init" | "encoding" | "muxing" | "done";
+  message: string;
+  currentFrame?: number;
+  totalFrames?: number;
+  elapsedMs?: number;
+  etaMs?: number | null;
+}
+
 export interface ExportOptions {
   resolution: "1080p" | "720p";
   fps: 30 | 60;
@@ -25,7 +42,27 @@ export interface ExportOptions {
   generateDemoAudio: boolean;
   outputPath: string;
   videoElement?: HTMLVideoElement | null;
-  onProgress?: (percent: number, stage: string, message: string) => void;
+  signal?: AbortSignal;
+  onProgress?: (update: ExportProgressUpdate) => void;
+}
+
+export function estimateExportSizeBytes(
+  durationMs: number,
+  resolution: "1080p" | "720p",
+  fps: 30 | 60
+): number {
+  const sec = Math.max(1, durationMs / 1000);
+  // Realistic H.264 high-quality bitrate estimate + 192 kbps AAC audio
+  const videoBps =
+    resolution === "1080p"
+      ? fps === 60
+        ? 11_000_000
+        : 7_500_000
+      : fps === 60
+        ? 6_000_000
+        : 4_000_000;
+  const audioBps = 192_000;
+  return Math.round(((videoBps + audioBps) / 8) * sec);
 }
 
 export async function checkWebCodecsSupport(): Promise<{
@@ -63,7 +100,7 @@ async function loadHiddenVideo(localPath: string): Promise<HTMLVideoElement | nu
     video.addEventListener("error", () => finish(false), { once: true });
     video.src = toAssetUrl(localPath);
     video.load();
-    window.setTimeout(() => finish(video.readyState >= 2), 4000);
+    window.setTimeout(() => finish(video.readyState >= 2), 6000);
   });
 }
 
@@ -82,7 +119,7 @@ async function seekVideoDeterministic(video: HTMLVideoElement, targetSec: number
     };
     video.addEventListener("seeked", done, { once: true });
     video.currentTime = clampedSec;
-    window.setTimeout(done, 150);
+    window.setTimeout(done, 180);
   });
 }
 
@@ -107,10 +144,17 @@ function buildMixPlan(project: SynkcutProject): AudioMixPlan {
   };
 }
 
+function checkAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new ExportCancelledError();
+  }
+}
+
 export async function exportProjectToMp4(
   project: SynkcutProject,
   options: ExportOptions
 ): Promise<ExportResult> {
+  const startedAt = performance.now();
   const width = options.resolution === "1080p" ? 1080 : 720;
   const height = options.resolution === "1080p" ? 1920 : 1280;
   const fps = options.fps;
@@ -118,7 +162,15 @@ export async function exportProjectToMp4(
   const durationSec = durationMs / 1000;
   const totalFrames = Math.max(1, Math.ceil(durationSec * fps));
 
-  options.onProgress?.(2, "init", `Menyiapkan canvas ${width}×${height} @ ${fps}fps...`);
+  options.onProgress?.({
+    percent: 2,
+    stage: "init",
+    message: `Menyiapkan canvas ${width}×${height} @ ${fps}fps (${totalFrames} frame)...`,
+    currentFrame: 0,
+    totalFrames,
+    elapsedMs: 0,
+    etaMs: null,
+  });
 
   // Preload distinct primary & secondary (Split-Screen) local video clips
   const pathList: string[] = [];
@@ -128,131 +180,192 @@ export async function exportProjectToMp4(
   }
   const uniquePaths = Array.from(new Set(pathList));
   const videoMap = new Map<string, HTMLVideoElement>();
-  for (const path of uniquePaths) {
-    const loaded = await loadHiddenVideo(path);
-    if (loaded) {
-      videoMap.set(path, loaded);
-    }
-  }
 
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d", { alpha: false });
-  if (!ctx) {
-    throw new Error("Gagal membuat Canvas 2D context untuk export.");
-  }
-
-  const target = new BufferTarget();
-  const output = new Output({
-    format: new Mp4OutputFormat({ fastStart: "in-memory" }),
-    target,
-  });
-
-  const videoSource = new CanvasSource(canvas, {
-    codec: "avc",
-    bitrate: QUALITY_HIGH,
-  });
-
-  output.addVideoTrack(videoSource, { frameRate: fps });
-  await output.start();
-
-  if (options.videoElement && !options.videoElement.paused) {
-    options.videoElement.pause();
-  }
-
-  for (let frame = 0; frame < totalFrames; frame++) {
-    const timeSec = frame / fps;
-    const timeMs = timeSec * 1000;
-
-    const activeScene =
-      project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
-      project.scenes[project.scenes.length - 1];
-
-    const sceneVideo =
-      (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
-      options.videoElement ??
-      null;
-    const secondaryVideo =
-      activeScene?.media.secondaryPath ? videoMap.get(activeScene.media.secondaryPath) ?? null : null;
-
-    if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
-      const localSceneSec =
-        Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
-      await seekVideoDeterministic(sceneVideo, localSceneSec);
-    }
-    if (secondaryVideo && secondaryVideo.readyState >= 2 && activeScene) {
-      const localSec = Math.max(0, timeMs - activeScene.startMs) / 1000;
-      await seekVideoDeterministic(secondaryVideo, localSec);
+  try {
+    for (let i = 0; i < uniquePaths.length; i++) {
+      checkAborted(options.signal);
+      options.onProgress?.({
+        percent: 2 + Math.round(((i + 1) / Math.max(1, uniquePaths.length)) * 3),
+        stage: "init",
+        message: `Memuat footage lokal (${i + 1}/${uniquePaths.length})...`,
+        currentFrame: 0,
+        totalFrames,
+        elapsedMs: performance.now() - startedAt,
+        etaMs: null,
+      });
+      const loaded = await loadHiddenVideo(uniquePaths[i]);
+      if (loaded) {
+        videoMap.set(uniquePaths[i], loaded);
+      }
     }
 
-    renderProjectFrame(ctx, project, timeMs, {
-      videoElement: sceneVideo,
-      secondaryVideoElement: secondaryVideo,
-      showSafeZone: false,
+    checkAborted(options.signal);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) {
+      throw new Error("Gagal membuat Canvas 2D context untuk export.");
+    }
+
+    const target = new BufferTarget();
+    const output = new Output({
+      format: new Mp4OutputFormat({ fastStart: "in-memory" }),
+      target,
     });
 
-    await videoSource.add(timeSec, 1 / fps, {
-      keyFrame: frame % (fps * 2) === 0,
+    const videoSource = new CanvasSource(canvas, {
+      codec: "avc",
+      bitrate: QUALITY_HIGH,
     });
 
-    if (frame % 4 === 0 || frame === totalFrames - 1) {
-      const encodePct = 5 + ((frame + 1) / totalFrames) * 72;
-      options.onProgress?.(
-        encodePct,
-        "encoding",
-        `Encoding frame ${frame + 1} / ${totalFrames} (WebCodecs H.264)...`
-      );
+    output.addVideoTrack(videoSource, { frameRate: fps });
+    await output.start();
+
+    if (options.videoElement && !options.videoElement.paused) {
+      options.videoElement.pause();
     }
-  }
 
-  videoSource.close();
-  await output.finalize();
+    const encodeStartTs = performance.now();
 
-  for (const v of videoMap.values()) {
-    v.src = "";
-    v.load();
-  }
+    for (let frame = 0; frame < totalFrames; frame++) {
+      checkAborted(options.signal);
 
-  const buffer = target.buffer;
-  if (!buffer) {
-    throw new Error("Mediabunny tidak menghasilkan buffer MP4.");
-  }
+      const timeSec = frame / fps;
+      const timeMs = timeSec * 1000;
 
-  const videoBytes = new Uint8Array(buffer);
+      const activeScene =
+        project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
+        project.scenes[project.scenes.length - 1];
 
-  if (isTauriRuntime()) {
-    options.onProgress?.(
-      80,
-      "muxing",
-      "FFmpeg Sidecar mencampur Voiceover, BGM Auto-Ducking, & SFX..."
-    );
-    const result = await muxExportMp4({
-      videoBytes,
-      audioPath: options.audioPath,
-      generateDemoAudio: options.generateDemoAudio,
-      durationSec,
+      const sceneVideo =
+        (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
+        options.videoElement ??
+        null;
+      const secondaryVideo = activeScene?.media.secondaryPath
+        ? videoMap.get(activeScene.media.secondaryPath) ?? null
+        : null;
+
+      if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
+        const localSceneSec =
+          Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
+        await seekVideoDeterministic(sceneVideo, localSceneSec);
+      }
+      if (secondaryVideo && secondaryVideo.readyState >= 2 && activeScene) {
+        const localSec = Math.max(0, timeMs - activeScene.startMs) / 1000;
+        await seekVideoDeterministic(secondaryVideo, localSec);
+      }
+
+      renderProjectFrame(ctx, project, timeMs, {
+        videoElement: sceneVideo,
+        secondaryVideoElement: secondaryVideo,
+        showSafeZone: false,
+      });
+
+      await videoSource.add(timeSec, 1 / fps, {
+        keyFrame: frame % (fps * 2) === 0,
+      });
+
+      if (frame % 4 === 0 || frame === totalFrames - 1) {
+        const now = performance.now();
+        const elapsedMs = now - startedAt;
+        const encodeElapsed = Math.max(1, now - encodeStartTs);
+        const msPerFrame = encodeElapsed / (frame + 1);
+        const remainingFrames = totalFrames - frame - 1;
+        // Include modest ~1.8s buffer for FFmpeg audio mixing & faststart muxing
+        const etaMs = Math.max(0, Math.round(remainingFrames * msPerFrame + 1800));
+        const encodePct = 5 + ((frame + 1) / totalFrames) * 73;
+
+        options.onProgress?.({
+          percent: encodePct,
+          stage: "encoding",
+          message: `Encoding frame ${frame + 1} / ${totalFrames} (WebCodecs H.264)...`,
+          currentFrame: frame + 1,
+          totalFrames,
+          elapsedMs,
+          etaMs,
+        });
+      }
+
+      // Periodically yield to UI thread so Windows WebView2 stays responsive on long 60s exports
+      if (frame % 15 === 14) {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+    }
+
+    videoSource.close();
+    await output.finalize();
+
+    checkAborted(options.signal);
+
+    const buffer = target.buffer;
+    if (!buffer) {
+      throw new Error("Mediabunny tidak menghasilkan buffer MP4.");
+    }
+
+    const videoBytes = new Uint8Array(buffer);
+
+    if (isTauriRuntime()) {
+      options.onProgress?.({
+        percent: 82,
+        stage: "muxing",
+        message: "FFmpeg Sidecar mencampur Voiceover, BGM Auto-Ducking, & SFX...",
+        currentFrame: totalFrames,
+        totalFrames,
+        elapsedMs: performance.now() - startedAt,
+        etaMs: 1800,
+      });
+      const result = await muxExportMp4({
+        videoBytes,
+        audioPath: options.audioPath,
+        generateDemoAudio: options.generateDemoAudio,
+        durationSec,
+        outputPath: options.outputPath,
+        mixPlan: buildMixPlan(project),
+      });
+      options.onProgress?.({
+        percent: 100,
+        stage: "done",
+        message: "Export MP4 selesai!",
+        currentFrame: totalFrames,
+        totalFrames,
+        elapsedMs: performance.now() - startedAt,
+        etaMs: 0,
+      });
+      return result;
+    }
+
+    const blob = new Blob([videoBytes], { type: "video/mp4" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = options.outputPath.endsWith(".mp4")
+      ? options.outputPath
+      : `${options.outputPath}.mp4`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    options.onProgress?.({
+      percent: 100,
+      stage: "done",
+      message: "MP4 berhasil diunduh (mode browser).",
+      currentFrame: totalFrames,
+      totalFrames,
+      elapsedMs: performance.now() - startedAt,
+      etaMs: 0,
+    });
+    return {
       outputPath: options.outputPath,
-      mixPlan: buildMixPlan(project),
-    });
-    options.onProgress?.(100, "done", "Export MP4 selesai!");
-    return result;
+      fileSizeBytes: videoBytes.byteLength,
+      durationMs,
+    };
+  } finally {
+    for (const v of videoMap.values()) {
+      v.pause();
+      v.src = "";
+      v.load();
+    }
+    videoMap.clear();
   }
-
-  const blob = new Blob([videoBytes], { type: "video/mp4" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = options.outputPath.endsWith(".mp4")
-    ? options.outputPath
-    : `${options.outputPath}.mp4`;
-  a.click();
-  URL.revokeObjectURL(url);
-
-  options.onProgress?.(100, "done", "MP4 berhasil diunduh (mode browser).");
-  return {
-    outputPath: options.outputPath,
-    fileSizeBytes: videoBytes.byteLength,
-    durationMs,
-  };
 }

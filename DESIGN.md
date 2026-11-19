@@ -27,11 +27,11 @@
 | `--border-strong` | `rgba(255, 255, 255, 0.16)` | `#b6cbc1` | Selected or focused borders |
 | `--text-primary` | `#f4f4f6` | `#0b1712` | Primary copy & headings |
 | `--text-secondary` | `#a1a1aa` | `#435c52` | Supporting labels & metadata |
-| `--text-muted` | `#71717a` | `#5d786d` | Tertiary hints |
-| `--cta-bg` | `#f4f4f6` | `#0e9466` | Primary CTA (`Export MP4`, `+ Buat Konten Baru`, `Play`) |
-| `--cta-hover` | `#e4e4e7` | `#0b7d55` | Primary CTA hover |
+| `--text-muted` | `#8e8e98` | `#476258` | Tertiary hints (WCAG AA ≥ 4.5:1) |
+| `--cta-bg` | `#f4f4f6` | `#097954` | Primary CTA (`Export MP4`, `+ Buat Konten Baru`, `Play`) |
+| `--cta-hover` | `#e4e4e7` | `#076345` | Primary CTA hover |
 | `--cta-fg` | `#09090b` | `#ffffff` | Foreground on primary CTA |
-| `--accent` | `#10b981` | `#0e9466` | Signature Emerald brand mark, active dot, status indicator |
+| `--accent` | `#10b981` | `#097954` | Signature Emerald brand mark, active dot, status indicator |
 | `--accent-soft` | `rgba(16, 185, 129, 0.12)` | `rgba(14, 148, 102, 0.10)` | Restrained active tint |
 | `--ambient-wash` | `rgba(16, 185, 129, 0.11)` | `rgba(14, 148, 102, 0.07)` | Subtle top wash on Onboarding only |
 | `--role-hook` | `#f59e0b` | `#d97706` | Subtle 6px dot for Hook |

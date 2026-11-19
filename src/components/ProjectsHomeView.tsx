@@ -486,7 +486,7 @@ export default function ProjectsHomeView({
 
                       {/* Top-Left Format Pill */}
                       <span
-                        className="absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                        className="absolute top-2 left-2 rounded px-1.5 py-0.5 text-[11px] font-medium"
                         style={{
                           backgroundColor: "rgba(13, 15, 18, 0.78)",
                           color: "#f1f3f7",
@@ -498,7 +498,7 @@ export default function ProjectsHomeView({
 
                       {/* Bottom-Right Duration Pill */}
                       <span
-                        className="font-mono-num absolute right-2 bottom-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                        className="font-mono-num absolute right-2 bottom-2 rounded px-1.5 py-0.5 text-[11px] font-medium"
                         style={{
                           backgroundColor: "rgba(13, 15, 18, 0.82)",
                           color: "#f1f3f7",

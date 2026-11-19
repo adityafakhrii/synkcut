@@ -12,22 +12,22 @@
   --panel-catchlight: rgba(255, 255, 255, 0.8);
   --text-primary: #0b1712;
   --text-secondary: #435c52;
-  --text-muted: #5d786d;
-  --cta-bg: #0e9466;
-  --cta-hover: #0b7d55;
+  --text-muted: #476258;
+  --cta-bg: #097954;
+  --cta-hover: #076345;
   --cta-fg: #ffffff;
-  --accent: #0e9466;
-  --accent-hover: #0b7d55;
+  --accent: #097954;
+  --accent-hover: #076345;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(14, 148, 102, 0.1);
-  --ambient-wash: rgba(14, 148, 102, 0.07);
+  --accent-soft: rgba(9, 121, 84, 0.1);
+  --ambient-wash: rgba(9, 121, 84, 0.07);
   --stage-dot: rgba(11, 23, 18, 0.08);
   --playhead: #0b1712;
-  --waveform: rgba(14, 148, 102, 0.45);
+  --waveform: rgba(9, 121, 84, 0.45);
   --role-hook: #d97706;
   --role-body: #0284c7;
-  --role-cta: #0e9466;
-  --success: #059669;
+  --role-cta: #097954;
+  --success: #097954;
   --success-soft: rgba(5, 150, 105, 0.11);
   --danger: #dc2626;
   --danger-soft: rgba(220, 38, 38, 0.1);
@@ -45,7 +45,7 @@
   --panel-catchlight: rgba(255, 255, 255, 0.035);
   --text-primary: #f4f4f6;
   --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-muted: #8e8e98;
   --cta-bg: #f4f4f6;
   --cta-hover: #e4e4e7;
   --cta-fg: #09090b;
@@ -172,8 +172,11 @@ textarea:focus-visible {
   transition: border-color 150ms ease;
 }
 
-.ui-input::placeholder {
+.ui-input::placeholder,
+input::placeholder,
+textarea::placeholder {
   color: var(--text-muted);
+  opacity: 1;
 }
 
 .ui-input:hover:not(:disabled) {

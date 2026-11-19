@@ -52,7 +52,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 - [x] **Milestone 2:** Wizard Racik Konten (3 Langkah), AI Generate 3 Opsi Hook/Body/CTA, TTS (Gemini/OpenAI/Offline) & Rekam/Upload Suara Sendiri Auto-Sync + Auto Trim Silence, Multimodal AI Director (baca thumbnail footage lokal), & AI Copilot Chat JSON Patch
 - [x] **Milestone 3:** Canvas Motion, Preset & Overlay Engine (penuh: 5 Transisi visual, 6 Visual Overlay termasuk Doodle Marker & Split-Screen/B-Roll, 12 SFX + 6 BGM Audio Pack & FFmpeg Auto-Ducking)
 - [x] **Milestone 4:** Hybrid Studio 3 Kolom (Scene Cards drag-drop, tambah/duplikat/hapus scene, durasi stepper, trim start per scene, shortcut keyboard), AI Copilot JSON Patch (context scene aktif, path guard, diff pill, & 1-klik batalkan), serta 5 Sample Bawaan siap remix
-- [ ] **Milestone 5:** Export Modal, Audit Kualitas, & Windows Installer
+- [x] **Milestone 5:** Export Modal lengkap (ringkasan spec, 3-tahap progress, estimasi ETA, & tombol Batalkan), uji beban 60 detik 1080×1920 + Auto-Ducking, audit Impeccable WCAG AA (Dark & Light Mode), ikon native Synkcut, & build Windows Installer (`.msi` / `.exe`)
 
 ---
 
@@ -69,7 +69,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
    rustup default stable-x86_64-pc-windows-msvc
    ```
 
-### Setup & Jalankan
+### Setup, Development & Build Installer Windows
 ```powershell
 # 1. Install dependencies frontend
 npm install
@@ -79,4 +79,7 @@ npm run setup:ffmpeg
 
 # 3. Jalankan desktop app Synkcut (mode dev)
 npm run tauri dev
+
+# 4. Build Windows Installer (.msi & NSIS .exe)
+npm run tauri build
 ```

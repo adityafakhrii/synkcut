@@ -291,10 +291,10 @@ export default function App() {
             <span className="text-[15px] font-bold tracking-tight">Synkcut</span>
           </button>
           <span
-            className="font-mono-num text-[10px]"
+            className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v0.1
+            v1.0
           </span>
         </div>
 
@@ -361,7 +361,7 @@ export default function App() {
               Komunitas
             </span>
             <span
-              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium"
               style={{ backgroundColor: "var(--bg-elevated)" }}
             >
               Phase 2

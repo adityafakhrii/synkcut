@@ -423,7 +423,7 @@ export default function WizardView({
             <ArrowLeft className="h-3.5 w-3.5" />
             Batal
           </button>
-          <h1 className="text-sm font-bold tracking-tight">Wizard Racik Konten</h1>
+          <h1 className="text-base font-bold tracking-tight">Wizard Racik Konten</h1>
         </div>
 
         {/* Clean 3-Step Progress */}
@@ -452,7 +452,7 @@ export default function WizardView({
                   }}
                 >
                   <span
-                    className="flex h-4 w-4 items-center justify-center rounded-full font-mono-num text-[10px] font-bold"
+                    className="flex h-4 w-4 items-center justify-center rounded-full font-mono-num text-[11px] font-bold"
                     style={{
                       backgroundColor: done
                         ? "var(--accent)"
@@ -651,7 +651,7 @@ export default function WizardView({
                   </div>
                   {scriptProviderUsed && (
                     <span
-                      className="mt-4 shrink-0 rounded px-2 py-1 font-mono-num text-[10px]"
+                      className="mt-4 shrink-0 rounded px-2 py-1 font-mono-num text-[11px]"
                       style={{
                         backgroundColor: "var(--success-soft)",
                         color: "var(--success)",
@@ -703,7 +703,7 @@ export default function WizardView({
                             </span>
                             {active && (
                               <span
-                                className="inline-flex items-center gap-1 text-[10px] font-semibold"
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold"
                                 style={{ color: "var(--accent)" }}
                               >
                                 <CheckCircle2 className="h-3 w-3" />
@@ -923,7 +923,7 @@ export default function WizardView({
                     Generate AI Footage (Google Flow / Seedance)
                   </span>
                   <span
-                    className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                    className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
                     style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-muted)" }}
                   >
                     Coming Soon
