@@ -82,9 +82,9 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             overlays: [
               {
                 id: "ov_2",
-                type: "promo_badge",
-                text: "DEMO PRODUK · AUTO-SYNC",
-                position: "top",
+                type: "split_screen",
+                text: "DEMO PRODUK · DETAIL",
+                position: "center",
               },
             ],
           },
@@ -97,7 +97,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             media: { path: null, trimStartMs: 6500, fit: "cover" },
             motion: { preset: "zoom_punch", intensity: 0.75 },
             transitionIn: { preset: "pop_zoom", durationMs: 220 },
-            sfx: [{ preset: "riser", offsetMs: 0, volume: 0.7 }],
+            sfx: [{ preset: "cash_register", offsetMs: 0, volume: 0.7 }],
             overlays: [
               {
                 id: "ov_3",
@@ -155,7 +155,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             transitionIn: { preset: "hard_cut", durationMs: 0 },
             sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.6 }],
             overlays: [
-              { id: "ov_edu_1", type: "promo_badge", text: "WAJIB SIMPAN", position: "top" },
+              { id: "ov_edu_1", type: "hook_headline", text: "3 Kesalahan Bikin Reels Sepi", position: "top" },
             ],
           },
           {
@@ -169,7 +169,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             transitionIn: { preset: "hard_cut", durationMs: 0 },
             sfx: [{ preset: "pop_text", offsetMs: 0, volume: 0.55 }],
             overlays: [
-              { id: "ov_edu_2", type: "promo_badge", text: "POIN #1 · HOOK 3 DETIK", position: "top" },
+              { id: "ov_edu_2", type: "doodle_highlight", text: "HOOK 3 DETIK WAJIB", position: "top" },
             ],
           },
           {
@@ -323,7 +323,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             transitionIn: { preset: "hard_cut", durationMs: 0 },
             sfx: [{ preset: "impact_boom", offsetMs: 0, volume: 0.7 }],
             overlays: [
-              { id: "ov_rev_1", type: "promo_badge", text: "HONEST REVIEW", position: "top" },
+              { id: "ov_rev_1", type: "doodle_highlight", text: "HONEST REVIEW 3 MINGGU", position: "top" },
             ],
           },
           {
@@ -337,7 +337,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
             transitionIn: { preset: "glitch_flash", durationMs: 200 },
             sfx: [{ preset: "glitch_zap", offsetMs: 0, volume: 0.6 }],
             overlays: [
-              { id: "ov_rev_2", type: "promo_badge", text: "TES 3 MINGGU", position: "top" },
+              { id: "ov_rev_2", type: "split_screen", text: "TES 3 MINGGU · DETAIL", position: "center" },
             ],
           },
           {

@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Sun,
   Type,
   Undo2,
@@ -43,7 +44,9 @@ import { checkWebCodecsSupport, exportProjectToMp4 } from "../engine/exportEngin
 import {
   aiCopilotPatch,
   checkSidecars,
+  ensureAudioPackAsset,
   extractThumbnails,
+  getAudioPackCatalog,
   isTauriRuntime,
   listenExportProgress,
   pickExportSavePath,
@@ -53,6 +56,7 @@ import {
   revealInExplorer,
   saveProject,
   toAssetUrl,
+  type AudioPackCatalog,
   type ExportResult,
   type MediaProbeInfo,
   type SidecarStatus,
@@ -98,6 +102,15 @@ const TRANSITION_PRESETS: Array<{ id: TransitionPreset; label: string }> = [
   { id: "pop_zoom", label: "Pop Zoom" },
   { id: "glitch_flash", label: "Glitch Flash" },
   { id: "smooth_crossfade", label: "Smooth Crossfade" },
+];
+
+const OVERLAY_PRESETS: Array<{ id: "none" | SceneOverlay["type"]; label: string }> = [
+  { id: "none", label: "Tanpa Overlay" },
+  { id: "hook_headline", label: "Hook Headline Card" },
+  { id: "notification_banner", label: "Native Notification Banner" },
+  { id: "promo_badge", label: "Promo / Callout Badge" },
+  { id: "doodle_highlight", label: "Doodle Marker Highlight" },
+  { id: "split_screen", label: "Split-Screen / B-Roll" },
 ];
 
 const BGM_PRESETS = [
@@ -176,6 +189,12 @@ export default function StudioView({
   const [audioPath, setAudioPath] = useState<string | null>(initialProject.voiceover.audioPath);
   const [generateDemoAudio, setGenerateDemoAudio] = useState(!initialProject.voiceover.audioPath);
 
+  // Audio Pack (12 SFX & 6 BGM)
+  const [audioCatalog, setAudioCatalog] = useState<AudioPackCatalog>({ sfx: [], bgm: [] });
+  const [bgmAssetUrl, setBgmAssetUrl] = useState<string | null>(null);
+  const [isAuditioningBgm, setIsAuditioningBgm] = useState(false);
+  const [auditioningSfxId, setAuditioningSfxId] = useState<string | null>(null);
+
   // Export state
   const [resolution, setResolution] = useState<"1080p" | "720p">("1080p");
   const [exportFps, setExportFps] = useState<30 | 60>(30);
@@ -187,7 +206,12 @@ export default function StudioView({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const secondaryVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
+  const auditionAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sfxCacheRef = useRef<Record<string, string>>({});
+  const lastTriggeredSceneIdRef = useRef<string | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastFrameTsRef = useRef<number>(0);
@@ -251,10 +275,11 @@ export default function StudioView({
     return () => window.clearTimeout(timer);
   }, [project, onProjectSaved]);
 
-  // Diagnostics & export listener
+  // Diagnostics, Audio Pack catalog & export listener
   useEffect(() => {
     checkWebCodecsSupport().then(setWebCodecs);
     checkSidecars().then(setSidecarStatus);
+    getAudioPackCatalog().then(setAudioCatalog).catch(() => {});
 
     let unlisten: (() => void) | null = null;
     listenExportProgress((ev) => {
@@ -266,8 +291,48 @@ export default function StudioView({
 
     return () => {
       if (unlisten) unlisten();
+      if (auditionAudioRef.current) {
+        auditionAudioRef.current.pause();
+        auditionAudioRef.current = null;
+      }
     };
   }, []);
+
+  // Resolve cached BGM WAV asset whenever preset changes
+  useEffect(() => {
+    let cancelled = false;
+    const preset = project.globalStyle.bgm.preset;
+    if (auditionAudioRef.current) {
+      auditionAudioRef.current.pause();
+      auditionAudioRef.current = null;
+      setIsAuditioningBgm(false);
+    }
+    if (!preset || preset === "none" || !isTauriRuntime()) {
+      setBgmAssetUrl(null);
+      return;
+    }
+    ensureAudioPackAsset("bgm", preset)
+      .then((path) => {
+        if (!cancelled) {
+          setBgmAssetUrl(path ? toAssetUrl(path) : null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBgmAssetUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.globalStyle.bgm.preset]);
+
+  // Keep live BGM volume synchronized (including live Auto-Ducking under Voiceover)
+  useEffect(() => {
+    const bgmEl = bgmAudioRef.current;
+    if (!bgmEl) return;
+    const rawVol = project.globalStyle.bgm.volume ?? 0.24;
+    const ducked = audioPath && project.globalStyle.bgm.autoDucking ? rawVol * 0.35 : rawVol;
+    bgmEl.volume = Math.max(0, Math.min(1, ducked));
+  }, [project.globalStyle.bgm.volume, project.globalStyle.bgm.autoDucking, audioPath, bgmAssetUrl]);
 
   const currentPlayScene = useMemo(() => {
     return (
@@ -278,6 +343,7 @@ export default function StudioView({
   }, [project.scenes, currentTimeMs]);
 
   const activeMediaPath = currentPlayScene?.media.path || footagePath;
+  const activeSecondaryPath = currentPlayScene?.media.secondaryPath || null;
 
   // Render preview frame
   useEffect(() => {
@@ -301,24 +367,62 @@ export default function StudioView({
       }
     }
 
+    const secVideoEl = secondaryVideoRef.current;
+    if (
+      secVideoEl &&
+      activeSecondaryPath &&
+      !isPlaying &&
+      secVideoEl.readyState >= 2 &&
+      secVideoEl.duration > 0
+    ) {
+      const localSec = Math.max(0, currentTimeMs - (currentPlayScene?.startMs ?? 0)) / 1000;
+      const targetSec = localSec % secVideoEl.duration;
+      if (Math.abs(secVideoEl.currentTime - targetSec) > 0.04) {
+        secVideoEl.currentTime = targetSec;
+      }
+    }
+
     renderProjectFrame(ctx, project, currentTimeMs, {
       videoElement: activeMediaPath ? videoEl : null,
+      secondaryVideoElement: activeSecondaryPath ? secVideoEl : null,
       showSafeZone,
+      isPreviewPaused: !isPlaying,
     });
-  }, [project, currentTimeMs, showSafeZone, activeMediaPath, isPlaying, currentPlayScene]);
+  }, [
+    project,
+    currentTimeMs,
+    showSafeZone,
+    activeMediaPath,
+    activeSecondaryPath,
+    isPlaying,
+    currentPlayScene,
+  ]);
 
-  // Playback loop + real synced <audio> voiceover playback
+  // Playback loop + real synced <audio> voiceover + BGM playback
   useEffect(() => {
     const audioEl = audioRef.current;
+    const bgmEl = bgmAudioRef.current;
     if (!isPlaying) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       videoRef.current?.pause();
+      secondaryVideoRef.current?.pause();
       audioEl?.pause();
+      bgmEl?.pause();
+      lastTriggeredSceneIdRef.current = null;
       return;
+    }
+
+    if (auditionAudioRef.current) {
+      auditionAudioRef.current.pause();
+      auditionAudioRef.current = null;
+      setIsAuditioningBgm(false);
     }
 
     if (videoRef.current && activeMediaPath) {
       videoRef.current.play().catch(() => {});
+    }
+    if (secondaryVideoRef.current && activeSecondaryPath) {
+      secondaryVideoRef.current.play().catch(() => {});
     }
     if (audioEl && audioPath) {
       const targetAudioSec = currentTimeMs / 1000;
@@ -326,6 +430,13 @@ export default function StudioView({
         audioEl.currentTime = Math.min(targetAudioSec, audioEl.duration || targetAudioSec);
       }
       audioEl.play().catch(() => {});
+    }
+    if (bgmEl && bgmAssetUrl) {
+      const targetBgmSec = (currentTimeMs / 1000) % (bgmEl.duration || 8);
+      if (Math.abs(bgmEl.currentTime - targetBgmSec) > 0.25) {
+        bgmEl.currentTime = targetBgmSec;
+      }
+      bgmEl.play().catch(() => {});
     }
 
     lastFrameTsRef.current = performance.now();
@@ -336,7 +447,10 @@ export default function StudioView({
         const next = prev + delta;
         if (next >= totalDurationMs) {
           if (videoRef.current) videoRef.current.currentTime = 0;
+          if (secondaryVideoRef.current) secondaryVideoRef.current.currentTime = 0;
           if (audioEl) audioEl.currentTime = 0;
+          if (bgmEl) bgmEl.currentTime = 0;
+          lastTriggeredSceneIdRef.current = null;
           return 0;
         }
         return next;
@@ -348,7 +462,37 @@ export default function StudioView({
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isPlaying, totalDurationMs, activeMediaPath, audioPath]);
+  }, [isPlaying, totalDurationMs, activeMediaPath, activeSecondaryPath, audioPath, bgmAssetUrl]);
+
+  // Trigger timed scene SFX live during preview playback
+  useEffect(() => {
+    if (!isPlaying || !currentPlayScene || !isTauriRuntime()) return;
+    if (lastTriggeredSceneIdRef.current === currentPlayScene.id) return;
+    lastTriggeredSceneIdRef.current = currentPlayScene.id;
+
+    const sfx = currentPlayScene.sfx[0];
+    if (!sfx?.preset || sfx.preset === "none") return;
+
+    const cached = sfxCacheRef.current[sfx.preset];
+    const playUrl = (url: string) => {
+      const a = new Audio(url);
+      a.volume = Math.max(0.05, Math.min(1, sfx.volume ?? 0.65));
+      a.play().catch(() => {});
+    };
+
+    if (cached) {
+      playUrl(cached);
+    } else {
+      ensureAudioPackAsset("sfx", sfx.preset)
+        .then((path) => {
+          if (!path) return;
+          const url = toAssetUrl(path);
+          sfxCacheRef.current[sfx.preset] = url;
+          playUrl(url);
+        })
+        .catch(() => {});
+    }
+  }, [isPlaying, currentPlayScene]);
 
   // Timeline scrub pointer handlers
   function updateTimeFromClientX(clientX: number) {
@@ -465,29 +609,56 @@ export default function StudioView({
     }));
   }
 
-  function setActiveSceneOverlay(type: "none" | "notification_banner" | "promo_badge") {
+  function setActiveSceneOverlay(type: "none" | SceneOverlay["type"]) {
     if (!activeScene) return;
-    const nextOverlays: SceneOverlay[] =
-      type === "none"
-        ? []
-        : type === "notification_banner"
-          ? [
-              {
-                id: `ov_${Date.now()}`,
-                type: "notification_banner",
-                title: "Synkcut · Baru saja",
-                text: "Konten siap tayang dalam hitungan menit",
-                position: "top",
-              },
-            ]
-          : [
-              {
-                id: `ov_${Date.now()}`,
-                type: "promo_badge",
-                text: "PROMO SPESIAL HARI INI",
-                position: "top",
-              },
-            ];
+    let nextOverlays: SceneOverlay[] = [];
+    if (type === "hook_headline") {
+      nextOverlays = [
+        {
+          id: `ov_${Date.now()}`,
+          type: "hook_headline",
+          text: activeScene.text.slice(0, 48) || "3 Detik Pertama Penentu Views!",
+          position: "top",
+        },
+      ];
+    } else if (type === "notification_banner") {
+      nextOverlays = [
+        {
+          id: `ov_${Date.now()}`,
+          type: "notification_banner",
+          title: "Synkcut · Baru saja",
+          text: "Konten siap tayang dalam hitungan menit",
+          position: "top",
+        },
+      ];
+    } else if (type === "promo_badge") {
+      nextOverlays = [
+        {
+          id: `ov_${Date.now()}`,
+          type: "promo_badge",
+          text: "PROMO SPESIAL HARI INI",
+          position: "top",
+        },
+      ];
+    } else if (type === "doodle_highlight") {
+      nextOverlays = [
+        {
+          id: `ov_${Date.now()}`,
+          type: "doodle_highlight",
+          text: "WAJIB TAHU INI!",
+          position: "top",
+        },
+      ];
+    } else if (type === "split_screen") {
+      nextOverlays = [
+        {
+          id: `ov_${Date.now()}`,
+          type: "split_screen",
+          text: "DETAIL B-ROLL",
+          position: "center",
+        },
+      ];
+    }
 
     commitProjectChange((prev) => ({
       ...prev,
@@ -495,6 +666,105 @@ export default function StudioView({
         s.id === activeScene.id ? { ...s, overlays: nextOverlays } : s
       ),
     }));
+  }
+
+  function updateActiveSceneOverlayField(field: "title" | "text", value: string) {
+    if (!activeScene || activeScene.overlays.length === 0) return;
+    commitProjectChange(
+      (prev) => ({
+        ...prev,
+        scenes: prev.scenes.map((s) =>
+          s.id === activeScene.id
+            ? {
+                ...s,
+                overlays: s.overlays.map((ov, idx) =>
+                  idx === 0 ? { ...ov, [field]: value } : ov
+                ),
+              }
+            : s
+        ),
+      }),
+      false
+    );
+  }
+
+  async function handlePickSecondaryFootage() {
+    if (!activeScene) return;
+    const picked = await pickLocalVideo();
+    if (!picked) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) =>
+        s.id === activeScene.id ? { ...s, media: { ...s.media, secondaryPath: picked } } : s
+      ),
+    }));
+  }
+
+  function clearSecondaryFootage() {
+    if (!activeScene) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) =>
+        s.id === activeScene.id ? { ...s, media: { ...s.media, secondaryPath: null } } : s
+      ),
+    }));
+  }
+
+  function updateActiveSceneSfx(preset: string, volume?: number) {
+    if (!activeScene) return;
+    const curVol = activeScene.sfx[0]?.volume ?? 0.65;
+    const nextSfx =
+      !preset || preset === "none"
+        ? []
+        : [{ preset, offsetMs: 0, volume: volume ?? curVol }];
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) => (s.id === activeScene.id ? { ...s, sfx: nextSfx } : s)),
+    }));
+  }
+
+  async function handleAuditionSfx(presetId: string) {
+    if (!presetId || presetId === "none" || !isTauriRuntime()) return;
+    try {
+      setAuditioningSfxId(presetId);
+      let url = sfxCacheRef.current[presetId];
+      if (!url) {
+        const path = await ensureAudioPackAsset("sfx", presetId);
+        if (!path) return;
+        url = toAssetUrl(path);
+        sfxCacheRef.current[presetId] = url;
+      }
+      const audio = new Audio(url);
+      audio.volume = Math.max(0.1, Math.min(1, activeScene?.sfx[0]?.volume ?? 0.65));
+      audio.onended = () => setAuditioningSfxId((cur) => (cur === presetId ? null : cur));
+      await audio.play();
+    } catch {
+      setAuditioningSfxId(null);
+    }
+  }
+
+  async function handleToggleAuditionBgm() {
+    const preset = project.globalStyle.bgm.preset;
+    if (isAuditioningBgm && auditionAudioRef.current) {
+      auditionAudioRef.current.pause();
+      auditionAudioRef.current = null;
+      setIsAuditioningBgm(false);
+      return;
+    }
+    if (!preset || preset === "none" || !isTauriRuntime()) return;
+    try {
+      setIsPlaying(false);
+      const path = await ensureAudioPackAsset("bgm", preset);
+      if (!path) return;
+      const audio = new Audio(toAssetUrl(path));
+      audio.loop = true;
+      audio.volume = Math.max(0.05, Math.min(1, project.globalStyle.bgm.volume ?? 0.24));
+      auditionAudioRef.current = audio;
+      setIsAuditioningBgm(true);
+      await audio.play();
+    } catch {
+      setIsAuditioningBgm(false);
+    }
   }
 
   function pushDirectorMessage(role: "user" | "assistant", text: string) {
@@ -608,6 +878,15 @@ export default function StudioView({
     } else if (lower.includes("notif")) {
       setActiveSceneOverlay("notification_banner");
       pushDirectorMessage("assistant", "Native Notification Banner ditambahkan pada scene aktif.");
+    } else if (lower.includes("headline") || lower.includes("judul")) {
+      setActiveSceneOverlay("hook_headline");
+      pushDirectorMessage("assistant", "Hook Headline Card ditambahkan pada scene aktif.");
+    } else if (lower.includes("doodle") || lower.includes("coret") || lower.includes("spidol")) {
+      setActiveSceneOverlay("doodle_highlight");
+      pushDirectorMessage("assistant", "Doodle Marker Highlight ditambahkan pada scene aktif.");
+    } else if (lower.includes("split") || lower.includes("b-roll") || lower.includes("broll")) {
+      setActiveSceneOverlay("split_screen");
+      pushDirectorMessage("assistant", "Split-Screen / B-Roll diaktifkan pada scene aktif.");
     } else if (lower.includes("badge") || lower.includes("promo")) {
       setActiveSceneOverlay("promo_badge");
       pushDirectorMessage("assistant", "Promo Badge ditambahkan pada scene aktif.");
@@ -703,8 +982,23 @@ export default function StudioView({
           onLoadedData={() => setCurrentTimeMs((t) => t)}
         />
       )}
+      {activeSecondaryPath && (
+        <video
+          ref={secondaryVideoRef}
+          src={toAssetUrl(activeSecondaryPath)}
+          muted
+          playsInline
+          preload="auto"
+          crossOrigin="anonymous"
+          className="hidden"
+          onLoadedData={() => setCurrentTimeMs((t) => t)}
+        />
+      )}
       {audioPath && (
         <audio ref={audioRef} src={toAssetUrl(audioPath)} preload="auto" className="hidden" />
+      )}
+      {bgmAssetUrl && (
+        <audio ref={bgmAudioRef} src={bgmAssetUrl} loop preload="auto" className="hidden" />
       )}
 
       {/* Top Studio Bar */}
@@ -1142,13 +1436,9 @@ export default function StudioView({
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold">Visual Overlay</label>
+                  <label className="mb-1.5 block text-xs font-semibold">Visual Overlay (6 Preset)</label>
                   <div className="grid grid-cols-1 gap-1.5">
-                    {[
-                      { id: "none" as const, label: "Tanpa Overlay" },
-                      { id: "notification_banner" as const, label: "Native Notification Banner" },
-                      { id: "promo_badge" as const, label: "Promo / Callout Badge" },
-                    ].map((ov) => {
+                    {OVERLAY_PRESETS.map((ov) => {
                       const curType = activeScene.overlays[0]?.type ?? "none";
                       const active = curType === ov.id;
                       return (
@@ -1175,6 +1465,156 @@ export default function StudioView({
                       );
                     })}
                   </div>
+
+                  {/* Live inline editor for active overlay */}
+                  {activeScene.overlays[0] && (
+                    <div
+                      className="mt-2.5 space-y-2 rounded-lg p-2.5"
+                      style={{
+                        backgroundColor: "var(--bg-elevated)",
+                        border: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      {activeScene.overlays[0].type === "notification_banner" && (
+                        <div>
+                          <label
+                            className="mb-1 block text-[11px] font-medium"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            Judul Notifikasi
+                          </label>
+                          <input
+                            type="text"
+                            value={activeScene.overlays[0].title ?? ""}
+                            onChange={(e) => updateActiveSceneOverlayField("title", e.target.value)}
+                            className="ui-input w-full rounded px-2 py-1.5 text-xs"
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label
+                          className="mb-1 block text-[11px] font-medium"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {activeScene.overlays[0].type === "split_screen"
+                            ? "Label Pembatas Split-Screen"
+                            : "Teks Overlay"}
+                        </label>
+                        <input
+                          type="text"
+                          value={activeScene.overlays[0].text}
+                          onChange={(e) => updateActiveSceneOverlayField("text", e.target.value)}
+                          className="ui-input w-full rounded px-2 py-1.5 text-xs"
+                        />
+                      </div>
+
+                      {activeScene.overlays[0].type === "split_screen" && (
+                        <div className="pt-1 space-y-1.5">
+                          <button
+                            type="button"
+                            disabled={!isTauriRuntime()}
+                            onClick={handlePickSecondaryFootage}
+                            className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
+                          >
+                            <Film className="h-3.5 w-3.5" />
+                            {activeScene.media.secondaryPath
+                              ? "Ganti Footage B-Roll (Bawah)"
+                              : "Pilih Footage B-Roll (Bawah)"}
+                          </button>
+                          <div
+                            className="flex items-center justify-between gap-2 text-[11px]"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            <span className="truncate font-mono-num">
+                              {activeScene.media.secondaryPath
+                                ? activeScene.media.secondaryPath.split(/[\\/]/).pop()
+                                : "Default: Auto Zoom Detail 1.45×"}
+                            </span>
+                            {activeScene.media.secondaryPath && (
+                              <button
+                                type="button"
+                                onClick={clearSecondaryFootage}
+                                className="shrink-0 underline cursor-pointer"
+                                style={{ color: "var(--text-secondary)" }}
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* SFX Scene Picker (12 SFX) */}
+                <div className="border-t pt-3.5" style={{ borderColor: "var(--border-subtle)" }}>
+                  <label className="mb-1.5 block text-xs font-semibold">
+                    SFX Transisi / Aksen (12 Preset)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={activeScene.sfx[0]?.preset ?? "none"}
+                      onChange={(e) => updateActiveSceneSfx(e.target.value)}
+                      className="ui-input min-w-0 flex-1 rounded-md px-2.5 py-2 text-xs font-medium"
+                    >
+                      <option value="none">Tanpa SFX</option>
+                      {audioCatalog.sfx.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label} ({item.category})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={
+                        !activeScene.sfx[0]?.preset ||
+                        activeScene.sfx[0]?.preset === "none" ||
+                        !isTauriRuntime()
+                      }
+                      onClick={() =>
+                        activeScene.sfx[0]?.preset && handleAuditionSfx(activeScene.sfx[0].preset)
+                      }
+                      className="ui-btn-secondary flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
+                      title="Tes SFX ini"
+                      aria-label="Tes SFX"
+                    >
+                      <Play
+                        className="h-3.5 w-3.5"
+                        style={{
+                          color:
+                            auditioningSfxId && auditioningSfxId === activeScene.sfx[0]?.preset
+                              ? "var(--accent)"
+                              : "currentColor",
+                        }}
+                      />
+                    </button>
+                  </div>
+
+                  {activeScene.sfx[0]?.preset && activeScene.sfx[0].preset !== "none" && (
+                    <div className="mt-2.5">
+                      <div className="mb-1 flex items-center justify-between text-[11px]">
+                        <span style={{ color: "var(--text-secondary)" }}>Volume SFX</span>
+                        <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                          {Math.round((activeScene.sfx[0].volume ?? 0.65) * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        step={5}
+                        value={Math.round((activeScene.sfx[0].volume ?? 0.65) * 100)}
+                        onChange={(e) =>
+                          updateActiveSceneSfx(
+                            activeScene.sfx[0].preset,
+                            Number(e.target.value) / 100
+                          )
+                        }
+                        className="w-full accent-[var(--accent)] cursor-pointer"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1222,26 +1662,84 @@ export default function StudioView({
                 )}
 
                 <div className="border-t pt-3.5" style={{ borderColor: "var(--border-subtle)" }}>
-                  <label className="mb-1.5 block text-xs font-semibold">Mood Backsound (BGM)</label>
-                  <select
-                    value={project.globalStyle.bgm.preset}
-                    onChange={(e) =>
-                      commitProjectChange((prev) => ({
-                        ...prev,
-                        globalStyle: {
-                          ...prev.globalStyle,
-                          bgm: { ...prev.globalStyle.bgm, preset: e.target.value },
-                        },
-                      }))
-                    }
-                    className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                  >
-                    {BGM_PRESETS.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.label}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="mb-1.5 block text-xs font-semibold">
+                    Mood Backsound (6 BGM Pack)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={project.globalStyle.bgm.preset || "none"}
+                      onChange={(e) =>
+                        commitProjectChange((prev) => ({
+                          ...prev,
+                          globalStyle: {
+                            ...prev.globalStyle,
+                            bgm: { ...prev.globalStyle.bgm, preset: e.target.value },
+                          },
+                        }))
+                      }
+                      className="ui-input min-w-0 flex-1 rounded-md px-2.5 py-2 text-xs font-medium"
+                    >
+                      <option value="none">Tanpa BGM</option>
+                      {(audioCatalog.bgm.length > 0 ? audioCatalog.bgm : BGM_PRESETS).map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={
+                        !project.globalStyle.bgm.preset ||
+                        project.globalStyle.bgm.preset === "none" ||
+                        !isTauriRuntime()
+                      }
+                      onClick={handleToggleAuditionBgm}
+                      className="ui-btn-secondary flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
+                      title={isAuditioningBgm ? "Stop preview BGM" : "Tes preview BGM"}
+                      aria-label={isAuditioningBgm ? "Stop BGM" : "Tes BGM"}
+                    >
+                      {isAuditioningBgm ? (
+                        <Square className="h-3 w-3 fill-current" style={{ color: "var(--accent)" }} />
+                      ) : (
+                        <Play className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+
+                  {project.globalStyle.bgm.preset && project.globalStyle.bgm.preset !== "none" && (
+                    <div className="mt-3">
+                      <div className="mb-1 flex items-center justify-between text-[11px]">
+                        <span style={{ color: "var(--text-secondary)" }}>Volume BGM</span>
+                        <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                          {Math.round((project.globalStyle.bgm.volume ?? 0.24) * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={5}
+                        max={60}
+                        step={1}
+                        value={Math.round((project.globalStyle.bgm.volume ?? 0.24) * 100)}
+                        onChange={(e) => {
+                          const vol = Number(e.target.value) / 100;
+                          if (auditionAudioRef.current) {
+                            auditionAudioRef.current.volume = vol;
+                          }
+                          commitProjectChange(
+                            (prev) => ({
+                              ...prev,
+                              globalStyle: {
+                                ...prev.globalStyle,
+                                bgm: { ...prev.globalStyle.bgm, volume: vol },
+                              },
+                            }),
+                            false
+                          );
+                        }}
+                        className="w-full accent-[var(--accent)] cursor-pointer"
+                      />
+                    </div>
+                  )}
 
                   <label
                     className="mt-2.5 flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
@@ -1265,6 +1763,26 @@ export default function StudioView({
                       }
                     />
                   </label>
+
+                  <div
+                    className="mt-3 rounded-lg p-3 text-[11px] leading-relaxed"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    <div className="flex items-center justify-between font-medium">
+                      <span>Mix Pipeline FFmpeg</span>
+                      <span className="font-mono-num" style={{ color: "var(--accent)" }}>
+                        {project.scenes.reduce((acc, s) => acc + s.sfx.length, 0)} SFX aktif
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      Voiceover, BGM (auto-ducking sidechain), dan SFX per scene otomatis dicampur
+                      saat Export MP4. Atur SFX tiap scene di tab Motion.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -1496,7 +2014,13 @@ export default function StudioView({
                       className="shrink-0 font-mono-num text-[10px]"
                       style={{ color: "var(--text-muted)" }}
                     >
-                      BGM Ducking
+                      {!project.globalStyle.bgm.preset || project.globalStyle.bgm.preset === "none"
+                        ? "Tanpa BGM"
+                        : `${
+                            (audioCatalog.bgm.length > 0 ? audioCatalog.bgm : BGM_PRESETS).find(
+                              (b) => b.id === project.globalStyle.bgm.preset
+                            )?.label ?? "BGM"
+                          }${project.globalStyle.bgm.autoDucking ? " · Ducking" : ""}`}
                     </span>
                   </div>
 

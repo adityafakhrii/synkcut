@@ -126,12 +126,76 @@ export async function extractThumbnails(path: string, count = 2): Promise<string
   return invoke<string[]>("extract_thumbnails", { path, count });
 }
 
+export interface AudioPresetMeta {
+  id: string;
+  label: string;
+  category: string;
+  durationMs: number;
+}
+
+export interface AudioPackCatalog {
+  sfx: AudioPresetMeta[];
+  bgm: AudioPresetMeta[];
+}
+
+export interface SfxMixEvent {
+  preset: string;
+  timestampMs: number;
+  volume: number;
+}
+
+export interface AudioMixPlan {
+  bgmPreset?: string | null;
+  bgmVolume?: number;
+  autoDucking?: boolean;
+  sfxEvents?: SfxMixEvent[];
+}
+
+export async function getAudioPackCatalog(): Promise<AudioPackCatalog> {
+  if (!isTauriRuntime()) {
+    return {
+      sfx: [
+        { id: "whoosh_fast", label: "Whoosh Cepat", category: "Transisi", durationMs: 420 },
+        { id: "whoosh_soft", label: "Whoosh Halus", category: "Transisi", durationMs: 580 },
+        { id: "pop_text", label: "Pop Teks", category: "Teks", durationMs: 190 },
+        { id: "ding_notif", label: "Ding Notif", category: "Overlay", durationMs: 520 },
+        { id: "impact_boom", label: "Impact Boom", category: "Hook", durationMs: 750 },
+        { id: "riser", label: "Riser CTA", category: "CTA", durationMs: 1100 },
+        { id: "camera_shutter", label: "Camera Shutter", category: "Aksi", durationMs: 240 },
+        { id: "keyboard_click", label: "Keyboard Click", category: "UI", durationMs: 160 },
+        { id: "cash_register", label: "Cash Register", category: "Promo", durationMs: 680 },
+        { id: "vinyl_scratch", label: "Vinyl Scratch", category: "Plot Twist", durationMs: 460 },
+        { id: "glitch_zap", label: "Glitch Zap", category: "Transisi", durationMs: 340 },
+        { id: "swoosh_reverse", label: "Swoosh Reverse", category: "Transisi", durationMs: 620 },
+      ],
+      bgm: [
+        { id: "upbeat_promo", label: "Upbeat Promo", category: "Iklan", durationMs: 8000 },
+        { id: "lofi_education", label: "Lo-Fi Edukasi", category: "Edukasi", durationMs: 8000 },
+        { id: "cinematic_story", label: "Cinematic Story", category: "Storytelling", durationMs: 8000 },
+        { id: "tech_modern", label: "Tech Modern", category: "Review", durationMs: 8000 },
+        { id: "trendy_funk", label: "Trendy Funk", category: "Reels", durationMs: 8000 },
+        { id: "chill_aesthetic", label: "Chill Aesthetic", category: "Lifestyle", durationMs: 8000 },
+      ],
+    };
+  }
+  return invoke<AudioPackCatalog>("get_audio_pack_catalog");
+}
+
+export async function ensureAudioPackAsset(
+  kind: "sfx" | "bgm",
+  presetId: string
+): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<string>("ensure_audio_pack_asset", { kind, presetId });
+}
+
 export async function muxExportMp4(params: {
   videoBytes: Uint8Array;
   audioPath: string | null;
   generateDemoAudio: boolean;
   durationSec: number;
   outputPath: string;
+  mixPlan?: AudioMixPlan;
 }): Promise<ExportResult> {
   return invoke<ExportResult>("mux_export_mp4", {
     videoBytes: Array.from(params.videoBytes),
@@ -139,6 +203,7 @@ export async function muxExportMp4(params: {
     generateDemoAudio: params.generateDemoAudio,
     durationSec: params.durationSec,
     outputPath: params.outputPath,
+    mixPlan: params.mixPlan ?? null,
   });
 }
 
@@ -427,7 +492,14 @@ export interface AssembleProjectRequest {
   accentColor: string;
   motionPreset: string;
   transitionPreset: string;
-  overlayMode: "auto" | "notification_banner" | "promo_badge" | "none";
+  overlayMode:
+    | "auto"
+    | "hook_headline"
+    | "notification_banner"
+    | "promo_badge"
+    | "doodle_highlight"
+    | "split_screen"
+    | "none";
   bgmPreset: string;
   autoDucking: boolean;
   autoSfx: boolean;

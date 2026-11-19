@@ -460,10 +460,10 @@ pub async fn ai_assemble_project(
               \"trimStartMs\":0,\
               \"motion\":\"zoom_punch|smooth_ken_burns|shake_impact|slide_reveal|static_clean\",\
               \"transitionIn\":\"hard_cut|whip_pan|pop_zoom|glitch_flash|smooth_crossfade\",\
-              \"sfx\":\"impact_boom|whoosh_fast|pop_text|riser|ding_notif|none\",\
-              \"overlayType\":\"notification_banner|promo_badge|none\",\
+              \"sfx\":\"impact_boom|whoosh_fast|whoosh_soft|pop_text|ding_notif|riser|camera_shutter|keyboard_click|cash_register|vinyl_scratch|glitch_zap|swoosh_reverse|none\",\
+              \"overlayType\":\"hook_headline|notification_banner|promo_badge|doodle_highlight|split_screen|none\",\
               \"overlayTitle\":\"opsional judul notif singkat\",\
-              \"overlayText\":\"opsional teks badge/notif singkat maks 32 karakter\"\
+              \"overlayText\":\"opsional teks overlay singkat maks 32 karakter\"\
             }}]}}",
             req.project_title,
             req.format,
@@ -589,13 +589,24 @@ pub async fn ai_assemble_project(
                 "none"
             };
 
-            if chosen_ov == "notification_banner" || chosen_ov == "promo_badge" {
+            let valid_ov = matches!(
+                chosen_ov,
+                "hook_headline"
+                    | "notification_banner"
+                    | "promo_badge"
+                    | "doodle_highlight"
+                    | "split_screen"
+            );
+
+            if valid_ov {
                 let ov_text = decision
                     .and_then(|d| d["overlayText"].as_str())
                     .filter(|s| !s.trim().is_empty())
                     .map(|s| s.trim().to_string())
                     .unwrap_or_else(|| {
-                        if role == "cta" {
+                        if chosen_ov == "split_screen" {
+                            "DETAIL PRODUK".to_string()
+                        } else if role == "cta" {
                             "CEK SEKARANG".to_string()
                         } else {
                             req.project_title.clone()
@@ -616,6 +627,13 @@ pub async fn ai_assemble_project(
             }
         }
 
+        let secondary_path = if overlays.iter().any(|o| o["type"] == "split_screen") && req.footage.len() > 1 {
+            let alt_idx = (footage_idx.unwrap_or(0) + 1) % req.footage.len();
+            Value::String(req.footage[alt_idx].path.clone())
+        } else {
+            Value::Null
+        };
+
         scenes_json.push(json!({
             "id": format!("scene_{}", i + 1),
             "role": role,
@@ -624,6 +642,7 @@ pub async fn ai_assemble_project(
             "text": text,
             "media": {
                 "path": media_path,
+                "secondaryPath": secondary_path,
                 "trimStartMs": trim_start_ms,
                 "fit": "cover"
             },

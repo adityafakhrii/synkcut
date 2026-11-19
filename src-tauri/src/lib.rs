@@ -1,5 +1,6 @@
 mod ai;
 mod audio;
+mod audio_pack;
 mod byok;
 mod projects;
 
@@ -260,6 +261,87 @@ async fn extract_thumbnails(
     Ok(data_urls)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SfxMixEvent {
+    pub preset: String,
+    pub timestamp_ms: u64,
+    pub volume: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioMixPlan {
+    pub bgm_preset: Option<String>,
+    pub bgm_volume: Option<f64>,
+    pub auto_ducking: Option<bool>,
+    pub sfx_events: Option<Vec<SfxMixEvent>>,
+}
+
+fn build_audio_mix_graph(
+    has_voice: bool,
+    bgm_input_idx: Option<usize>,
+    bgm_volume: f64,
+    auto_ducking: bool,
+    sfx_inputs: &[(usize, u64, f64)], // (ffmpeg_input_index, timestamp_ms, volume)
+) -> Option<(String, String)> {
+    let mut filters: Vec<String> = Vec::new();
+    let mut mix_labels: Vec<String> = Vec::new();
+
+    if has_voice {
+        if bgm_input_idx.is_some() && auto_ducking {
+            filters.push("[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[vo_main][vo_sc]".to_string());
+            mix_labels.push("[vo_main]".to_string());
+        } else {
+            filters.push("[1:a]aformat=sample_rates=44100:channel_layouts=stereo[vo_main]".to_string());
+            mix_labels.push("[vo_main]".to_string());
+        }
+    }
+
+    if let Some(b_idx) = bgm_input_idx {
+        let safe_vol = bgm_volume.clamp(0.05, 0.85);
+        if has_voice && auto_ducking {
+            filters.push(format!(
+                "[{b_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={safe_vol:.2}[bgm_pre]"
+            ));
+            filters.push(
+                "[bgm_pre][vo_sc]sidechaincompress=threshold=0.025:ratio=6:attack=35:release=280:makeup=1[bgm_duck]"
+                    .to_string(),
+            );
+            mix_labels.push("[bgm_duck]".to_string());
+        } else {
+            filters.push(format!(
+                "[{b_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={safe_vol:.2}[bgm_out]"
+            ));
+            mix_labels.push("[bgm_out]".to_string());
+        }
+    }
+
+    for (idx, (inp, ts_ms, vol)) in sfx_inputs.iter().enumerate() {
+        let safe_vol = vol.clamp(0.05, 1.0);
+        filters.push(format!(
+            "[{inp}:a]aformat=sample_rates=44100:channel_layouts=stereo,volume={safe_vol:.2},adelay={ts_ms}|{ts_ms}[sfx_{idx}]"
+        ));
+        mix_labels.push(format!("[sfx_{idx}]"));
+    }
+
+    if mix_labels.is_empty() {
+        return None;
+    }
+
+    if mix_labels.len() == 1 {
+        let single = mix_labels[0].clone();
+        return Some((filters.join(";"), single));
+    }
+
+    let joined_inputs = mix_labels.join("");
+    let count = mix_labels.len();
+    filters.push(format!(
+        "{joined_inputs}amix=inputs={count}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]"
+    ));
+    Some((filters.join(";"), "[aout]".to_string()))
+}
+
 #[tauri::command]
 async fn mux_export_mp4(
     app: AppHandle,
@@ -268,6 +350,7 @@ async fn mux_export_mp4(
     generate_demo_audio: bool,
     duration_sec: f64,
     output_path: String,
+    mix_plan: Option<AudioMixPlan>,
 ) -> Result<ExportResult, String> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -288,56 +371,96 @@ async fn mux_export_mp4(
         ExportProgressEvent {
             stage: "muxing".to_string(),
             percent: 82.0,
-            message: "FFmpeg Sidecar sedang menggabungkan audio & memfinalisasi MP4...".to_string(),
+            message: "FFmpeg Sidecar mencampur Voiceover, BGM Auto-Ducking, & SFX...".to_string(),
         },
     );
 
     let temp_video_str = temp_video.to_string_lossy().to_string();
+    let safe_dur = duration_sec.clamp(1.0, 180.0);
     let mut args: Vec<String> = vec!["-y".to_string(), "-i".to_string(), temp_video_str];
+    let mut next_input_idx: usize = 1;
 
-    if let Some(ref audio) = audio_path {
-        if !audio.trim().is_empty() {
-            args.extend([
-                "-i".to_string(),
-                audio.clone(),
-                "-map".to_string(),
-                "0:v:0".to_string(),
-                "-map".to_string(),
-                "1:a:0".to_string(),
-                "-c:v".to_string(),
-                "copy".to_string(),
-                "-c:a".to_string(),
-                "aac".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-                "-shortest".to_string(),
-                "-movflags".to_string(),
-                "+faststart".to_string(),
-                output_path.clone(),
-            ]);
-        }
+    // Input 1 (optional): Voiceover (user/TTS audio or synthesized demo chime)
+    let has_real_audio = audio_path
+        .as_deref()
+        .map(|p| !p.trim().is_empty())
+        .unwrap_or(false);
+    let has_voice = has_real_audio || generate_demo_audio;
+
+    if let Some(ref audio) = audio_path.filter(|p| !p.trim().is_empty()) {
+        args.extend(["-i".to_string(), audio.clone()]);
+        next_input_idx += 1;
     } else if generate_demo_audio {
-        // Synthesize a clean gentle rhythmic chime track natively via FFmpeg LGPL lavfi
-        let safe_dur = duration_sec.clamp(1.0, 120.0);
         let filter_src = format!(
             "aevalsrc=0.14*sin(2*PI*330*t)*exp(-3*mod(t\\,1.5))+0.08*sin(2*PI*495*t)*exp(-4*mod(t+0.75\\,1.5)):s=44100:d={safe_dur:.2}"
         );
+        args.extend(["-f".to_string(), "lavfi".to_string(), "-i".to_string(), filter_src]);
+        next_input_idx += 1;
+    }
+
+    // Optional BGM input (looped cleanly to duration)
+    let mut bgm_input_idx: Option<usize> = None;
+    let bgm_volume = mix_plan
+        .as_ref()
+        .and_then(|m| m.bgm_volume)
+        .unwrap_or(0.24);
+    let auto_ducking = mix_plan
+        .as_ref()
+        .and_then(|m| m.auto_ducking)
+        .unwrap_or(true);
+
+    if let Some(bgm_id) = mix_plan
+        .as_ref()
+        .and_then(|m| m.bgm_preset.as_deref())
+        .filter(|s| !s.trim().is_empty() && *s != "none")
+    {
+        if let Ok(bgm_file) = audio_pack::ensure_asset_file(&app, "bgm", bgm_id) {
+            args.extend([
+                "-stream_loop".to_string(),
+                "-1".to_string(),
+                "-t".to_string(),
+                format!("{safe_dur:.2}"),
+                "-i".to_string(),
+                bgm_file.to_string_lossy().to_string(),
+            ]);
+            bgm_input_idx = Some(next_input_idx);
+            next_input_idx += 1;
+        }
+    }
+
+    // Optional timed SFX inputs (capped at 16 for predictable speed)
+    let mut sfx_inputs: Vec<(usize, u64, f64)> = Vec::new();
+    if let Some(events) = mix_plan.as_ref().and_then(|m| m.sfx_events.as_ref()) {
+        for ev in events.iter().take(16) {
+            if ev.preset.trim().is_empty() || ev.preset == "none" {
+                continue;
+            }
+            if let Ok(sfx_file) = audio_pack::ensure_asset_file(&app, "sfx", &ev.preset) {
+                args.extend(["-i".to_string(), sfx_file.to_string_lossy().to_string()]);
+                sfx_inputs.push((next_input_idx, ev.timestamp_ms, ev.volume));
+                next_input_idx += 1;
+            }
+        }
+    }
+
+    if let Some((filter_graph, audio_map)) =
+        build_audio_mix_graph(has_voice, bgm_input_idx, bgm_volume, auto_ducking, &sfx_inputs)
+    {
         args.extend([
-            "-f".to_string(),
-            "lavfi".to_string(),
-            "-i".to_string(),
-            filter_src,
+            "-filter_complex".to_string(),
+            filter_graph,
             "-map".to_string(),
             "0:v:0".to_string(),
             "-map".to_string(),
-            "1:a:0".to_string(),
+            audio_map,
             "-c:v".to_string(),
             "copy".to_string(),
             "-c:a".to_string(),
             "aac".to_string(),
             "-b:a".to_string(),
             "192k".to_string(),
-            "-shortest".to_string(),
+            "-t".to_string(),
+            format!("{safe_dur:.2}"),
             "-movflags".to_string(),
             "+faststart".to_string(),
             output_path.clone(),
@@ -433,7 +556,9 @@ pub fn run() {
             ai::ai_assemble_project,
             ai::ai_copilot_patch,
             audio::generate_tts_audio,
-            audio::process_user_audio
+            audio::process_user_audio,
+            audio_pack::get_audio_pack_catalog,
+            audio_pack::ensure_audio_pack_asset
         ])
         .run(tauri::generate_context!())
         .expect("error while running Synkcut Tauri application");
@@ -469,5 +594,16 @@ mod tests {
         assert_eq!(info.fps, 29.97);
         assert!(info.has_audio);
         assert_eq!(info.video_codec, "h264");
+    }
+
+    #[test]
+    fn test_build_audio_mix_graph_with_ducking_and_sfx() {
+        let (graph, out_label) =
+            build_audio_mix_graph(true, Some(2), 0.25, true, &[(3, 1500, 0.7)])
+                .expect("should produce mix graph");
+        assert!(graph.contains("sidechaincompress"));
+        assert!(graph.contains("adelay=1500|1500"));
+        assert!(graph.contains("amix=inputs=3"));
+        assert_eq!(out_label, "[aout]");
     }
 }

@@ -190,7 +190,13 @@ export default function WizardView({
   const [motionPreset, setMotionPreset] = useState<MotionPreset>("zoom_punch");
   const [transitionPreset, setTransitionPreset] = useState<TransitionPreset>("whip_pan");
   const [overlayMode, setOverlayMode] = useState<
-    "auto" | "notification_banner" | "promo_badge" | "none"
+    | "auto"
+    | "hook_headline"
+    | "notification_banner"
+    | "promo_badge"
+    | "doodle_highlight"
+    | "split_screen"
+    | "none"
   >("auto");
   const [bgmPreset, setBgmPreset] = useState("upbeat_promo");
   const [autoDucking, setAutoDucking] = useState(true);
@@ -1263,16 +1269,22 @@ export default function WizardView({
                         setOverlayMode(
                           e.target.value as
                             | "auto"
+                            | "hook_headline"
                             | "notification_banner"
                             | "promo_badge"
+                            | "doodle_highlight"
+                            | "split_screen"
                             | "none"
                         )
                       }
                       className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
                     >
                       <option value="auto">Otomatis Dipilihkan AI Director (Disarankan)</option>
+                      <option value="hook_headline">Hook Headline Card (3 Detik Awal)</option>
                       <option value="notification_banner">Native Notification Banner</option>
                       <option value="promo_badge">Promo / Callout Badge</option>
+                      <option value="doodle_highlight">Doodle Marker Highlight</option>
+                      <option value="split_screen">Split-Screen / B-Roll Comparison</option>
                       <option value="none">Tanpa Overlay Tambahan</option>
                     </select>
                   </div>
@@ -1284,6 +1296,7 @@ export default function WizardView({
                       onChange={(e) => setBgmPreset(e.target.value)}
                       className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
                     >
+                      <option value="none">Tanpa BGM</option>
                       {BGM_PRESETS.map((b) => (
                         <option key={b.id} value={b.id}>
                           {b.label}

@@ -33,7 +33,12 @@ export interface WordTimestamp {
 
 export interface SceneOverlay {
   id: string;
-  type: "hook_headline" | "notification_banner" | "promo_badge" | "doodle_highlight";
+  type:
+    | "hook_headline"
+    | "notification_banner"
+    | "promo_badge"
+    | "doodle_highlight"
+    | "split_screen";
   title?: string;
   text: string;
   position: "top" | "center" | "bottom";
@@ -53,6 +58,7 @@ export interface SceneItem {
   text: string;
   media: {
     path: string | null;
+    secondaryPath?: string | null;
     trimStartMs: number;
     fit: "cover" | "contain";
   };

@@ -50,7 +50,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 - [x] **Milestone 0:** Proof of Concept (PoC) Engine Render lokal (`Tauri v2 + Rust MSVC + Canvas/WebCodecs + Mediabunny + FFmpeg LGPL Sidecar`)
 - [x] **Milestone 1:** Design System Impeccable (`PRODUCT.md` + `DESIGN.md`, Dark Machined Carbon & Light Sage Mist), Onboarding BYOK (Windows Credential Manager + Tes Koneksi), & `My Projects` + 4 Sample Bawaan
 - [x] **Milestone 2:** Wizard Racik Konten (3 Langkah), AI Generate 3 Opsi Hook/Body/CTA, TTS (Gemini/OpenAI/Offline) & Rekam/Upload Suara Sendiri Auto-Sync + Auto Trim Silence, Multimodal AI Director (baca thumbnail footage lokal), & AI Copilot Chat JSON Patch
-- [ ] **Milestone 3:** Canvas Motion, Preset & Overlay Engine (penuh: 6 Overlay, 5 Transisi visual, 12 SFX + 6 BGM Auto-Ducking)
+- [x] **Milestone 3:** Canvas Motion, Preset & Overlay Engine (penuh: 5 Transisi visual, 6 Visual Overlay termasuk Doodle Marker & Split-Screen/B-Roll, 12 SFX + 6 BGM Audio Pack & FFmpeg Auto-Ducking)
 - [ ] **Milestone 4:** Hybrid Studio 3 Kolom, AI Copilot (JSON Patch), & Sample Bawaan
 - [ ] **Milestone 5:** Export Modal, Audit Kualitas, & Windows Installer
 

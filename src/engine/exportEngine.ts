@@ -9,7 +9,14 @@ import {
 import type { SynkcutProject } from "../types/scene";
 import { renderProjectFrame } from "./canvasRenderer";
 import { getProjectDurationMs } from "./sampleProject";
-import { isTauriRuntime, muxExportMp4, toAssetUrl, type ExportResult } from "../lib/tauriBridge";
+import {
+  isTauriRuntime,
+  muxExportMp4,
+  toAssetUrl,
+  type AudioMixPlan,
+  type ExportResult,
+  type SfxMixEvent,
+} from "../lib/tauriBridge";
 
 export interface ExportOptions {
   resolution: "1080p" | "720p";
@@ -79,6 +86,27 @@ async function seekVideoDeterministic(video: HTMLVideoElement, targetSec: number
   });
 }
 
+function buildMixPlan(project: SynkcutProject): AudioMixPlan {
+  const sfxEvents: SfxMixEvent[] = [];
+  for (const scene of project.scenes) {
+    for (const sfx of scene.sfx) {
+      if (!sfx.preset || sfx.preset === "none") continue;
+      sfxEvents.push({
+        preset: sfx.preset,
+        timestampMs: Math.max(0, scene.startMs + (sfx.offsetMs || 0)),
+        volume: sfx.volume ?? 0.65,
+      });
+    }
+  }
+
+  return {
+    bgmPreset: project.globalStyle.bgm.preset || null,
+    bgmVolume: project.globalStyle.bgm.volume ?? 0.24,
+    autoDucking: project.globalStyle.bgm.autoDucking ?? true,
+    sfxEvents,
+  };
+}
+
 export async function exportProjectToMp4(
   project: SynkcutProject,
   options: ExportOptions
@@ -92,10 +120,13 @@ export async function exportProjectToMp4(
 
   options.onProgress?.(2, "init", `Menyiapkan canvas ${width}×${height} @ ${fps}fps...`);
 
-  // Preload distinct local video clips assigned across scenes (supports multi-clip AI Director output!)
-  const uniquePaths = Array.from(
-    new Set(project.scenes.map((s) => s.media.path).filter((p): p is string => Boolean(p)))
-  );
+  // Preload distinct primary & secondary (Split-Screen) local video clips
+  const pathList: string[] = [];
+  for (const s of project.scenes) {
+    if (s.media.path) pathList.push(s.media.path);
+    if (s.media.secondaryPath) pathList.push(s.media.secondaryPath);
+  }
+  const uniquePaths = Array.from(new Set(pathList));
   const videoMap = new Map<string, HTMLVideoElement>();
   for (const path of uniquePaths) {
     const loaded = await loadHiddenVideo(path);
@@ -142,15 +173,22 @@ export async function exportProjectToMp4(
       (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
       options.videoElement ??
       null;
+    const secondaryVideo =
+      activeScene?.media.secondaryPath ? videoMap.get(activeScene.media.secondaryPath) ?? null : null;
 
     if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
       const localSceneSec =
         Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
       await seekVideoDeterministic(sceneVideo, localSceneSec);
     }
+    if (secondaryVideo && secondaryVideo.readyState >= 2 && activeScene) {
+      const localSec = Math.max(0, timeMs - activeScene.startMs) / 1000;
+      await seekVideoDeterministic(secondaryVideo, localSec);
+    }
 
     renderProjectFrame(ctx, project, timeMs, {
       videoElement: sceneVideo,
+      secondaryVideoElement: secondaryVideo,
       showSafeZone: false,
     });
 
@@ -171,7 +209,6 @@ export async function exportProjectToMp4(
   videoSource.close();
   await output.finalize();
 
-  // Cleanup offscreen video elements
   for (const v of videoMap.values()) {
     v.src = "";
     v.load();
@@ -188,7 +225,7 @@ export async function exportProjectToMp4(
     options.onProgress?.(
       80,
       "muxing",
-      "Mengirim video ke Rust & FFmpeg Sidecar untuk muxing audio..."
+      "FFmpeg Sidecar mencampur Voiceover, BGM Auto-Ducking, & SFX..."
     );
     const result = await muxExportMp4({
       videoBytes,
@@ -196,6 +233,7 @@ export async function exportProjectToMp4(
       generateDemoAudio: options.generateDemoAudio,
       durationSec,
       outputPath: options.outputPath,
+      mixPlan: buildMixPlan(project),
     });
     options.onProgress?.(100, "done", "Export MP4 selesai!");
     return result;
