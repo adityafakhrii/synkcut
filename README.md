@@ -54,6 +54,11 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 - [x] **Milestone 4:** Hybrid Studio 3 Kolom (Scene Cards drag-drop, tambah/duplikat/hapus scene, durasi stepper, trim start per scene, shortcut keyboard), AI Copilot JSON Patch (context scene aktif, path guard, diff pill, & 1-klik batalkan), serta 5 Sample Bawaan siap remix
 - [x] **Milestone 5:** Export Modal lengkap (ringkasan spec, 3-tahap progress, estimasi ETA, & tombol Batalkan), uji beban 60 detik 1080×1920 + Auto-Ducking, audit Impeccable WCAG AA (Dark & Light Mode), ikon native Synkcut, & build Windows Installer (`.msi` / `.exe`)
 
+#### Roadmap v1.1 — Hybrid Footage + AI Motion Video + Style Reference
+- [ ] **Milestone 6 (v1.1a):** Schema `AI Motion` (`project.synk.json` v1.1) + **4 Engine 2D Native** (`Flow & Diagram`, `Motion Chart`, `Tech & UI Cards`, `Stick-Figure Story`) + Safe-Stage Layout + Editor Parameter 0-Token di Studio
+- [ ] **Milestone 7 (v1.1b):** Engine ke-5 **`3D Product Breakdown`** (`Three.js` lokal offline, 60fps preview & deterministic WebCodecs MP4 export)
+- [ ] **Milestone 8 (v1.1c):** **Referensi Gaya** (Link YouTube 3-layer `yt-dlp`/Gemini/oEmbed + `Ctrl+V` Screenshot + Klip Lokal) + Wizard 3 Mode Visual (`AI Motion` / `Footage Lokal` / `Campur`) + 2 Sample Bawaan AI Motion + Build Windows Installer **v1.1.0**
+
 ---
 
 ## Menjalankan Secara Lokal (Windows)
