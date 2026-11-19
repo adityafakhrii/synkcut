@@ -360,6 +360,101 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
       return base;
     },
   },
+  {
+    id: "sample_before_after",
+    title: "Testimoni & Before–After",
+    format: "ad_promo",
+    summary: "Buka dengan split-screen perbandingan, kuatkan bukti chat notif, tutup dengan CTA kilat.",
+    captionLabel: "Neon Tech",
+    motionLabel: "Slide Reveal",
+    durationLabel: "00:09.0",
+    roles: ["hook", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const base: SynkcutProject = {
+        version: "1.0",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Testimoni & Before–After",
+          format: "ad_promo",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "neon_tech",
+          accentColor: "#38E59D",
+          showProgressBar: true,
+          bgm: { preset: "trendy_funk", volume: 0.24, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 3000,
+            text: "Lihat bedanya sebelum dan sesudah pakai racikan visual ini dalam dua menit.",
+            media: { path: null, secondaryPath: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "slide_reveal", intensity: 0.78 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "impact_boom", offsetMs: 0, volume: 0.7 }],
+            overlays: [
+              {
+                id: "ov_ba_1",
+                type: "split_screen",
+                text: "BEFORE VS AFTER",
+                position: "center",
+              },
+            ],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 3000,
+            endMs: 6200,
+            text: "Puluhan pelanggan langsung kirim chat repeat order di minggu pertama.",
+            media: { path: null, secondaryPath: null, trimStartMs: 3000, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.72 },
+            transitionIn: { preset: "whip_pan", durationMs: 240 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.65 }],
+            overlays: [
+              {
+                id: "ov_ba_2",
+                type: "notification_banner",
+                title: "Chat Pembeli · Baru saja",
+                text: "Kak repeat order 3 paket lagi ya, hasilnya mantap banget!",
+                position: "top",
+              },
+            ],
+          },
+          {
+            id: "scene_3",
+            role: "cta",
+            startMs: 6200,
+            endMs: 9000,
+            text: "Ambil promo bundel hari ini sebelum stok batch sekarang habis!",
+            media: { path: null, secondaryPath: null, trimStartMs: 6200, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.76 },
+            transitionIn: { preset: "pop_zoom", durationMs: 220 },
+            sfx: [{ preset: "cash_register", offsetMs: 0, volume: 0.7 }],
+            overlays: [
+              {
+                id: "ov_ba_3",
+                type: "promo_badge",
+                text: "STOK TERBATAS · ORDER SEKARANG",
+                position: "top",
+              },
+            ],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
 ];
 
 export function createBlankProjectForFormat(format: ContentFormat): SynkcutProject {

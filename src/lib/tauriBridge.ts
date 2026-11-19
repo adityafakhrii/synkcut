@@ -626,7 +626,12 @@ export async function aiAssembleProject(req: AssembleProjectRequest): Promise<Sy
 
 export async function aiCopilotPatch(
   project: SynkcutProject,
-  instruction: string
+  instruction: string,
+  selectedSceneId?: string | null
 ): Promise<CopilotPatchResponse> {
-  return invoke<CopilotPatchResponse>("ai_copilot_patch", { project, instruction });
+  return invoke<CopilotPatchResponse>("ai_copilot_patch", {
+    project,
+    instruction,
+    selectedSceneId: selectedSceneId ?? null,
+  });
 }

@@ -286,11 +286,13 @@ function drawFootageWithMotion(
       botGrad.addColorStop(1, "#090d12");
       ctx.fillStyle = botGrad;
       ctx.fillRect(0, halfH, width, height - halfH);
-      ctx.fillStyle = "rgba(255,255,255,0.65)";
-      ctx.font = '600 28px "JetBrains Mono", monospace';
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(splitOverlay.text || "SPLIT-SCREEN · B-ROLL DETAIL", width / 2, halfH + (height - halfH) * 0.45);
+      if (!isPosterThumbnail) {
+        ctx.fillStyle = "rgba(255,255,255,0.65)";
+        ctx.font = '600 28px "JetBrains Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(splitOverlay.text || "SPLIT-SCREEN · B-ROLL DETAIL", width / 2, halfH + (height - halfH) * 0.45);
+      }
     }
     ctx.restore();
 

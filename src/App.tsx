@@ -17,7 +17,7 @@ import {
   type ProjectSummary,
   type SynkcutProject,
 } from "./types/scene";
-import { createBlankProjectForFormat, type SampleTemplate } from "./engine/sampleTemplates";
+import { BUILTIN_SAMPLES, createBlankProjectForFormat, type SampleTemplate } from "./engine/sampleTemplates";
 import {
   deleteProject,
   duplicateProject,
@@ -347,7 +347,7 @@ export default function App() {
               Sample Bawaan
             </span>
             <span className="font-mono-num text-[11px]" style={{ color: "var(--text-muted)" }}>
-              4
+              {BUILTIN_SAMPLES.length}
             </span>
           </button>
 

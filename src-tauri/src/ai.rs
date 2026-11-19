@@ -694,11 +694,123 @@ pub async fn ai_assemble_project(
     }))
 }
 
+/// Merge an AI Copilot JSON patch safely onto the original project, preserving local media paths
+/// and guaranteeing contiguous scene timings (`>= 800ms` per scene).
+fn merge_and_sanitize_copilot_patch(original: &Value, patch: &Value) -> Value {
+    let mut updated = original.clone();
+
+    if let Some(new_style) = patch.get("globalStyle").filter(|v| v.is_object()) {
+        if let Some(orig_style) = updated.get_mut("globalStyle").and_then(Value::as_object_mut) {
+            for (k, v) in new_style.as_object().unwrap() {
+                orig_style.insert(k.clone(), v.clone());
+            }
+        } else {
+            updated["globalStyle"] = new_style.clone();
+        }
+    }
+
+    if let Some(new_scenes) = patch.get("scenes").and_then(Value::as_array) {
+        if !new_scenes.is_empty() {
+            let orig_scenes = original
+                .get("scenes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut cursor_ms: u64 = 0;
+            let mut sanitized: Vec<Value> = Vec::with_capacity(new_scenes.len());
+
+            for (idx, raw_scene) in new_scenes.iter().enumerate() {
+                let mut scene = raw_scene.clone();
+                let Some(obj) = scene.as_object_mut() else {
+                    continue;
+                };
+
+                let scene_id = obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| format!("scene_{}", idx + 1));
+                obj.insert("id".to_string(), Value::String(scene_id.clone()));
+
+                // Match original scene by id or index to protect local media file paths
+                let matched_orig = orig_scenes
+                    .iter()
+                    .find(|s| s.get("id").and_then(Value::as_str) == Some(scene_id.as_str()))
+                    .or_else(|| orig_scenes.get(idx));
+
+                if let Some(orig_s) = matched_orig {
+                    if let Some(orig_media) = orig_s.get("media").and_then(Value::as_object) {
+                        let media_entry = obj
+                            .entry("media".to_string())
+                            .or_insert_with(|| Value::Object(orig_media.clone()));
+                        if let Some(m_obj) = media_entry.as_object_mut() {
+                            if let Some(orig_path) = orig_media.get("path").filter(|v| v.is_string()) {
+                                let cur_valid = m_obj
+                                    .get("path")
+                                    .and_then(Value::as_str)
+                                    .map(|p| !p.trim().is_empty())
+                                    .unwrap_or(false);
+                                if !cur_valid {
+                                    m_obj.insert("path".to_string(), orig_path.clone());
+                                }
+                            }
+                            if let Some(orig_sec) =
+                                orig_media.get("secondaryPath").filter(|v| v.is_string())
+                            {
+                                if m_obj.get("secondaryPath").is_none() {
+                                    m_obj.insert("secondaryPath".to_string(), orig_sec.clone());
+                                }
+                            }
+                            if m_obj.get("trimStartMs").is_none() {
+                                m_obj.insert(
+                                    "trimStartMs".to_string(),
+                                    orig_media.get("trimStartMs").cloned().unwrap_or(json!(0)),
+                                );
+                            }
+                            if m_obj.get("fit").is_none() {
+                                m_obj.insert("fit".to_string(), json!("cover"));
+                            }
+                        }
+                    }
+                }
+
+                // Guarantee contiguous valid timings
+                let raw_start = obj.get("startMs").and_then(Value::as_u64).unwrap_or(cursor_ms);
+                let raw_end = obj
+                    .get("endMs")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(raw_start + 2500);
+                let dur = raw_end.saturating_sub(raw_start).clamp(800, 20000);
+                obj.insert("startMs".to_string(), json!(cursor_ms));
+                obj.insert("endMs".to_string(), json!(cursor_ms + dur));
+                cursor_ms += dur;
+
+                if obj.get("sfx").and_then(Value::as_array).is_none() {
+                    obj.insert("sfx".to_string(), json!([]));
+                }
+                if obj.get("overlays").and_then(Value::as_array).is_none() {
+                    obj.insert("overlays".to_string(), json!([]));
+                }
+
+                sanitized.push(scene);
+            }
+
+            if !sanitized.is_empty() {
+                updated["scenes"] = Value::Array(sanitized);
+            }
+        }
+    }
+
+    updated
+}
+
 #[tauri::command]
 pub async fn ai_copilot_patch(
     app: AppHandle,
     project: Value,
     instruction: String,
+    selected_scene_id: Option<String>,
 ) -> Result<CopilotPatchResponse, String> {
     if instruction.trim().is_empty() {
         return Err("Instruksi revisi kosong.".to_string());
@@ -712,16 +824,25 @@ pub async fn ai_copilot_patch(
     }
 
     let system_prompt = "Kamu adalah AI Video Director di aplikasi Synkcut. \
-        Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa mengubah durasi startMs/endMs atau path media lokal user kecuali diminta. \
+        Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa merusak path media lokal user. \
         Nilai captionPreset valid: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech. \
         Nilai motion.preset valid: zoom_punch, smooth_ken_burns, shake_impact, slide_reveal, static_clean. \
         Nilai transitionIn.preset valid: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade. \
-        Nilai overlay.type valid: notification_banner, promo_badge. \
+        Nilai overlays[].type valid: hook_headline, notification_banner, promo_badge, doodle_highlight, split_screen. \
+        Nilai sfx[].preset valid: whoosh_fast, whoosh_soft, pop_text, ding_notif, impact_boom, riser, camera_shutter, keyboard_click, cash_register, vinyl_scratch, glitch_zap, swoosh_reverse. \
+        Nilai globalStyle.bgm.preset valid: upbeat_promo, lofi_education, cinematic_story, tech_modern, trendy_funk, chill_aesthetic, none. \
         Balas HANYA dalam JSON: {\"reply\":\"ringkasan singkat Bahasa Indonesia apa yang diubah\",\"globalStyle\":{...},\"scenes\":[...]}";
 
+    let focus_hint = selected_scene_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|id| format!("\nScene yang sedang dipilih user di Studio: \"{id}\" (jika user menyebut 'scene ini' atau 'scene aktif', fokus ke scene tersebut)."))
+        .unwrap_or_default();
+
     let user_prompt = format!(
-        "Proyek saat ini:\n{}\n\nInstruksi revisi user: \"{}\"",
+        "Proyek saat ini:\n{}{}\n\nInstruksi revisi user: \"{}\"",
         serde_json::to_string(&compact_project).unwrap_or_default(),
+        focus_hint,
         instruction.trim()
     );
 
@@ -731,13 +852,7 @@ pub async fn ai_copilot_patch(
         .unwrap_or("Revisi berhasil diterapkan pada proyek.")
         .to_string();
 
-    let mut updated = project.clone();
-    if let Some(new_style) = val.get("globalStyle").filter(|v| v.is_object()) {
-        updated["globalStyle"] = new_style.clone();
-    }
-    if let Some(new_scenes) = val.get("scenes").filter(|v| v.is_array()) {
-        updated["scenes"] = new_scenes.clone();
-    }
+    let updated = merge_and_sanitize_copilot_patch(&project, &val);
 
     Ok(CopilotPatchResponse {
         project: updated,
@@ -770,5 +885,73 @@ mod tests {
         assert_eq!(ranges[2].1, 9000);
         assert_eq!(ranges[0].1, ranges[1].0);
         assert_eq!(ranges[1].1, ranges[2].0);
+    }
+
+    #[test]
+    fn test_copilot_patch_protects_local_media_and_reflows_timings() {
+        let orig = json!({
+            "globalStyle": { "captionPreset": "bold_pop", "accentColor": "#38E59D" },
+            "scenes": [
+                {
+                    "id": "scene_1",
+                    "role": "hook",
+                    "startMs": 0,
+                    "endMs": 3000,
+                    "text": "Hook lama",
+                    "media": { "path": "D:\\footage\\clip1.mp4", "trimStartMs": 500, "fit": "cover" },
+                    "motion": { "preset": "zoom_punch", "intensity": 0.8 },
+                    "transitionIn": { "preset": "hard_cut", "durationMs": 0 },
+                    "sfx": [],
+                    "overlays": []
+                },
+                {
+                    "id": "scene_2",
+                    "role": "cta",
+                    "startMs": 3000,
+                    "endMs": 6000,
+                    "text": "CTA lama",
+                    "media": { "path": "D:\\footage\\clip2.mp4", "trimStartMs": 0, "fit": "cover" },
+                    "motion": { "preset": "static_clean", "intensity": 0.5 },
+                    "transitionIn": { "preset": "whip_pan", "durationMs": 200 },
+                    "sfx": [],
+                    "overlays": []
+                }
+            ]
+        });
+
+        let patch = json!({
+            "globalStyle": { "captionPreset": "luxury_editorial" },
+            "scenes": [
+                {
+                    "id": "scene_1",
+                    "role": "hook",
+                    "startMs": 100,
+                    "endMs": 2600,
+                    "text": "Hook baru",
+                    "media": { "path": null },
+                    "motion": { "preset": "smooth_ken_burns", "intensity": 0.7 },
+                    "transitionIn": { "preset": "hard_cut", "durationMs": 0 }
+                },
+                {
+                    "id": "scene_2",
+                    "role": "cta",
+                    "startMs": 9999,
+                    "endMs": 12999,
+                    "text": "CTA baru",
+                    "motion": { "preset": "zoom_punch", "intensity": 0.8 },
+                    "transitionIn": { "preset": "pop_zoom", "durationMs": 220 }
+                }
+            ]
+        });
+
+        let merged = merge_and_sanitize_copilot_patch(&orig, &patch);
+        assert_eq!(merged["globalStyle"]["captionPreset"], "luxury_editorial");
+        assert_eq!(merged["globalStyle"]["accentColor"], "#38E59D");
+        assert_eq!(merged["scenes"][0]["media"]["path"], "D:\\footage\\clip1.mp4");
+        assert_eq!(merged["scenes"][1]["media"]["path"], "D:\\footage\\clip2.mp4");
+        assert_eq!(merged["scenes"][0]["startMs"], 0);
+        assert_eq!(merged["scenes"][0]["endMs"], 2500);
+        assert_eq!(merged["scenes"][1]["startMs"], 2500);
+        assert_eq!(merged["scenes"][1]["endMs"], 5500);
     }
 }

@@ -5,17 +5,21 @@ import {
   Check,
   CheckCircle2,
   Code2,
+  Copy,
   Cpu,
   Download,
   Film,
   FolderOpen,
+  GripVertical,
   Layers,
   Loader2,
   Lock,
+  Minus,
   Moon,
   Music,
   Pause,
   Play,
+  Plus,
   Redo2,
   RotateCcw,
   ShieldCheck,
@@ -23,6 +27,7 @@ import {
   Sparkles,
   Square,
   Sun,
+  Trash2,
   Type,
   Undo2,
   Upload,
@@ -35,10 +40,20 @@ import type {
   CaptionPreset,
   MotionPreset,
   SceneOverlay,
+  SceneRole,
   SynkcutProject,
   TransitionPreset,
 } from "../types/scene";
 import { getProjectDurationMs, rebuildWordsFromScenes } from "../engine/sampleProject";
+import {
+  addSceneAfter,
+  deleteScene,
+  duplicateScene,
+  reorderScenes,
+  summarizeProjectDiff,
+  updateSceneDuration,
+  updateSceneRole,
+} from "../engine/sceneOps";
 import { renderProjectFrame } from "../engine/canvasRenderer";
 import { checkWebCodecsSupport, exportProjectToMp4 } from "../engine/exportEngine";
 import {
@@ -78,6 +93,9 @@ interface DirectorLogItem {
   id: string;
   role: "user" | "assistant";
   text: string;
+  changes?: string[];
+  snapshotBefore?: SynkcutProject;
+  reverted?: boolean;
 }
 
 const CAPTION_PRESETS: Array<{ id: CaptionPreset; label: string; sample: string }> = [
@@ -185,9 +203,15 @@ export default function StudioView({
     initialProject.scenes.find((s) => s.media.path)?.media.path ?? null
   );
   const [footageProbe, setFootageProbe] = useState<MediaProbeInfo | null>(null);
+  const [clipProbes, setClipProbes] = useState<Record<string, MediaProbeInfo>>({});
   const [footageThumbs, setFootageThumbs] = useState<string[]>([]);
   const [audioPath, setAudioPath] = useState<string | null>(initialProject.voiceover.audioPath);
   const [generateDemoAudio, setGenerateDemoAudio] = useState(!initialProject.voiceover.audioPath);
+
+  // Scene card drag-drop & sample remix UI state
+  const [draggedSceneIdx, setDraggedSceneIdx] = useState<number | null>(null);
+  const [dragOverSceneIdx, setDragOverSceneIdx] = useState<number | null>(null);
+  const [dismissRemixHint, setDismissRemixHint] = useState(false);
 
   // Audio Pack (12 SFX & 6 BGM)
   const [audioCatalog, setAudioCatalog] = useState<AudioPackCatalog>({ sfx: [], bgm: [] });
@@ -225,6 +249,24 @@ export default function StudioView({
     return byId ?? project.scenes[0] ?? null;
   }, [project.scenes, selectedSceneId]);
 
+  const activeSceneIndex = useMemo(() => {
+    if (!activeScene) return 0;
+    const idx = project.scenes.findIndex((s) => s.id === activeScene.id);
+    return idx >= 0 ? idx : 0;
+  }, [project.scenes, activeScene]);
+
+  const projectClipPaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of project.scenes) {
+      if (s.media.path) set.add(s.media.path);
+      if (s.media.secondaryPath) set.add(s.media.secondaryPath);
+    }
+    if (footagePath) set.add(footagePath);
+    return Array.from(set);
+  }, [project.scenes, footagePath]);
+
+  const hasAnyFootage = projectClipPaths.length > 0;
+
   function commitProjectChange(
     updater: (prev: SynkcutProject) => SynkcutProject,
     recordHistory = true
@@ -254,6 +296,45 @@ export default function StudioView({
     setPastHistory((h) => [...h.slice(-24), project]);
     setProject(next);
   }
+
+  // Native desktop keyboard shortcuts (Space, Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z, Left/Right arrows)
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isEditingText =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+
+      if (isEditingText || showExportModal || showJsonModal) return;
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        setIsPlaying((p) => !p);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))
+      ) {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setIsPlaying(false);
+        setCurrentTimeMs((t) => Math.max(0, t - 250));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setIsPlaying(false);
+        setCurrentTimeMs((t) => Math.min(totalDurationMs, t + 250));
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   // Debounced auto-save
   useEffect(() => {
@@ -523,21 +604,30 @@ export default function StudioView({
     e.currentTarget.releasePointerCapture(e.pointerId);
   }
 
-  async function handlePickFootage() {
+  async function handlePickFootage(scope: "active" | "all" = "all") {
     if (isTauriRuntime()) {
       const picked = await pickLocalVideo();
       if (!picked) return;
       setFootagePath(picked);
       commitProjectChange((prev) => ({
         ...prev,
-        scenes: prev.scenes.map((s) => ({
-          ...s,
-          media: { ...s.media, path: picked },
-        })),
+        scenes: prev.scenes.map((s) =>
+          scope === "all" || s.id === activeScene?.id
+            ? {
+                ...s,
+                media: {
+                  ...s.media,
+                  path: picked,
+                  trimStartMs: scope === "active" ? 0 : s.media.trimStartMs,
+                },
+              }
+            : s
+        ),
       }));
       try {
         const info = await probeMedia(picked);
         setFootageProbe(info);
+        setClipProbes((prev) => ({ ...prev, [picked]: info }));
         const thumbs = await extractThumbnails(picked, 2);
         setFootageThumbs(thumbs);
       } catch (err) {
@@ -552,9 +642,96 @@ export default function StudioView({
         if (!file) return;
         const url = URL.createObjectURL(file);
         setFootagePath(url);
+        commitProjectChange((prev) => ({
+          ...prev,
+          scenes: prev.scenes.map((s) =>
+            scope === "all" || s.id === activeScene?.id
+              ? { ...s, media: { ...s.media, path: url, trimStartMs: 0 } }
+              : s
+          ),
+        }));
       };
       input.click();
     }
+  }
+
+  function assignClipToActiveScene(clipPath: string) {
+    if (!activeScene) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) =>
+        s.id === activeScene.id
+          ? { ...s, media: { ...s.media, path: clipPath, trimStartMs: 0 } }
+          : s
+      ),
+    }));
+  }
+
+  function updateActiveSceneTrimStart(trimMs: number) {
+    if (!activeScene) return;
+    commitProjectChange(
+      (prev) => ({
+        ...prev,
+        scenes: prev.scenes.map((s) =>
+          s.id === activeScene.id
+            ? { ...s, media: { ...s.media, trimStartMs: Math.max(0, Math.round(trimMs)) } }
+            : s
+        ),
+      }),
+      false
+    );
+  }
+
+  function handleReorderScene(fromIdx: number, toIdx: number) {
+    if (fromIdx === toIdx) return;
+    const movedId = project.scenes[fromIdx]?.id;
+    const next = reorderScenes(project, fromIdx, toIdx);
+    commitProjectChange(() => next);
+    if (movedId) {
+      setSelectedSceneId(movedId);
+      const relocated = next.scenes.find((s) => s.id === movedId);
+      if (relocated) setCurrentTimeMs(relocated.startMs);
+    }
+  }
+
+  function handleAddScene(role: SceneRole = "body") {
+    const { project: next, newSceneId } = addSceneAfter(project, activeScene?.id, role);
+    commitProjectChange(() => next);
+    setSelectedSceneId(newSceneId);
+    const created = next.scenes.find((s) => s.id === newSceneId);
+    if (created) setCurrentTimeMs(created.startMs);
+  }
+
+  function handleDuplicateScene(sceneId: string) {
+    const { project: next, newSceneId } = duplicateScene(project, sceneId);
+    commitProjectChange(() => next);
+    setSelectedSceneId(newSceneId);
+    const created = next.scenes.find((s) => s.id === newSceneId);
+    if (created) setCurrentTimeMs(created.startMs);
+  }
+
+  function handleDeleteScene(sceneId: string) {
+    if (project.scenes.length <= 1) return;
+    const idx = project.scenes.findIndex((s) => s.id === sceneId);
+    const next = deleteScene(project, sceneId);
+    commitProjectChange(() => next);
+    const fallback = next.scenes[Math.max(0, Math.min(idx, next.scenes.length - 1))];
+    if (fallback) {
+      setSelectedSceneId(fallback.id);
+      setCurrentTimeMs(fallback.startMs);
+    }
+  }
+
+  function handleAdjustSceneDuration(sceneId: string, deltaMs: number) {
+    const scene = project.scenes.find((s) => s.id === sceneId);
+    if (!scene) return;
+    const nextDur = Math.max(1000, Math.min(15000, scene.endMs - scene.startMs + deltaMs));
+    const next = updateSceneDuration(project, sceneId, nextDur);
+    commitProjectChange(() => next);
+  }
+
+  function handleChangeSceneRole(sceneId: string, role: SceneRole) {
+    commitProjectChange((prev) => updateSceneRole(prev, sceneId, role));
   }
 
   async function handlePickAudio() {
@@ -767,16 +944,38 @@ export default function StudioView({
     }
   }
 
-  function pushDirectorMessage(role: "user" | "assistant", text: string) {
-    setDirectorLog((prev) => [...prev.slice(-8), { id: `${Date.now()}_${Math.random()}`, role, text }]);
+  function pushDirectorMessage(
+    role: "user" | "assistant",
+    text: string,
+    extra?: { changes?: string[]; snapshotBefore?: SynkcutProject }
+  ) {
+    setDirectorLog((prev) => [
+      ...prev.slice(-10),
+      {
+        id: `${Date.now()}_${Math.random()}`,
+        role,
+        text,
+        changes: extra?.changes,
+        snapshotBefore: extra?.snapshotBefore,
+      },
+    ]);
+  }
+
+  function handleRevertDirectorPatch(logId: string) {
+    const item = directorLog.find((m) => m.id === logId);
+    if (!item?.snapshotBefore || item.reverted) return;
+    const restored = item.snapshotBefore;
+    commitProjectChange(() => restored);
+    setDirectorLog((prev) => prev.map((m) => (m.id === logId ? { ...m, reverted: true } : m)));
   }
 
   function applyDirectorPreset(presetKey: "hook_punch" | "clean_edu" | "kinetic_fast") {
+    const before = project;
     if (presetKey === "hook_punch") {
-      commitProjectChange((prev) => ({
-        ...prev,
-        globalStyle: { ...prev.globalStyle, captionPreset: "bold_pop", accentColor: "#38E59D" },
-        scenes: prev.scenes.map((s, idx) =>
+      const next: SynkcutProject = {
+        ...before,
+        globalStyle: { ...before.globalStyle, captionPreset: "bold_pop", accentColor: "#38E59D" },
+        scenes: before.scenes.map((s, idx) =>
           idx === 0
             ? {
                 ...s,
@@ -793,37 +992,43 @@ export default function StudioView({
               }
             : s
         ),
-      }));
+      };
+      commitProjectChange(() => next);
       setCurrentTimeMs(1000);
       pushDirectorMessage(
         "assistant",
-        "Diterapkan: Hook diperkuat dengan Zoom Punch + Bold Pop + Native Notification Banner (0 token)."
+        "Hook diperkuat dengan Zoom Punch + Bold Pop + Native Notification Banner (0 token).",
+        { changes: summarizeProjectDiff(before, next), snapshotBefore: before }
       );
     } else if (presetKey === "clean_edu") {
-      commitProjectChange((prev) => ({
-        ...prev,
-        globalStyle: { ...prev.globalStyle, captionPreset: "clean_minimal", accentColor: "#38BDF8" },
-        scenes: prev.scenes.map((s) => ({
+      const next: SynkcutProject = {
+        ...before,
+        globalStyle: { ...before.globalStyle, captionPreset: "clean_minimal", accentColor: "#38BDF8" },
+        scenes: before.scenes.map((s) => ({
           ...s,
           motion: { preset: "smooth_ken_burns", intensity: 0.65 },
         })),
-      }));
+      };
+      commitProjectChange(() => next);
       pushDirectorMessage(
         "assistant",
-        "Diterapkan: Gaya Clean Minimal + Smooth Ken Burns dengan aksen Cyan (0 token)."
+        "Gaya Clean Minimal + Smooth Ken Burns dengan aksen Cyan diterapkan (0 token).",
+        { changes: summarizeProjectDiff(before, next), snapshotBefore: before }
       );
     } else {
-      commitProjectChange((prev) => ({
-        ...prev,
-        globalStyle: { ...prev.globalStyle, captionPreset: "kinetic_punch", accentColor: "#38E59D" },
-        scenes: prev.scenes.map((s) => ({
+      const next: SynkcutProject = {
+        ...before,
+        globalStyle: { ...before.globalStyle, captionPreset: "kinetic_punch", accentColor: "#38E59D" },
+        scenes: before.scenes.map((s) => ({
           ...s,
           motion: { preset: "shake_impact", intensity: 0.8 },
         })),
-      }));
+      };
+      commitProjectChange(() => next);
       pushDirectorMessage(
         "assistant",
-        "Diterapkan: Mode energik Kinetic Punch 2 kata + Shake Impact (0 token)."
+        "Mode energik Kinetic Punch 2 kata + Shake Impact diterapkan (0 token).",
+        { changes: summarizeProjectDiff(before, next), snapshotBefore: before }
       );
     }
   }
@@ -835,19 +1040,25 @@ export default function StudioView({
     setPromptInput("");
     pushDirectorMessage("user", raw);
 
+    const before = project;
+
     // When running in Tauri desktop with BYOK configured, invoke real LLM JSON Patching!
     if (isTauriRuntime() && activeByokOk) {
       setIsPatchingAi(true);
       try {
-        const res = await aiCopilotPatch(project, raw);
-        commitProjectChange(() => ({
+        const res = await aiCopilotPatch(before, raw, activeScene?.id ?? null);
+        const patched: SynkcutProject = {
           ...res.project,
           voiceover: {
             ...res.project.voiceover,
             words: rebuildWordsFromScenes(res.project),
           },
-        }));
-        pushDirectorMessage("assistant", `${res.reply} (${res.providerUsed})`);
+        };
+        commitProjectChange(() => patched);
+        pushDirectorMessage("assistant", `${res.reply} (${res.providerUsed})`, {
+          changes: summarizeProjectDiff(before, patched),
+          snapshotBefore: before,
+        });
       } catch (err) {
         pushDirectorMessage(
           "assistant",
@@ -861,39 +1072,100 @@ export default function StudioView({
 
     // Zero-token offline/local instant command fallback
     const lower = raw.toLowerCase();
+    const applyLocalPatch = (next: SynkcutProject, reply: string) => {
+      commitProjectChange(() => next);
+      pushDirectorMessage("assistant", reply, {
+        changes: summarizeProjectDiff(before, next),
+        snapshotBefore: before,
+      });
+    };
+
     if (lower.includes("editorial") || lower.includes("luxury") || lower.includes("serif")) {
-      commitProjectChange((prev) => ({
-        ...prev,
-        globalStyle: { ...prev.globalStyle, captionPreset: "luxury_editorial", accentColor: "#F59E0B" },
-      }));
-      pushDirectorMessage("assistant", "Style caption diubah ke Luxury Editorial (serif + aksen amber).");
+      applyLocalPatch(
+        {
+          ...before,
+          globalStyle: { ...before.globalStyle, captionPreset: "luxury_editorial", accentColor: "#F59E0B" },
+        },
+        "Style caption diubah ke Luxury Editorial (serif + aksen amber)."
+      );
     } else if (lower.includes("neon")) {
-      commitProjectChange((prev) => ({
-        ...prev,
-        globalStyle: { ...prev.globalStyle, captionPreset: "neon_tech", accentColor: "#38E59D" },
-      }));
-      pushDirectorMessage("assistant", "Style caption diubah ke Neon Tech dengan aksen Emerald-Mint.");
+      applyLocalPatch(
+        {
+          ...before,
+          globalStyle: { ...before.globalStyle, captionPreset: "neon_tech", accentColor: "#38E59D" },
+        },
+        "Style caption diubah ke Neon Tech dengan aksen Emerald-Mint."
+      );
     } else if (lower.includes("minimal") || lower.includes("clean")) {
       applyDirectorPreset("clean_edu");
+    } else if (lower.includes("kinetic")) {
+      applyDirectorPreset("kinetic_fast");
+    } else if (lower.includes("tambah scene")) {
+      const { project: next, newSceneId } = addSceneAfter(before, activeScene?.id, "body");
+      applyLocalPatch(next, "Scene baru ditambahkan setelah scene aktif.");
+      setSelectedSceneId(newSceneId);
+    } else if (lower.includes("hapus overlay") || lower.includes("tanpa overlay")) {
+      setActiveSceneOverlay("none");
+      pushDirectorMessage("assistant", "Overlay dihapus dari scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Dihapus`],
+        snapshotBefore: before,
+      });
     } else if (lower.includes("notif")) {
       setActiveSceneOverlay("notification_banner");
-      pushDirectorMessage("assistant", "Native Notification Banner ditambahkan pada scene aktif.");
+      pushDirectorMessage("assistant", "Native Notification Banner ditambahkan pada scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Notif Banner`],
+        snapshotBefore: before,
+      });
     } else if (lower.includes("headline") || lower.includes("judul")) {
       setActiveSceneOverlay("hook_headline");
-      pushDirectorMessage("assistant", "Hook Headline Card ditambahkan pada scene aktif.");
+      pushDirectorMessage("assistant", "Hook Headline Card ditambahkan pada scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Hook Headline`],
+        snapshotBefore: before,
+      });
     } else if (lower.includes("doodle") || lower.includes("coret") || lower.includes("spidol")) {
       setActiveSceneOverlay("doodle_highlight");
-      pushDirectorMessage("assistant", "Doodle Marker Highlight ditambahkan pada scene aktif.");
+      pushDirectorMessage("assistant", "Doodle Marker Highlight ditambahkan pada scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Doodle Marker`],
+        snapshotBefore: before,
+      });
     } else if (lower.includes("split") || lower.includes("b-roll") || lower.includes("broll")) {
       setActiveSceneOverlay("split_screen");
-      pushDirectorMessage("assistant", "Split-Screen / B-Roll diaktifkan pada scene aktif.");
+      pushDirectorMessage("assistant", "Split-Screen / B-Roll diaktifkan pada scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Split-Screen`],
+        snapshotBefore: before,
+      });
     } else if (lower.includes("badge") || lower.includes("promo")) {
       setActiveSceneOverlay("promo_badge");
-      pushDirectorMessage("assistant", "Promo Badge ditambahkan pada scene aktif.");
+      pushDirectorMessage("assistant", "Promo Badge ditambahkan pada scene aktif.", {
+        changes: [`Scene ${activeSceneIndex + 1} Overlay → Promo Badge`],
+        snapshotBefore: before,
+      });
+    } else if (lower.includes("lofi") || lower.includes("lo-fi")) {
+      applyLocalPatch(
+        {
+          ...before,
+          globalStyle: {
+            ...before.globalStyle,
+            bgm: { ...before.globalStyle.bgm, preset: "lofi_education" },
+          },
+        },
+        "BGM diganti ke Lo-Fi Edukasi dengan Auto-Ducking."
+      );
+    } else if (lower.includes("tanpa bgm") || lower.includes("hapus bgm") || lower.includes("matikan musik")) {
+      applyLocalPatch(
+        {
+          ...before,
+          globalStyle: {
+            ...before.globalStyle,
+            bgm: { ...before.globalStyle.bgm, preset: "none" },
+          },
+        },
+        "Backsound (BGM) dimatikan."
+      );
     } else {
       pushDirectorMessage(
         "assistant",
-        "Atur API Key BYOK di Pengaturan AI agar AI Director dapat mengeksekusi revisi bebas lewat JSON Patch."
+        "Atur API Key BYOK di Pengaturan AI agar AI Director dapat mengeksekusi revisi bebas lewat JSON Patch (atau coba ketik: editorial, neon, doodle, split, headline, lofi, tambah scene)."
       );
     }
   }
@@ -1049,7 +1321,7 @@ export default function StudioView({
             disabled={pastHistory.length === 0}
             onClick={handleUndo}
             className="ui-btn-secondary flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
-            title="Undo"
+            title="Undo (Ctrl+Z)"
             aria-label="Undo"
           >
             <Undo2 className="h-3.5 w-3.5" />
@@ -1059,7 +1331,7 @@ export default function StudioView({
             disabled={futureHistory.length === 0}
             onClick={handleRedo}
             className="ui-btn-secondary flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
-            title="Redo"
+            title="Redo (Ctrl+Y)"
             aria-label="Redo"
           >
             <Redo2 className="h-3.5 w-3.5" />
@@ -1171,62 +1443,350 @@ export default function StudioView({
 
           <div className="min-h-0 flex-1 overflow-y-auto p-3.5 space-y-3">
             {/* TAB: SCENES */}
-            {leftTab === "scenes" &&
-              project.scenes.map((scene, idx) => {
-                const isSelected = activeScene?.id === scene.id;
-                return (
+            {leftTab === "scenes" && (
+              <div className="space-y-2.5">
+                {!hasAnyFootage && !dismissRemixHint && (
                   <div
-                    key={scene.id}
-                    onClick={() => {
-                      setSelectedSceneId(scene.id);
-                      setCurrentTimeMs(scene.startMs);
-                    }}
-                    className="rounded-lg p-3 transition-colors cursor-pointer"
+                    className="rounded-lg p-2.5 text-[11px] leading-relaxed"
                     style={{
-                      backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-elevated)",
-                      border: isSelected
-                        ? "1px solid var(--border-strong)"
-                        : "1px solid var(--border-subtle)",
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px dashed var(--border-strong)",
+                      color: "var(--text-secondary)",
                     }}
                   >
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide">
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: roleColor(scene.role) }}
-                        />
-                        {idx + 1}. {scene.role}
+                    <div className="flex items-start justify-between gap-2">
+                      <span>
+                        Tarik grip kiri untuk geser urutan scene. Pasang video lokal kapan saja di
+                        tab <strong>Footage</strong>.
                       </span>
-                      <span
-                        className="font-mono-num text-[11px]"
+                      <button
+                        type="button"
+                        onClick={() => setDismissRemixHint(true)}
+                        className="shrink-0 p-0.5 cursor-pointer"
                         style={{ color: "var(--text-muted)" }}
+                        aria-label="Tutup panduan"
                       >
-                        {formatTimecode(scene.startMs)}–{formatTimecode(scene.endMs)}
-                      </span>
+                        <X className="h-3 w-3" />
+                      </button>
                     </div>
-
-                    <textarea
-                      value={scene.text}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => handleSceneTextChange(scene.id, e.target.value)}
-                      rows={3}
-                      className="ui-input w-full resize-none rounded-md p-2 text-xs leading-relaxed"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setLeftTab("footage")}
+                      className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold hover:underline cursor-pointer"
+                      style={{ color: "var(--accent)" }}
+                    >
+                      <Film className="h-3 w-3" />
+                      Pasang Footage Lokal →
+                    </button>
                   </div>
-                );
-              })}
+                )}
+
+                {project.scenes.map((scene, idx) => {
+                  const isSelected = activeScene?.id === scene.id;
+                  const isDragOver = dragOverSceneIdx === idx && draggedSceneIdx !== idx;
+                  const durSec = ((scene.endMs - scene.startMs) / 1000).toFixed(1);
+                  return (
+                    <div
+                      key={scene.id}
+                      draggable
+                      onDragStart={(e) => {
+                        setDraggedSceneIdx(idx);
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (dragOverSceneIdx !== idx) setDragOverSceneIdx(idx);
+                      }}
+                      onDragLeave={() => {
+                        if (dragOverSceneIdx === idx) setDragOverSceneIdx(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggedSceneIdx !== null && draggedSceneIdx !== idx) {
+                          handleReorderScene(draggedSceneIdx, idx);
+                        }
+                        setDraggedSceneIdx(null);
+                        setDragOverSceneIdx(null);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedSceneIdx(null);
+                        setDragOverSceneIdx(null);
+                      }}
+                      onClick={() => {
+                        setSelectedSceneId(scene.id);
+                        setCurrentTimeMs(scene.startMs);
+                      }}
+                      className="rounded-lg p-2.5 transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-elevated)",
+                        border: isDragOver
+                          ? "1px solid var(--accent)"
+                          : isSelected
+                            ? "1px solid var(--border-strong)"
+                            : "1px solid var(--border-subtle)",
+                        opacity: draggedSceneIdx === idx ? 0.55 : 1,
+                      }}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-1.5">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className="cursor-grab active:cursor-grabbing"
+                            style={{ color: "var(--text-muted)" }}
+                            title="Tarik untuk ubah urutan scene"
+                          >
+                            <GripVertical className="h-3.5 w-3.5" />
+                          </span>
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: roleColor(scene.role) }}
+                          />
+                          <span className="font-mono-num text-[11px] font-bold">{idx + 1}.</span>
+                          <select
+                            value={scene.role}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              handleChangeSceneRole(scene.id, e.target.value as SceneRole)
+                            }
+                            aria-label={`Peran scene ${idx + 1}`}
+                            className="bg-transparent text-[11px] font-bold uppercase tracking-wide outline-none cursor-pointer"
+                            style={{ color: "var(--text-primary)" }}
+                          >
+                            <option value="hook" style={{ backgroundColor: "var(--bg-panel)" }}>
+                              HOOK
+                            </option>
+                            <option value="body" style={{ backgroundColor: "var(--bg-panel)" }}>
+                              BODY
+                            </option>
+                            <option value="cta" style={{ backgroundColor: "var(--bg-panel)" }}>
+                              CTA
+                            </option>
+                          </select>
+                        </div>
+
+                        <span
+                          className="shrink-0 font-mono-num text-[11px]"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {formatTimecode(scene.startMs)}–{formatTimecode(scene.endMs)}
+                        </span>
+                      </div>
+
+                      <textarea
+                        value={scene.text}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => handleSceneTextChange(scene.id, e.target.value)}
+                        rows={2}
+                        className="ui-input w-full resize-none rounded-md p-2 text-xs leading-relaxed"
+                      />
+
+                      {/* Compact Micro Controls Footer: Duration Stepper + Duplicate/Delete */}
+                      <div
+                        className="mt-2 flex items-center justify-between gap-2 pt-1.5 border-t"
+                        style={{ borderColor: "var(--border-subtle)" }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleAdjustSceneDuration(scene.id, -500)}
+                            className="ui-btn-secondary flex h-5 w-5 items-center justify-center rounded cursor-pointer"
+                            title="Kurangi durasi 0,5 detik"
+                            aria-label="Kurangi durasi"
+                          >
+                            <Minus className="h-3 w-3" />
+                          </button>
+                          <span
+                            className="min-w-[38px] text-center font-mono-num text-[11px]"
+                            style={{ color: "var(--text-secondary)" }}
+                          >
+                            {durSec}s
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleAdjustSceneDuration(scene.id, 500)}
+                            className="ui-btn-secondary flex h-5 w-5 items-center justify-center rounded cursor-pointer"
+                            title="Tambah durasi 0,5 detik"
+                            aria-label="Tambah durasi"
+                          >
+                            <Plus className="h-3 w-3" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicateScene(scene.id)}
+                            className="ui-btn-secondary flex h-6 w-6 items-center justify-center rounded cursor-pointer"
+                            title="Duplikat scene"
+                            aria-label="Duplikat scene"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={project.scenes.length <= 1}
+                            onClick={() => handleDeleteScene(scene.id)}
+                            className="ui-btn-secondary flex h-6 w-6 items-center justify-center rounded disabled:opacity-35 cursor-pointer"
+                            style={{ color: "var(--danger)" }}
+                            title="Hapus scene"
+                            aria-label="Hapus scene"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => handleAddScene("body")}
+                  className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Tambah Scene Baru
+                </button>
+              </div>
+            )}
 
             {/* TAB: FOOTAGE */}
             {leftTab === "footage" && (
               <div className="space-y-3">
-                <button
-                  type="button"
-                  onClick={handlePickFootage}
-                  className="ui-btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold cursor-pointer"
-                >
-                  <Upload className="h-4 w-4" />
-                  {footagePath ? "Ganti Footage MP4 Lokal" : "Import Footage MP4 Lokal"}
-                </button>
+                {activeScene && (
+                  <div
+                    className="flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <span style={{ color: "var(--text-secondary)" }}>Scene Aktif:</span>
+                    <span className="font-bold uppercase" style={{ color: roleColor(activeScene.role) }}>
+                      {activeSceneIndex + 1}. {activeScene.role}
+                    </span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handlePickFootage("active")}
+                    className="ui-btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {activeScene?.media.path
+                      ? "Ganti Footage Scene Ini"
+                      : "Pilih Footage untuk Scene Ini"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handlePickFootage("all")}
+                    className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium cursor-pointer"
+                  >
+                    <Film className="h-3.5 w-3.5" />
+                    Pasang 1 Footage ke Semua Scene
+                  </button>
+                </div>
+
+                {/* Active Scene Clip & Trim Start Control */}
+                {activeScene?.media.path && (
+                  <div
+                    className="rounded-lg p-3 space-y-2.5"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="truncate font-mono-num font-semibold" title={activeScene.media.path}>
+                        {activeScene.media.path.split(/[\\/]/).pop()}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          commitProjectChange((prev) => ({
+                            ...prev,
+                            scenes: prev.scenes.map((s) =>
+                              s.id === activeScene.id
+                                ? { ...s, media: { ...s.media, path: null, trimStartMs: 0 } }
+                                : s
+                            ),
+                          }))
+                        }
+                        className="shrink-0 text-[11px] underline cursor-pointer"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        Lepas
+                      </button>
+                    </div>
+
+                    <div>
+                      <div className="mb-1 flex items-center justify-between text-[11px]">
+                        <span style={{ color: "var(--text-secondary)" }}>Mulai Klip (Trim Start)</span>
+                        <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                          {formatTimecode(activeScene.media.trimStartMs || 0)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(
+                          10000,
+                          (clipProbes[activeScene.media.path]?.durationMs ??
+                            footageProbe?.durationMs ??
+                            20000) - 1000
+                        )}
+                        step={200}
+                        value={activeScene.media.trimStartMs || 0}
+                        onChange={(e) => updateActiveSceneTrimStart(Number(e.target.value))}
+                        className="w-full accent-[var(--accent)] cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Reusable Project Clips Tray */}
+                {projectClipPaths.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+                      Klip di Proyek ({projectClipPaths.length})
+                    </div>
+                    {projectClipPaths.map((clipPath) => {
+                      const isCurrent = activeScene?.media.path === clipPath;
+                      return (
+                        <div
+                          key={clipPath}
+                          className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[11px]"
+                          style={{
+                            backgroundColor: isCurrent ? "var(--accent-soft)" : "var(--bg-elevated)",
+                            border: isCurrent
+                              ? "1px solid var(--accent)"
+                              : "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          <span className="min-w-0 flex-1 truncate font-mono-num" title={clipPath}>
+                            {clipPath.split(/[\\/]/).pop()}
+                          </span>
+                          {isCurrent ? (
+                            <span className="shrink-0 font-semibold" style={{ color: "var(--accent)" }}>
+                              Aktif
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => assignClipToActiveScene(clipPath)}
+                              className="ui-btn-secondary shrink-0 rounded px-2 py-0.5 text-[11px] font-medium cursor-pointer"
+                            >
+                              Pakai
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
                   Footage diproses langsung dari penyimpanan lokal tanpa upload ke cloud. FFmpeg
@@ -1263,7 +1823,7 @@ export default function StudioView({
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : !hasAnyFootage ? (
                   <div
                     className="rounded-lg p-4 text-center text-xs"
                     style={{
@@ -1274,7 +1834,7 @@ export default function StudioView({
                   >
                     Belum ada footage lokal dipilih. Preview saat ini menggunakan backdrop studio.
                   </div>
-                )}
+                ) : null}
               </div>
             )}
 
@@ -2158,13 +2718,13 @@ export default function StudioView({
                   ))}
                 </div>
 
-                {/* Activity Log */}
+                {/* Activity Log with JSON Patch Diff Summary & 1-Click Revert */}
                 {directorLog.length > 0 && (
                   <div className="space-y-2 pt-1">
                     {directorLog.map((msg) => (
                       <div
                         key={msg.id}
-                        className="rounded-lg px-3 py-2 text-xs leading-relaxed"
+                        className="rounded-lg px-3 py-2 text-xs leading-relaxed space-y-2"
                         style={{
                           backgroundColor:
                             msg.role === "user" ? "var(--accent-soft)" : "var(--bg-elevated)",
@@ -2172,7 +2732,46 @@ export default function StudioView({
                           color: "var(--text-primary)",
                         }}
                       >
-                        {msg.text}
+                        <div>{msg.text}</div>
+                        {msg.changes && msg.changes.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {msg.changes.map((chg, idx) => (
+                              <span
+                                key={idx}
+                                className="rounded px-1.5 py-0.5 text-[11px]"
+                                style={{
+                                  backgroundColor: "var(--bg-panel)",
+                                  border: "1px solid var(--border-subtle)",
+                                  color: "var(--text-secondary)",
+                                }}
+                              >
+                                {chg}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {msg.role === "assistant" && msg.snapshotBefore && (
+                          <div className="flex items-center justify-end">
+                            {msg.reverted ? (
+                              <span
+                                className="text-[11px]"
+                                style={{ color: "var(--text-muted)" }}
+                              >
+                                Sudah dibatalkan
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleRevertDirectorPatch(msg.id)}
+                                className="inline-flex items-center gap-1 text-[11px] font-medium hover:underline cursor-pointer"
+                                style={{ color: "var(--text-secondary)" }}
+                              >
+                                <Undo2 className="h-3 w-3" />
+                                Batalkan patch ini
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2181,23 +2780,47 @@ export default function StudioView({
 
               {/* Bottom Quick Chips + Prompt Composer */}
               <div
-                className="border-t p-3 space-y-2.5"
+                className="border-t p-3 space-y-2"
                 style={{ borderColor: "var(--border-subtle)" }}
               >
+                {activeScene && (
+                  <div
+                    className="flex items-center justify-between text-[11px]"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: roleColor(activeScene.role) }}
+                      />
+                      Fokus: Scene {activeSceneIndex + 1} · {activeScene.role.toUpperCase()}
+                    </span>
+                    <span className="font-mono-num">JSON Patch</span>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-1.5">
                   {[
                     {
                       label: "+ Notif Pop-up",
                       action: () => {
+                        const before = project;
                         setActiveSceneOverlay("notification_banner");
-                        pushDirectorMessage("assistant", "Notifikasi pop-up aktif di scene terpilih.");
+                        pushDirectorMessage("assistant", "Notifikasi pop-up aktif di scene terpilih.", {
+                          changes: [`Scene ${activeSceneIndex + 1} Overlay → Notif Banner`],
+                          snapshotBefore: before,
+                        });
                       },
                     },
                     {
-                      label: "+ Badge Promo",
+                      label: "+ Doodle",
                       action: () => {
-                        setActiveSceneOverlay("promo_badge");
-                        pushDirectorMessage("assistant", "Badge promo aktif di scene terpilih.");
+                        const before = project;
+                        setActiveSceneOverlay("doodle_highlight");
+                        pushDirectorMessage("assistant", "Doodle Marker aktif di scene terpilih.", {
+                          changes: [`Scene ${activeSceneIndex + 1} Overlay → Doodle Marker`],
+                          snapshotBefore: before,
+                        });
                       },
                     },
                     {

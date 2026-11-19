@@ -161,7 +161,7 @@ export default function ProjectsHomeView({
             Pilih sample untuk langsung membuat proyek baru lengkap dengan struktur Hook–Body–CTA, gaya caption, dan motion—tinggal ganti footage lokal & teksnya.
           </p>
 
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {filteredSamples.map((sample) => {
               const fmtInfo = CONTENT_FORMAT_LABELS[sample.format];
               const previewProj = samplePreviewProjects[sample.id];
@@ -826,13 +826,13 @@ export default function ProjectsHomeView({
               className="inline-flex items-center gap-1 text-xs font-semibold hover:underline cursor-pointer"
               style={{ color: "var(--text-secondary)" }}
             >
-              Semua Sample
+              Semua Sample ({BUILTIN_SAMPLES.length})
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
 
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {BUILTIN_SAMPLES.map((sample) => {
+            {BUILTIN_SAMPLES.slice(0, 4).map((sample) => {
               const previewProj = samplePreviewProjects[sample.id];
               return (
                 <button
