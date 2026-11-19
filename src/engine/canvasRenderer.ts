@@ -4,6 +4,7 @@ import { getProjectDurationMs } from "./sampleProject";
 export interface RenderFrameOptions {
   videoElement?: HTMLVideoElement | null;
   showSafeZone?: boolean;
+  isPosterThumbnail?: boolean;
 }
 
 function easeOutCubic(t: number): number {
@@ -42,15 +43,25 @@ function drawProceduralBackdrop(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
+  project: SynkcutProject,
   scene: SceneItem,
-  progress: number
+  progress: number,
+  isPosterThumbnail = false
 ) {
-  const palettes: Record<SceneItem["role"], [string, string, string]> = {
+  const formatPalettes: Record<SynkcutProject["meta"]["format"], [string, string, string]> = {
+    ad_promo: ["#12151e", "#1e1b29", project.globalStyle.accentColor || "#bef264"],
+    education: ["#0c1522", "#102338", project.globalStyle.accentColor || "#38bdf8"],
+    storytelling: ["#191412", "#261c17", project.globalStyle.accentColor || "#f59e0b"],
+    review: ["#0c1816", "#112822", project.globalStyle.accentColor || "#34d399"],
+  };
+  const roleFallback: Record<SceneItem["role"], [string, string, string]> = {
     hook: ["#13161f", "#1e1b2e", "#f59e0b"],
     body: ["#0d1520", "#112233", "#38bdf8"],
     cta: ["#0d1915", "#102820", "#34d399"],
   };
-  const [c1, c2, accent] = palettes[scene.role];
+  const [c1, c2, accent] = isPosterThumbnail
+    ? formatPalettes[project.meta.format]
+    : roleFallback[scene.role];
 
   const bgGrad = ctx.createLinearGradient(0, 0, width, height);
   bgGrad.addColorStop(0, c1);
@@ -81,32 +92,34 @@ function drawProceduralBackdrop(
   const orbX = width * (0.3 + 0.4 * Math.sin(progress * Math.PI));
   const orbY = height * (0.38 + 0.08 * Math.cos(progress * Math.PI));
   const rad = ctx.createRadialGradient(orbX, orbY, 40, orbX, orbY, width * 0.72);
-  rad.addColorStop(0, `${accent}2b`);
+  rad.addColorStop(0, `${accent}30`);
   rad.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = rad;
   ctx.fillRect(0, 0, width, height);
 
-  // Center placeholder studio card so user immediately sees footage motion
-  const cardW = width * 0.78;
-  const cardH = height * 0.34;
-  const cardX = (width - cardW) / 2;
-  const cardY = height * 0.27;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-  ctx.lineWidth = 2;
-  roundRectPath(ctx, cardX, cardY, cardW, cardH, 32);
-  ctx.fill();
-  ctx.stroke();
+  // Clean framing guide for studio preview only (omitted on crisp miniature posters)
+  if (!isPosterThumbnail) {
+    const cardW = width * 0.78;
+    const cardH = height * 0.34;
+    const cardX = (width - cardW) / 2;
+    const cardY = height * 0.27;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+    ctx.lineWidth = 2;
+    roundRectPath(ctx, cardX, cardY, cardW, cardH, 32);
+    ctx.fill();
+    ctx.stroke();
 
-  ctx.fillStyle = accent;
-  ctx.font = '700 26px "JetBrains Mono", monospace';
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`SCENE: ${scene.role.toUpperCase()}`, width / 2, cardY + cardH * 0.42);
+    ctx.fillStyle = accent;
+    ctx.font = '700 26px "JetBrains Mono", monospace';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`SCENE: ${scene.role.toUpperCase()}`, width / 2, cardY + cardH * 0.42);
 
-  ctx.fillStyle = "rgba(241, 243, 247, 0.78)";
-  ctx.font = '500 32px "IBM Plex Sans", sans-serif';
-  ctx.fillText("Mode Backdrop Demo (Pilih Footage MP4 Lokal)", width / 2, cardY + cardH * 0.56);
+    ctx.fillStyle = "rgba(241, 243, 247, 0.78)";
+    ctx.font = '500 32px "IBM Plex Sans", sans-serif';
+    ctx.fillText("Mode Backdrop Demo (Pilih Footage MP4 Lokal)", width / 2, cardY + cardH * 0.56);
+  }
   ctx.restore();
 }
 
@@ -114,9 +127,11 @@ function drawFootageWithMotion(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
+  project: SynkcutProject,
   scene: SceneItem,
   progress: number,
-  videoEl?: HTMLVideoElement | null
+  videoEl?: HTMLVideoElement | null,
+  isPosterThumbnail = false
 ) {
   const intensity = scene.motion.intensity;
   let scale = 1;
@@ -188,7 +203,7 @@ function drawFootageWithMotion(
     ctx.fillStyle = scrim;
     ctx.fillRect(0, 0, width, height);
   } else {
-    drawProceduralBackdrop(ctx, width, height, scene, progress);
+    drawProceduralBackdrop(ctx, width, height, project, scene, progress, isPosterThumbnail);
   }
 
   ctx.restore();
@@ -305,11 +320,21 @@ function drawKineticCaptions(
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.textBaseline = "middle";
 
-  const spaceW = ctx.measureText(" ").width;
+  const baseSpaceW = ctx.measureText(" ").width;
+  const spaceW =
+    preset === "bold_pop" || preset === "kinetic_punch" ? baseSpaceW * 1.65 : baseSpaceW * 1.15;
   const items = activeChunk.map((w) => {
     const label = preset === "bold_pop" || preset === "kinetic_punch" ? w.word.toUpperCase() : w.word;
     const isActive = timeMs >= w.startMs && timeMs <= w.endMs;
-    return { word: w, label, width: ctx.measureText(label).width, isActive };
+    const scaleFactor =
+      isActive && (preset === "bold_pop" || preset === "kinetic_punch") ? 1.12 : 1;
+    return {
+      word: w,
+      label,
+      width: ctx.measureText(label).width * scaleFactor,
+      isActive,
+      scaleFactor,
+    };
   });
 
   const totalW = items.reduce((acc, it) => acc + it.width, 0) + spaceW * Math.max(0, items.length - 1);
@@ -401,7 +426,16 @@ export function renderProjectFrame(
   const sceneProgress = Math.max(0, Math.min(1, (timeMs - scene.startMs) / sceneDuration));
 
   // 1. Footage / studio backdrop with motion preset
-  drawFootageWithMotion(ctx, width, height, scene, sceneProgress, options.videoElement);
+  drawFootageWithMotion(
+    ctx,
+    width,
+    height,
+    project,
+    scene,
+    sceneProgress,
+    options.videoElement,
+    Boolean(options.isPosterThumbnail)
+  );
 
   // 2. Scene overlays
   for (const overlay of scene.overlays) {

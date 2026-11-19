@@ -104,6 +104,11 @@ export interface ProjectSummary {
   name: string;
   format: ContentFormat;
   captionPreset: CaptionPreset;
+  accentColor: string;
+  hookText: string;
+  firstOverlayType: string | null;
+  firstOverlayTitle: string | null;
+  firstOverlayText: string | null;
   sceneCount: number;
   durationMs: number;
   hasFootage: boolean;

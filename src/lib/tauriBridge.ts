@@ -267,11 +267,18 @@ function readBrowserProjects(): Record<string, SynkcutProject> {
 
 function summarizeProject(p: SynkcutProject): ProjectSummary {
   const now = new Date().toISOString();
+  const firstScene = p.scenes[0];
+  const firstOverlay = firstScene?.overlays?.[0];
   return {
     id: p.meta.id,
     name: p.meta.name,
     format: p.meta.format,
     captionPreset: p.globalStyle.captionPreset,
+    accentColor: p.globalStyle.accentColor,
+    hookText: firstScene?.text || "",
+    firstOverlayType: firstOverlay?.type || null,
+    firstOverlayTitle: firstOverlay?.title || null,
+    firstOverlayText: firstOverlay?.text || null,
     sceneCount: p.scenes.length,
     durationMs: Math.max(0, ...p.scenes.map((s) => s.endMs)),
     hasFootage: p.scenes.some((s) => Boolean(s.media.path)),

@@ -115,8 +115,11 @@ Seluruh antarmuka Synkcut wajib dirancang mengikuti prinsip **Impeccable (`https
 - **Tipografi:** Sans-serif modern berkarakter presisi (`IBM Plex Sans`) + monospace (`JetBrains Mono`) dengan *tabular numerals* khusus untuk durasi & timecode (`00:03.2`).
 
 ### Peta 5 Layar Utama v1
-1. **Onboarding BYOK:** Pilih provider (Gemini / OpenAI / OpenRouter) -> panduan mini 3 langkah -> input API key -> **"Tes Koneksi"**.
-2. **Beranda (`My Projects` & Sample):** Tombol **"+ Buat Konten Baru"**, 4 shortcut Format Konten, grid **`My Projects`** (*Buka, Duplikat, Hapus*), dan 3–5 **"Sample Bawaan"** (*Pakai Sample Ini*).
+1. **Onboarding BYOK:** Pilih provider (Gemini / OpenAI / OpenRouter) -> panduan bernomor 3 langkah -> input API key -> **"Tes Koneksi"** (juga dapat diakses ulang melalui menu `Pengaturan AI` pada sidebar).
+2. **Beranda Desktop (`My Projects` & `Sample Bawaan`):**
+   - **Sidebar Kiri Native (`228px`):** Identitas Synkcut, tombol **`+ Buat Konten Baru`** (membuka pemilih 4 Format Konten), navigasi `My Projects`, `Sample Bawaan`, `Komunitas (Phase 2)`, `Pengaturan AI`, serta footer status BYOK & switcher Dark/Light Studio.
+   - **Workspace `My Projects`:** Toolbar pencarian, filter format, dan toggle **Grid Poster 9:16 (default) ↔ List Rapi**. Setiap proyek menampilkan **thumbnail visual 9:16 nyata** hasil render Canvas engine (gaya caption, aksen warna, overlay), durasi, serta aksi cepat (*Buka, Duplikat, Ganti Nama inline, Hapus konfirmasi inline*).
+   - **Workspace `Sample Bawaan`:** Galeri 4 sample template dengan preview poster 9:16 nyata siap klik **"Pakai Sample Ini"**.
 3. **Wizard Racik Konten (3 Langkah):**
    - *Langkah 1:* Ide/Produk -> Generate 3 Opsi Hook + Script -> Edit cepat.
    - *Langkah 2:* Drop Footage Lokal *(+ tombol `AI Footage: Flow / Seedance` berlabel `Coming Soon`)* -> Pilih TTS atau Rekam/Upload Suara Sendiri *(+ Auto Trim Silence)*.

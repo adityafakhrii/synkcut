@@ -11,6 +11,11 @@ pub struct ProjectSummary {
     pub name: String,
     pub format: String,
     pub caption_preset: String,
+    pub accent_color: String,
+    pub hook_text: String,
+    pub first_overlay_type: Option<String>,
+    pub first_overlay_title: Option<String>,
+    pub first_overlay_text: Option<String>,
     pub scene_count: usize,
     pub duration_ms: u64,
     pub has_footage: bool,
@@ -63,6 +68,10 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         .as_str()
         .unwrap_or("bold_pop")
         .to_string();
+    let accent_color = val["globalStyle"]["accentColor"]
+        .as_str()
+        .unwrap_or("#BEF264")
+        .to_string();
 
     let scenes = val["scenes"].as_array();
     let scene_count = scenes.map(|s| s.len()).unwrap_or(0);
@@ -81,6 +90,25 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         })
         .unwrap_or(false);
 
+    let first_scene = scenes.and_then(|arr| arr.first());
+    let hook_text = first_scene
+        .and_then(|s| s["text"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let first_overlay = first_scene
+        .and_then(|s| s["overlays"].as_array())
+        .and_then(|ov| ov.first());
+    let first_overlay_type = first_overlay
+        .and_then(|o| o["type"].as_str())
+        .map(ToString::to_string);
+    let first_overlay_title = first_overlay
+        .and_then(|o| o["title"].as_str())
+        .map(ToString::to_string);
+    let first_overlay_text = first_overlay
+        .and_then(|o| o["text"].as_str())
+        .map(ToString::to_string);
+
     let now = Utc::now().to_rfc3339();
     let created_at = val["meta"]["createdAt"]
         .as_str()
@@ -96,6 +124,11 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         name,
         format,
         caption_preset,
+        accent_color,
+        hook_text,
+        first_overlay_type,
+        first_overlay_title,
+        first_overlay_text,
         scene_count,
         duration_ms,
         has_footage,
@@ -245,10 +278,15 @@ mod tests {
                 "createdAt": "2026-11-20T00:00:00Z",
                 "updatedAt": "2026-11-20T01:00:00Z"
             },
-            "globalStyle": { "captionPreset": "bold_pop" },
+            "globalStyle": { "captionPreset": "bold_pop", "accentColor": "#BEF264" },
             "scenes": [
-                { "endMs": 3000, "media": { "path": null } },
-                { "endMs": 8500, "media": { "path": "clip.mp4" } }
+                {
+                    "endMs": 3000,
+                    "text": "Kopi enak tiap pagi",
+                    "media": { "path": null },
+                    "overlays": [{ "type": "promo_badge", "text": "DISKON 50%" }]
+                },
+                { "endMs": 8500, "text": "Coba sekarang", "media": { "path": "clip.mp4" } }
             ]
         });
 
@@ -257,5 +295,7 @@ mod tests {
         assert_eq!(summary.scene_count, 2);
         assert_eq!(summary.duration_ms, 8500);
         assert!(summary.has_footage);
+        assert_eq!(summary.hook_text, "Kopi enak tiap pagi");
+        assert_eq!(summary.first_overlay_text.as_deref(), Some("DISKON 50%"));
     }
 }
