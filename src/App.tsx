@@ -56,9 +56,9 @@ function SynkcutMark() {
       aria-hidden="true"
     >
       <rect width="28" height="28" rx="6" fill="var(--accent)" />
-      <rect x="6" y="7" width="4" height="14" rx="1.2" fill="var(--accent-fg)" />
-      <rect x="12" y="5" width="4" height="18" rx="1.2" fill="var(--accent-fg)" fillOpacity="0.65" />
-      <rect x="18" y="9" width="4" height="10" rx="1.2" fill="var(--accent-fg)" />
+      <rect x="6" y="7" width="4" height="14" rx="1.2" fill="#ffffff" />
+      <rect x="12" y="5" width="4" height="18" rx="1.2" fill="#ffffff" fillOpacity="0.65" />
+      <rect x="18" y="9" width="4" height="10" rx="1.2" fill="#ffffff" />
     </svg>
   );
 }

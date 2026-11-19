@@ -476,8 +476,8 @@ export default function ProjectsHomeView({
                         <div
                           className="flex h-10 w-10 items-center justify-center rounded-full opacity-0 transition-opacity duration-150 group-hover:opacity-100"
                           style={{
-                            backgroundColor: "var(--accent)",
-                            color: "var(--accent-fg)",
+                            backgroundColor: "var(--cta-bg)",
+                            color: "var(--cta-fg)",
                           }}
                         >
                           <Play className="h-4 w-4 fill-current" />
@@ -590,8 +590,8 @@ export default function ProjectsHomeView({
                           <button
                             type="button"
                             onClick={() => onOpenProject(item.id)}
-                            className="text-[11px] font-semibold cursor-pointer"
-                            style={{ color: "var(--accent)" }}
+                            className="text-[11px] font-semibold hover:underline cursor-pointer"
+                            style={{ color: "var(--text-primary)" }}
                           >
                             Buka Studio
                           </button>
@@ -823,8 +823,8 @@ export default function ProjectsHomeView({
             <button
               type="button"
               onClick={onNavigateSamples}
-              className="inline-flex items-center gap-1 text-xs font-semibold cursor-pointer"
-              style={{ color: "var(--accent)" }}
+              className="inline-flex items-center gap-1 text-xs font-semibold hover:underline cursor-pointer"
+              style={{ color: "var(--text-secondary)" }}
             >
               Semua Sample
               <ArrowRight className="h-3.5 w-3.5" />

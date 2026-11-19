@@ -108,13 +108,12 @@ Seluruh antarmuka Synkcut wajib dirancang mengikuti prinsip **Impeccable (`https
 - Fokus pada *scanability*, konsistensi, presisi detail native desktop, dan **nol AI slop** (tanpa gradasi ungu generik, tanpa glow murahan, tanpa emoji berantakan di label UI, tanpa kesan "dummy/template").
 - Saat fase pembangunan UI dimulai, wajib menyusun `PRODUCT.md` dan `DESIGN.md` terlebih dahulu serta melakukan verifikasi visual nyata di ukuran layar desktop (`impeccable critique / audit / polish / harden`).
 
-### Sistem Tema & Visual ("Obsidian Pine & Emerald-Mint")
+### Sistem Tema & Visual ("Machined Carbon & Signature Emerald")
 - **Dual Theme:**
-  - **Dark Studio *(Default — Obsidian Pine)*:** Permukaan gelap bernuansa *deep pine* (`#0a120f` / `#0f1a16` / `#15241e`) dengan tinta putih-sage (`#eef7f3`) dan aksen utama **Emerald-Mint (`#38e59d`)**. Tenang di mata, khas, dan tidak mengganggu akurasi warna footage 9:16.
-  - **Light Studio *(Sage Mist)*:** Pasangan tema terang selaras (`#f3f7f5` / `#ffffff`) dengan aksen **Deep Emerald (`#0e9466`)** berkontras ≥4.5:1.
-  - **Penggunaan Atmosfer:** Sapuan *emerald mist* halus hanya digunakan secara terkendali pada Onboarding, Empty State, atau area AI Copilot Prompt—bukan kabut/glow di belakang kanvas video atau panel editor.
+  - **Dark Studio *(Default — Machined Carbon)*:** Permukaan karbon netral presisi (`#09090b` / `#111114` / `#18181c`) dengan border hairline netral, tombol aksi utama **putih bersih (`#f4f4f6`)**, dan **Signature Emerald (`#10b981`)** yang dijatah hemat khusus untuk logo, indikator status aktif, dan atmosfer halus di Onboarding—nol tint hijau rawa & nol tombol neon berlebihan.
+  - **Light Studio *(Sage Mist)*:** Pasangan tema terang bersih (`#f3f7f5` / `#ffffff`) dengan aksen **Deep Emerald (`#0e9466`)** berkontras ≥4.5:1.
 - **Bahasa UI:** Full Bahasa Indonesia natural + istilah editing standar tetap Bahasa Inggris (`Footage`, `Hook`, `CTA`, `Scene`, `Motion`, `Transition`, `SFX`, `Backsound`, `Voiceover`, `Safe Zone`, `Preset`, `Export`, `Render`).
-- **Kode Warna Peran Scene (Fungsional):** `Hook` (Amber `#f59e0b`) · `Body` (Sky Cyan `#38bdf8`) · `CTA / Payoff` (Emerald-Mint `#38e59d`).
+- **Kode Warna Peran Scene (Minimalis 6px dot):** `Hook` (Amber `#f59e0b`) · `Body` (Sky `#38bdf8`) · `CTA / Payoff` (Emerald `#10b981`) — tanpa kotak border warna-warni menyala.
 - **Tipografi:** Sans-serif modern berkarakter presisi (`IBM Plex Sans`) + monospace (`JetBrains Mono`) dengan *tabular numerals* khusus untuk durasi & timecode (`00:03.2`).
 
 ### Peta 5 Layar Utama v1

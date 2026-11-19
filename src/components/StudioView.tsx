@@ -608,12 +608,6 @@ export default function StudioView({
     return "var(--role-cta)";
   };
 
-  const roleBgTint = (role: "hook" | "body" | "cta") => {
-    if (role === "hook") return "rgba(245, 158, 11, 0.14)";
-    if (role === "body") return "rgba(56, 189, 248, 0.14)";
-    return "var(--accent-soft)";
-  };
-
   const playheadPercent = Math.max(0, Math.min(100, (currentTimeMs / totalDurationMs) * 100));
   const activeByokOk = byokStatus.providers[byokStatus.activeProvider]?.configured;
   const providerLabel =
@@ -774,11 +768,7 @@ export default function StudioView({
       <main className="flex min-h-0 flex-1 gap-2.5 overflow-hidden p-2.5">
         {/* 1. Far-Left Slim Icon Rail (60px) */}
         <nav
-          className="flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-xl py-2.5"
-          style={{
-            backgroundColor: "var(--bg-panel)",
-            border: "1px solid var(--border-subtle)",
-          }}
+          className="ui-panel flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-xl py-2.5"
           aria-label="Alat Studio"
         >
           {RAIL_ITEMS.map((item) => {
@@ -789,13 +779,17 @@ export default function StudioView({
                 key={item.id}
                 type="button"
                 onClick={() => setLeftTab(item.id)}
-                className="flex w-[48px] flex-col items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-medium transition-colors cursor-pointer"
+                className="relative flex w-[48px] flex-col items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-medium transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: active ? "var(--accent-soft)" : "transparent",
-                  color: active ? "var(--accent)" : "var(--text-secondary)",
+                  backgroundColor: active ? "var(--bg-elevated)" : "transparent",
+                  color: active ? "var(--text-primary)" : "var(--text-muted)",
+                  border: active ? "1px solid var(--border-subtle)" : "1px solid transparent",
                 }}
               >
-                <Icon className="h-4 w-4" />
+                <Icon
+                  className="h-4 w-4"
+                  style={{ color: active ? "var(--accent)" : "currentColor" }}
+                />
                 <span>{item.label}</span>
               </button>
             );
@@ -803,13 +797,7 @@ export default function StudioView({
         </nav>
 
         {/* 2. Left Contextual Inspector (276px) */}
-        <aside
-          className="flex w-[276px] shrink-0 flex-col overflow-hidden rounded-xl"
-          style={{
-            backgroundColor: "var(--bg-panel)",
-            border: "1px solid var(--border-subtle)",
-          }}
-        >
+        <aside className="ui-panel flex w-[276px] shrink-0 flex-col overflow-hidden rounded-xl">
           <div
             className="flex h-11 shrink-0 items-center justify-between border-b px-3.5"
             style={{ borderColor: "var(--border-subtle)" }}
@@ -842,9 +830,9 @@ export default function StudioView({
                     }}
                     className="rounded-lg p-3 transition-colors cursor-pointer"
                     style={{
-                      backgroundColor: "var(--bg-elevated)",
+                      backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-elevated)",
                       border: isSelected
-                        ? `1px solid ${roleColor(scene.role)}`
+                        ? "1px solid var(--border-strong)"
                         : "1px solid var(--border-subtle)",
                     }}
                   >
@@ -1227,13 +1215,7 @@ export default function StudioView({
         {/* 3. Center Column: 9:16 Stage + Simplified 2-Row Visual Scene Strip */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5">
           {/* 9:16 Preview Stage Card */}
-          <div
-            className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl"
-            style={{
-              backgroundColor: "var(--bg-panel)",
-              border: "1px solid var(--border-subtle)",
-            }}
-          >
+          <div className="ui-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl">
             {/* Stage Micro Header */}
             <div
               className="flex h-10 shrink-0 items-center justify-between border-b px-3.5 text-xs"
@@ -1243,12 +1225,17 @@ export default function StudioView({
                 <span className="font-mono-num text-[11px] font-semibold">9:16 · 1080×1920</span>
                 {activeScene && (
                   <span
-                    className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase"
+                    className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[10px] font-semibold uppercase"
                     style={{
-                      backgroundColor: roleBgTint(activeScene.role),
-                      color: roleColor(activeScene.role),
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "var(--text-secondary)",
                     }}
                   >
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: roleColor(activeScene.role) }}
+                    />
                     {activeScene.role}
                   </span>
                 )}
@@ -1340,14 +1327,8 @@ export default function StudioView({
             </div>
           </div>
 
-          {/* Simplified 2-Row Visual Scene Strip (Reelio ergonomics without 5-track NLE complexity) */}
-          <div
-            className="flex h-[138px] shrink-0 flex-col overflow-hidden rounded-xl"
-            style={{
-              backgroundColor: "var(--bg-panel)",
-              border: "1px solid var(--border-subtle)",
-            }}
-          >
+          {/* Simplified 2-Row Visual Scene Strip */}
+          <div className="ui-panel flex h-[138px] shrink-0 flex-col overflow-hidden rounded-xl">
             {/* Time Ruler */}
             <div
               className="flex h-6 shrink-0 items-center justify-between border-b px-3 font-mono-num text-[10px]"
@@ -1388,7 +1369,7 @@ export default function StudioView({
                   className="relative flex min-w-0 flex-1 flex-col justify-center gap-2 select-none cursor-ew-resize"
                 >
                   {/* Row 1: Scene Blocks */}
-                  <div className="relative flex h-10 w-full gap-1">
+                  <div className="relative flex h-10 w-full gap-1.5">
                     {project.scenes.map((scene, idx) => {
                       const widthPct = ((scene.endMs - scene.startMs) / totalDurationMs) * 100;
                       const isSelected = activeScene?.id === scene.id;
@@ -1397,24 +1378,25 @@ export default function StudioView({
                           key={scene.id}
                           style={{
                             width: `${widthPct}%`,
-                            backgroundColor: roleBgTint(scene.role),
+                            backgroundColor: isSelected ? "var(--bg-hover)" : "var(--bg-elevated)",
                             border: isSelected
-                              ? `1px solid ${roleColor(scene.role)}`
+                              ? "1px solid var(--border-strong)"
                               : "1px solid var(--border-subtle)",
                           }}
-                          className="flex h-full min-w-0 flex-col justify-center overflow-hidden rounded-md px-2"
+                          className="flex h-full min-w-0 flex-col justify-center overflow-hidden rounded-md px-2.5"
                         >
-                          <div
-                            className="flex items-center gap-1 text-[10px] font-bold uppercase"
-                            style={{ color: roleColor(scene.role) }}
-                          >
-                            <span>
+                          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: roleColor(scene.role) }}
+                            />
+                            <span style={{ color: "var(--text-primary)" }}>
                               {idx + 1}. {scene.role}
                             </span>
                           </div>
                           <div
                             className="truncate text-[10px]"
-                            style={{ color: "var(--text-secondary)" }}
+                            style={{ color: "var(--text-muted)" }}
                           >
                             {scene.text}
                           </div>
@@ -1431,19 +1413,22 @@ export default function StudioView({
                       border: "1px solid var(--border-subtle)",
                     }}
                   >
-                    <span className="shrink-0 text-[10px] font-semibold">
+                    <span
+                      className="shrink-0 text-[10px] font-medium"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
                       {audioPath
                         ? audioPath.split(/[\\/]/).pop()
                         : "Voiceover · Auto-Sync"}
                     </span>
-                    <div className="flex h-full min-w-0 flex-1 items-center justify-between gap-[2px] opacity-55">
+                    <div className="flex h-full min-w-0 flex-1 items-center justify-between gap-[2px]">
                       {WAVEFORM_BARS.slice(0, 44).map((h, i) => (
                         <span
                           key={i}
                           className="w-[2px] rounded-full"
                           style={{
-                            height: `${Math.max(18, h * 0.58)}%`,
-                            backgroundColor: "var(--accent)",
+                            height: `${Math.max(18, h * 0.54)}%`,
+                            backgroundColor: "var(--waveform)",
                           }}
                         />
                       ))}
@@ -1458,14 +1443,14 @@ export default function StudioView({
 
                   {/* Vertical Playhead aligned pixel-perfect to track bounds */}
                   <div
-                    className="pointer-events-none absolute top-0 bottom-0 z-20 w-[2px]"
+                    className="pointer-events-none absolute top-0 bottom-0 z-20 w-[1.5px]"
                     style={{
                       left: `${playheadPercent}%`,
-                      backgroundColor: "var(--accent)",
+                      backgroundColor: "var(--playhead)",
                     }}
                   >
                     <div
-                      className="h-2.5 w-2.5 -translate-x-[4px] rounded-b-sm"
+                      className="h-2 w-2 -translate-x-[3.25px] rounded-full"
                       style={{ backgroundColor: "var(--accent)" }}
                     />
                   </div>
@@ -1476,13 +1461,7 @@ export default function StudioView({
         </section>
 
         {/* 4. Right Panel: AI Video Director + AI Footage (Coming Soon) */}
-        <aside
-          className="flex w-[310px] shrink-0 flex-col overflow-hidden rounded-xl"
-          style={{
-            backgroundColor: "var(--bg-panel)",
-            border: "1px solid var(--border-subtle)",
-          }}
-        >
+        <aside className="ui-panel flex w-[310px] shrink-0 flex-col overflow-hidden rounded-xl">
           {/* Top Segmented Tabs (Inspired by CutCut) */}
           <div
             className="grid h-11 shrink-0 grid-cols-2 border-b p-1.5"
@@ -1587,7 +1566,7 @@ export default function StudioView({
                         <button
                           type="button"
                           onClick={() => applyDirectorPreset(item.key)}
-                          className="ui-btn-primary rounded px-2.5 py-1 text-[11px] font-semibold cursor-pointer"
+                          className="ui-btn-secondary rounded-md px-2.5 py-1 text-[11px] font-semibold cursor-pointer"
                         >
                           Apply
                         </button>
@@ -1619,7 +1598,7 @@ export default function StudioView({
 
               {/* Bottom Quick Chips + Prompt Composer */}
               <div
-                className="ui-ambient-surface border-t p-3 space-y-2.5"
+                className="border-t p-3 space-y-2.5"
                 style={{ borderColor: "var(--border-subtle)" }}
               >
                 <div className="flex flex-wrap gap-1.5">

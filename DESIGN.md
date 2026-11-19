@@ -2,60 +2,49 @@
 
 ## Visual World & Surface Mode
 - **Mode:** `Operate` (Precision Native Desktop Video Studio)
-- **Color Direction ("Obsidian Pine & Emerald-Mint"):** Inspired by deep atmospheric emerald-black studio aesthetics—replacing cold generic blue-gray/purple AI palettes with rich pine-tinted obsidian surfaces and a crisp emerald-mint primary accent.
-- **Layout Architecture:** True desktop application shell — **not** a centered marketing/SaaS web page.
-  - **Beranda (`My Projects` & `Sample Bawaan`):** Persistent Left Workspace Sidebar (`228px`) + sticky `56px` contextual toolbar + visual **9:16 Poster Grid** (default) or collision-free precision list.
-  - **Studio Editor (Modular Rounded Bento-Studio — Inspired by CutCut & Reelio):**
-    - Floating rounded panels (`12px` radius) separated by crisp `10px` studio gaps on `--bg-app`.
-    - **Slim Far-Left Icon Rail (`60px`):** `Scenes`, `Footage`, `Caption`, `Motion`, `Audio` — keeps the adjacent **Left Contextual Inspector (`276px`)** clean and uncluttered.
-    - **Center Stage + Simplified 2-Row Visual Scene Strip:** 9:16 Canvas preview over subtle dot-grid matte surface, paired directly below with a **2-Row Visual Scene Strip** (Row 1: proportional `Hook / Body / CTA` blocks + scrubbable playhead; Row 2: `Voiceover Auto-Sync` waveform bar) — retaining pro editor ergonomics without 5-track NLE complexity.
-    - **Right Panel (`310px`) — `AI Video Director`:** Segmented tabs **`AI Director`** *(1-click `Apply` suggestion cards, Quick Action Chips, prompt composer)* & **`AI Footage`** *(Google Flow / Seedance — `Coming Soon`)*, while final rendering lives cleanly in the top-right **`Export MP4`** modal.
-  - **Visual-First Identity:** Every saved project and sample renders a **real 9:16 miniature Canvas poster** via `renderProjectFrame()` so typography style, overlays, and color accents are immediately visible.
-- **Dual Theme Parity:**
-  - **Dark Studio (Default — Obsidian Pine):** Deep forest-black surfaces (`#060b09` canvas well, `#0a120f` app shell, `#0f1a16` panels, `#15241e` controls) paired with crisp sage-white ink (`#eef7f3`) and signature **Emerald-Mint (`#38e59d`)** accent. Calm behind 9:16 video footage while unmistakably distinctive.
-  - **Light Studio (First-Class Alternative — Sage Mist):** Harmonized daylight counterpart (`#f3f7f5` backdrop, `#ffffff` panels, `#e8f0ec` controls) paired with deep pine ink (`#0b1712`) and calibrated **Deep Emerald (`#0e9466`)** accent for ≥4.5:1 contrast.
+- **Color Direction ("Machined Carbon & Signature Emerald"):**
+  - **Dark Studio (Default — Machined Carbon):** Achromatic, studio-grade neutral obsidian and carbon surfaces (`#09090b`, `#111114`, `#18181c`) with razor-thin `rgba(255,255,255,0.075)` borders and a subtle `inset 0 1px 0` top catchlight—zero muddy green tint, zero neon rainbow outlines. Primary CTAs use **crisp pure white (`#f4f4f6`) with obsidian ink (`#09090b`)** (ala Linear / Final Cut / Raycast), while **Signature Emerald (`#10b981`)** is rationed exclusively to brand mark, active indicators, valid status dots, and subtle Onboarding atmosphere.
+  - **Light Studio (First-Class Alternative — Sage Mist):** Crisp neutral daylight surfaces (`#f3f7f5` backdrop, `#ffffff` panels, `#e8f0ec` controls) paired with deep pine ink (`#0b1712`) and dignified **Deep Emerald (`#0e9466`)** primary CTA (≥4.5:1 contrast).
+
+## Layout Architecture
+- **Beranda (`My Projects` & `Sample Bawaan`):** Persistent Left Workspace Sidebar (`228px`) + sticky `56px` contextual toolbar + visual **9:16 Poster Grid** (default) or collision-free precision list.
+- **Studio Editor (Modular Rounded Bento-Studio):**
+  - Floating rounded panels (`12px` radius) separated by `10px` gaps on `--bg-app`.
+  - **Slim Far-Left Icon Rail (`60px`):** `Scenes`, `Footage`, `Caption`, `Motion`, `Audio` controlling the adjacent `276px` Left Contextual Inspector.
+  - **Center Stage + Simplified 2-Row Visual Scene Strip:** 9:16 Canvas over subtle matte dot-grid, paired with a monochrome 2-row Scene Strip (Row 1: neutral carbon `Hook / Body / CTA` blocks with subtle 6px role dots + crisp white playhead; Row 2: muted `Voiceover Auto-Sync` waveform).
+  - **Right Panel (`310px`) — `AI Video Director`:** Segmented tabs **`AI Director`** *(neutral machined `Apply` cards, Quick Chips, prompt composer)* & **`AI Footage`** *(Google Flow / Seedance — `Coming Soon`)*. Final export opens via top-right **`Export MP4`** modal.
 
 ## Color System (Semantic Tokens)
-Accent is reserved strictly for primary actions, active selections, AI prompt toggles, and state indicators — never loud background decoration. All neutrals carry a subtle emerald-pine undertone so surfaces harmonize effortlessly.
 
-| Token | Dark Studio *(Obsidian Pine)* | Light Studio *(Sage Mist)* | Role |
+| Token | Dark Studio *(Machined Carbon)* | Light Studio *(Sage Mist)* | Role |
 | :--- | :--- | :--- | :--- |
-| `--bg-app` | `#0a120f` | `#f3f7f5` | Application window backdrop |
-| `--bg-panel` | `#0f1a16` | `#ffffff` | Sidebar, top toolbars, structural panels |
-| `--bg-elevated` | `#15241e` | `#e8f0ec` | Controls, hoverable rows, inputs, subtle pills |
-| `--bg-hover` | `#1c3028` | `#dce8e2` | Hover state on rows and secondary buttons |
-| `--bg-canvas-well` | `#060b09` | `#e4ece8` | Recessed viewport well behind 9:16 canvas |
-| `--border-subtle` | `#1e332b` | `#d1dfd8` | Structural hairlines (applied explicitly, never raw Tailwind `divide-*` defaults) |
-| `--border-strong` | `#2c4a3e` | `#b6cbc1` | Focused or emphasized borders |
-| `--text-primary` | `#eef7f3` | `#0b1712` | Primary UI copy & headings |
-| `--text-secondary` | `#9ab5aa` | `#435c52` | Supporting metadata & labels (tinted sage, never dead gray) |
-| `--text-muted` | `#6b877c` | `#5d786d` | Tertiary hints |
-| `--accent` | `#38e59d` | `#0e9466` | Primary CTA, active selection, brand mark |
-| `--accent-hover` | `#2cd18d` | `#0b7d55` | Primary CTA hover |
-| `--accent-fg` | `#06140e` | `#ffffff` | Foreground on accent fill |
-| `--accent-soft` | `rgba(56, 229, 157, 0.12)` | `rgba(14, 148, 102, 0.10)` | Subtle active tint |
-| `--ambient-wash` | `rgba(34, 154, 114, 0.16)` | `rgba(14, 148, 102, 0.08)` | Restrained atmospheric gradient on Onboarding / Empty State / AI Prompt container only |
-| `--role-hook` | `#f59e0b` | `#d97706` | Scene role indicator: Hook |
-| `--role-body` | `#38bdf8` | `#0284c7` | Scene role indicator: Body |
-| `--role-cta` | `#38e59d` | `#0e9466` | Scene role indicator: CTA / Payoff |
-| `--success` | `#38e59d` | `#059669` | Valid connections, saved states |
-| `--danger` | `#f87171` | `#dc2626` | Destructive actions & error states |
+| `--bg-app` | `#09090b` | `#f3f7f5` | Application backdrop & studio gaps |
+| `--bg-panel` | `#111114` | `#ffffff` | Floating studio panels, sidebar, toolbars |
+| `--bg-elevated` | `#18181c` | `#e8f0ec` | Cards, inputs, secondary buttons, scene blocks |
+| `--bg-hover` | `#222228` | `#dce8e2` | Hover state on interactive surfaces |
+| `--bg-canvas-well` | `#050507` | `#e4ece8` | Recessed viewport well behind 9:16 video |
+| `--border-subtle` | `rgba(255, 255, 255, 0.075)` | `#d1dfd8` | Structural hairlines |
+| `--border-strong` | `rgba(255, 255, 255, 0.16)` | `#b6cbc1` | Selected or focused borders |
+| `--text-primary` | `#f4f4f6` | `#0b1712` | Primary copy & headings |
+| `--text-secondary` | `#a1a1aa` | `#435c52` | Supporting labels & metadata |
+| `--text-muted` | `#71717a` | `#5d786d` | Tertiary hints |
+| `--cta-bg` | `#f4f4f6` | `#0e9466` | Primary CTA (`Export MP4`, `+ Buat Konten Baru`, `Play`) |
+| `--cta-hover` | `#e4e4e7` | `#0b7d55` | Primary CTA hover |
+| `--cta-fg` | `#09090b` | `#ffffff` | Foreground on primary CTA |
+| `--accent` | `#10b981` | `#0e9466` | Signature Emerald brand mark, active dot, status indicator |
+| `--accent-soft` | `rgba(16, 185, 129, 0.12)` | `rgba(14, 148, 102, 0.10)` | Restrained active tint |
+| `--ambient-wash` | `rgba(16, 185, 129, 0.11)` | `rgba(14, 148, 102, 0.07)` | Subtle top wash on Onboarding only |
+| `--role-hook` | `#f59e0b` | `#d97706` | Subtle 6px dot for Hook |
+| `--role-body` | `#38bdf8` | `#0284c7` | Subtle 6px dot for Body |
+| `--role-cta` | `#10b981` | `#0e9466` | Subtle 6px dot for CTA |
+| `--danger` | `#f87171` | `#dc2626` | Destructive actions & errors |
 
-### Atmospheric Restraint Rule (Desktop `Operate` Adaptation)
-- The reference's soft emerald mist (`--ambient-wash`) is permitted **only** as a restrained top radial wash on focused welcome/empty surfaces (Onboarding BYOK, Empty Workspace) or around the active AI Copilot prompt box.
-- Editing panels, `My Projects` grids, and the 9:16 Canvas viewport well stay **solid, crisp, and matte** so footage color accuracy is never distorted by glowing backgrounds.
+## Strict Anti-Slop Discipline (Dark Mode)
+- **Zero tinted dark chrome:** Never tint dark panels, cards, or borders with green/blue/purple haze. Keep chrome pure neutral carbon so footage colors stay 100% accurate.
+- **One primary focal CTA per screen:** Secondary actions (`Apply`, `Buka`, quick chips) stay neutral machined carbon (`--bg-elevated`), never neon accent fills.
+- **No colored neon borders on cards or timeline clips:** Use neutral crisp `--border-strong` for selection and a restrained 6px role dot for `Hook / Body / CTA`.
+- **No kickers/eyebrows, gradient text, decorative glass blur, or emoji icons.**
 
 ## Typography
-- **UI Sans:** `IBM Plex Sans` (400, 500, 600, 700) — crisp neo-grotesk precision with industrial clarity at 12–14px desktop density.
-- **Data / Timecode Mono:** `JetBrains Mono` with `font-variant-numeric: tabular-nums` — strictly for timecodes (`00:03.2`), resolutions (`1080×1920`), file sizes, API latency, and JSON inspection. Never used as decorative costume.
-- **Scale:** Fixed `rem` scale with tight ratio (11px badges/timecode, 12px metadata, 13px dense controls, 14px body, 16px section heading, 20px view title).
-
-## Craft Rules & Refusals
-- **No kickers/eyebrows** above headings. Headings carry their own weight.
-- **No nested cards**, no duplicate text-box shelves, and no abstract colored bars standing in for real video previews.
-- **No gradient text, decorative heavy glassmorphism over editing panels, or neon bloom halos.**
-- **No emoji icons** in UI labels — exclusively `lucide-react` icons at consistent stroke width (`1.75`) plus bespoke SVG brand mark.
-- **Strict Table Spacing:** List/table views use explicit CSS Grid track widths (`minmax(...)` + fixed `px` data tracks + `whitespace-nowrap`) to prevent numeric/date collisions at every window width.
-- **Complete interactive states:** Every button, input, and row defines default, hover, focus-visible ring, active, disabled, loading, error, and constructive empty states.
-- **Browser surfaces themed:** `::selection`, `caret-color`, `:focus-visible`, `text-underline-offset`, and scrollbars derive from the Obsidian Pine / Sage Mist palette tokens.
-- **Purposeful motion only:** 150–200ms state transitions; no page-load choreography.
+- **UI Sans:** `IBM Plex Sans` (400, 500, 600, 700).
+- **Data / Timecode Mono:** `JetBrains Mono` with `font-variant-numeric: tabular-nums` strictly for timecodes, resolutions, file sizes, latency, and JSON.
