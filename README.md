@@ -47,7 +47,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 ### Status Saat Ini
 - [x] Riset pasar, kompetitor, arsitektur teknis, & finalisasi PRD
 - [x] Inisialisasi repositori & dokumentasi inti
-- [ ] **Milestone 0 (In Progress):** Scaffold Tauri v2, Canvas/WebCodecs + Mediabunny, & FFmpeg LGPL Sidecar selesai; tinggal verifikasi kompilasi Rust desktop setelah C++ Build Tools terpasang
+- [x] **Milestone 0:** Proof of Concept (PoC) Engine Render lokal (`Tauri v2 + Rust MSVC + Canvas/WebCodecs + Mediabunny + FFmpeg LGPL Sidecar`)
 - [ ] **Milestone 1:** Design System (Dark & Light Studio), Onboarding BYOK, & `My Projects`
 - [ ] **Milestone 2:** Wizard Racik Konten, Audio Auto-Sync, & Multimodal AI Director
 - [ ] **Milestone 3:** Canvas Motion, Preset & Overlay Engine
