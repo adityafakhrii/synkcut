@@ -9,6 +9,11 @@ build/
 target/
 src-tauri/target/
 
+# Bundled large FFmpeg/FFprobe sidecar binaries (run `npm run setup:ffmpeg`)
+src-tauri/binaries/*.exe
+src-tauri/binaries/ffmpeg-*
+src-tauri/binaries/ffprobe-*
+
 # Logs
 *.log
 npm-debug.log*

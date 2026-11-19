@@ -47,9 +47,36 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 ### Status Saat Ini
 - [x] Riset pasar, kompetitor, arsitektur teknis, & finalisasi PRD
 - [x] Inisialisasi repositori & dokumentasi inti
-- [ ] **Milestone 0:** Proof of Concept (PoC) Engine Render lokal (`Tauri v2 + Canvas + WebCodecs + FFmpeg Sidecar`)
+- [ ] **Milestone 0 (In Progress):** Scaffold Tauri v2, Canvas/WebCodecs + Mediabunny, & FFmpeg LGPL Sidecar selesai; tinggal verifikasi kompilasi Rust desktop setelah C++ Build Tools terpasang
 - [ ] **Milestone 1:** Design System (Dark & Light Studio), Onboarding BYOK, & `My Projects`
 - [ ] **Milestone 2:** Wizard Racik Konten, Audio Auto-Sync, & Multimodal AI Director
 - [ ] **Milestone 3:** Canvas Motion, Preset & Overlay Engine
 - [ ] **Milestone 4:** Hybrid Studio 3 Kolom, AI Copilot (JSON Patch), & Sample Bawaan
 - [ ] **Milestone 5:** Export Modal, Audit Kualitas, & Windows Installer
+
+---
+
+## Menjalankan Secara Lokal (Windows)
+
+### Prasyarat Windows (Resmi Tauri v2)
+1. **Microsoft C++ Build Tools** (pilih workload *"Desktop development with C++"*):
+   ```powershell
+   winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+   ```
+2. **Rust Toolchain MSVC** *(direkomendasikan Tauri v2)*:
+   ```powershell
+   rustup toolchain install stable-x86_64-pc-windows-msvc
+   rustup default stable-x86_64-pc-windows-msvc
+   ```
+
+### Setup & Jalankan
+```powershell
+# 1. Install dependencies frontend
+npm install
+
+# 2. Unduh binary FFmpeg & FFprobe LGPL untuk Tauri Sidecar
+npm run setup:ffmpeg
+
+# 3. Jalankan desktop app Synkcut (mode dev)
+npm run tauri dev
+```
