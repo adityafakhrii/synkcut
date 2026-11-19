@@ -48,7 +48,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 - [x] Riset pasar, kompetitor, arsitektur teknis, & finalisasi PRD
 - [x] Inisialisasi repositori & dokumentasi inti
 - [x] **Milestone 0:** Proof of Concept (PoC) Engine Render lokal (`Tauri v2 + Rust MSVC + Canvas/WebCodecs + Mediabunny + FFmpeg LGPL Sidecar`)
-- [ ] **Milestone 1:** Design System (Dark & Light Studio), Onboarding BYOK, & `My Projects`
+- [x] **Milestone 1:** Design System Impeccable (`PRODUCT.md` + `DESIGN.md`, Dark & Light Studio), Onboarding BYOK (Windows Credential Manager + Tes Koneksi), & `My Projects` + 4 Sample Bawaan
 - [ ] **Milestone 2:** Wizard Racik Konten, Audio Auto-Sync, & Multimodal AI Director
 - [ ] **Milestone 3:** Canvas Motion, Preset & Overlay Engine
 - [ ] **Milestone 4:** Hybrid Studio 3 Kolom, AI Copilot (JSON Patch), & Sample Bawaan

@@ -5,12 +5,13 @@
   --bg-app: #f5f6f8;
   --bg-panel: #ffffff;
   --bg-elevated: #eef0f4;
+  --bg-hover: #e5e8ef;
   --bg-canvas-well: #e6e9ef;
   --border-subtle: #dcdfe6;
-  --border-strong: #c5cad4;
+  --border-strong: #c2c7d2;
   --text-primary: #111318;
-  --text-secondary: #535a68;
-  --text-muted: #788091;
+  --text-secondary: #4b5362;
+  --text-muted: #667082;
   --accent: #0f766e;
   --accent-hover: #0d645d;
   --accent-fg: #ffffff;
@@ -18,7 +19,10 @@
   --role-hook: #d97706;
   --role-body: #0284c7;
   --role-cta: #059669;
+  --success: #059669;
+  --success-soft: rgba(5, 150, 105, 0.1);
   --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.1);
 }
 
 .dark {
@@ -26,12 +30,13 @@
   --bg-app: #0d0f12;
   --bg-panel: #14171d;
   --bg-elevated: #1c2028;
+  --bg-hover: #232833;
   --bg-canvas-well: #090b0e;
   --border-subtle: #242934;
-  --border-strong: #323948;
+  --border-strong: #353d4d;
   --text-primary: #f1f3f7;
   --text-secondary: #9aa3b2;
-  --text-muted: #697282;
+  --text-muted: #768092;
   --accent: #bef264;
   --accent-hover: #a3e635;
   --accent-fg: #0d0f12;
@@ -39,7 +44,10 @@
   --role-hook: #f59e0b;
   --role-body: #38bdf8;
   --role-cta: #34d399;
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.12);
   --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
 }
 
 * {
@@ -56,6 +64,31 @@ body,
   color: var(--text-primary);
   font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  caret-color: var(--accent);
+}
+
+::selection {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+a {
+  text-underline-offset: 3px;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .font-mono-num {
@@ -63,7 +96,53 @@ body,
   font-variant-numeric: tabular-nums;
 }
 
-/* Subtle native-feeling scrollbars */
+/* Native-feeling utility interaction surfaces */
+.ui-row {
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.ui-row:hover {
+  background-color: var(--bg-hover);
+}
+
+.ui-btn-secondary {
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.ui-btn-secondary:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-btn-primary {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+
+.ui-btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.ui-input {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  transition: border-color 150ms ease;
+}
+
+.ui-input::placeholder {
+  color: var(--text-muted);
+}
+
+.ui-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+/* Subtle native scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

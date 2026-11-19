@@ -1,0 +1,374 @@
+import type { ContentFormat, SynkcutProject } from "../types/scene";
+import { rebuildWordsFromScenes } from "./sampleProject";
+
+export interface SampleTemplate {
+  id: string;
+  title: string;
+  format: ContentFormat;
+  summary: string;
+  captionLabel: string;
+  motionLabel: string;
+  durationLabel: string;
+  roles: Array<"hook" | "body" | "cta">;
+  buildProject: (customName?: string) => SynkcutProject;
+}
+
+function makeProjectId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export const BUILTIN_SAMPLES: SampleTemplate[] = [
+  {
+    id: "sample_ad_promo",
+    title: "Promo Produk Kilat",
+    format: "ad_promo",
+    summary: "Buka dengan notifikasi pop-up, lanjut demo cepat, tutup dengan promo CTA tegas.",
+    captionLabel: "Bold Pop",
+    motionLabel: "Zoom Punch",
+    durationLabel: "00:09.0",
+    roles: ["hook", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const base: SynkcutProject = {
+        version: "1.0",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Promo Produk Kilat",
+          format: "ad_promo",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "bold_pop",
+          accentColor: "#BEF264",
+          showProgressBar: true,
+          bgm: { preset: "upbeat_promo", volume: 0.25, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 3000,
+            text: "Capek iklan boncos terus padahal produk lo sebenarnya bagus?",
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.85 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "impact_boom", offsetMs: 0, volume: 0.75 }],
+            overlays: [
+              {
+                id: "ov_1",
+                type: "notification_banner",
+                title: "Order Masuk · Baru saja",
+                text: "3 variasi video iklan baru langsung naik ROAS 2x",
+                position: "top",
+              },
+            ],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 3000,
+            endMs: 6500,
+            text: "Cukup ganti tiga detik pertama dengan visual tajam dan subtitle sinkron.",
+            media: { path: null, trimStartMs: 3000, fit: "cover" },
+            motion: { preset: "smooth_ken_burns", intensity: 0.7 },
+            transitionIn: { preset: "whip_pan", durationMs: 250 },
+            sfx: [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.65 }],
+            overlays: [
+              {
+                id: "ov_2",
+                type: "promo_badge",
+                text: "DEMO PRODUK · AUTO-SYNC",
+                position: "top",
+              },
+            ],
+          },
+          {
+            id: "scene_3",
+            role: "cta",
+            startMs: 6500,
+            endMs: 9000,
+            text: "Klik keranjang sekarang sebelum promo minggu ini berakhir!",
+            media: { path: null, trimStartMs: 6500, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.75 },
+            transitionIn: { preset: "pop_zoom", durationMs: 220 },
+            sfx: [{ preset: "riser", offsetMs: 0, volume: 0.7 }],
+            overlays: [
+              {
+                id: "ov_3",
+                type: "promo_badge",
+                text: "DISKON 40% HARI INI",
+                position: "top",
+              },
+            ],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
+  {
+    id: "sample_education",
+    title: "3 Tips Edukasi Cepat",
+    format: "education",
+    summary: "Ritme terstruktur untuk konten tips, tutorial singkat, dan edukasi audiens.",
+    captionLabel: "Clean Minimal",
+    motionLabel: "Ken Burns",
+    durationLabel: "00:11.0",
+    roles: ["hook", "body", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const base: SynkcutProject = {
+        version: "1.0",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "3 Tips Edukasi Cepat",
+          format: "education",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "clean_minimal",
+          accentColor: "#38BDF8",
+          showProgressBar: true,
+          bgm: { preset: "lofi_education", volume: 0.22, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 2600,
+            text: "Tiga kesalahan sepele yang bikin konten Reels lo sepi penonton.",
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "slide_reveal", intensity: 0.7 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.6 }],
+            overlays: [
+              { id: "ov_edu_1", type: "promo_badge", text: "WAJIB SIMPAN", position: "top" },
+            ],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 2600,
+            endMs: 5600,
+            text: "Pertama, pembukaan terlalu lama dan tanpa teks pengait di detik awal.",
+            media: { path: null, trimStartMs: 2600, fit: "cover" },
+            motion: { preset: "smooth_ken_burns", intensity: 0.65 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "pop_text", offsetMs: 0, volume: 0.55 }],
+            overlays: [
+              { id: "ov_edu_2", type: "promo_badge", text: "POIN #1 · HOOK 3 DETIK", position: "top" },
+            ],
+          },
+          {
+            id: "scene_3",
+            role: "body",
+            startMs: 5600,
+            endMs: 8600,
+            text: "Kedua, jeda napas dibiarkan kosong sehingga pacing terasa lambat.",
+            media: { path: null, trimStartMs: 5600, fit: "cover" },
+            motion: { preset: "smooth_ken_burns", intensity: 0.65 },
+            transitionIn: { preset: "whip_pan", durationMs: 200 },
+            sfx: [{ preset: "whoosh_soft", offsetMs: 0, volume: 0.55 }],
+            overlays: [
+              { id: "ov_edu_3", type: "promo_badge", text: "POIN #2 · PACING PADAT", position: "top" },
+            ],
+          },
+          {
+            id: "scene_4",
+            role: "cta",
+            startMs: 8600,
+            endMs: 11000,
+            text: "Save video ini biar nggak lupa pas ngedit konten berikutnya!",
+            media: { path: null, trimStartMs: 8600, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.6 },
+            transitionIn: { preset: "smooth_crossfade", durationMs: 220 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.6 }],
+            overlays: [
+              { id: "ov_edu_4", type: "promo_badge", text: "SAVE & SHARE", position: "top" },
+            ],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
+  {
+    id: "sample_storytelling",
+    title: "Storytelling Editorial",
+    format: "storytelling",
+    summary: "Gaya tipografi serif rapi & gerak halus untuk cerita brand atau opini personal.",
+    captionLabel: "Luxury Editorial",
+    motionLabel: "Ken Burns",
+    durationLabel: "00:09.5",
+    roles: ["hook", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const base: SynkcutProject = {
+        version: "1.0",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Storytelling Editorial",
+          format: "storytelling",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "luxury_editorial",
+          accentColor: "#F59E0B",
+          showProgressBar: true,
+          bgm: { preset: "cinematic_story", volume: 0.2, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 3200,
+            text: "Awalnya kami cuma jual sepuluh cup kopi sehari dari garasi rumah.",
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "smooth_ken_burns", intensity: 0.6 },
+            transitionIn: { preset: "smooth_crossfade", durationMs: 300 },
+            sfx: [],
+            overlays: [],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 3200,
+            endMs: 6800,
+            text: "Semuanya berubah saat kami mulai konsisten bercerita lewat satu video pendek setiap pagi.",
+            media: { path: null, trimStartMs: 3200, fit: "cover" },
+            motion: { preset: "smooth_ken_burns", intensity: 0.7 },
+            transitionIn: { preset: "smooth_crossfade", durationMs: 280 },
+            sfx: [{ preset: "whoosh_soft", offsetMs: 0, volume: 0.45 }],
+            overlays: [],
+          },
+          {
+            id: "scene_3",
+            role: "cta",
+            startMs: 6800,
+            endMs: 9500,
+            text: "Menurut lo, cerita apa yang paling menarik untuk dibahas besok?",
+            media: { path: null, trimStartMs: 6800, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.5 },
+            transitionIn: { preset: "smooth_crossfade", durationMs: 260 },
+            sfx: [],
+            overlays: [
+              { id: "ov_st_1", type: "promo_badge", text: "TULIS DI KOMENTAR", position: "top" },
+            ],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
+  {
+    id: "sample_review",
+    title: "Review & Unboxing Jujur",
+    format: "review",
+    summary: "Teks kinetik besar 2 kata per hentakan dengan tempo cepat untuk review gadget/produk.",
+    captionLabel: "Kinetic Punch",
+    motionLabel: "Shake Impact",
+    durationLabel: "00:09.0",
+    roles: ["hook", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const base: SynkcutProject = {
+        version: "1.0",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Review & Unboxing Jujur",
+          format: "review",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "kinetic_punch",
+          accentColor: "#34D399",
+          showProgressBar: true,
+          bgm: { preset: "tech_modern", volume: 0.24, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 2800,
+            text: "Jujur, awalnya gue ragu barang seharga ini beneran awet.",
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "shake_impact", intensity: 0.8 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "impact_boom", offsetMs: 0, volume: 0.7 }],
+            overlays: [
+              { id: "ov_rev_1", type: "promo_badge", text: "HONEST REVIEW", position: "top" },
+            ],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 2800,
+            endMs: 6300,
+            text: "Tapi setelah tiga minggu dipakai kerja harian, performanya stabil dan super ringan.",
+            media: { path: null, trimStartMs: 2800, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.75 },
+            transitionIn: { preset: "glitch_flash", durationMs: 200 },
+            sfx: [{ preset: "glitch_zap", offsetMs: 0, volume: 0.6 }],
+            overlays: [
+              { id: "ov_rev_2", type: "promo_badge", text: "TES 3 MINGGU", position: "top" },
+            ],
+          },
+          {
+            id: "scene_3",
+            role: "cta",
+            startMs: 6300,
+            endMs: 9000,
+            text: "Skor akhir sembilan per sepuluh, cek link di bio kalau penasaran.",
+            media: { path: null, trimStartMs: 6300, fit: "cover" },
+            motion: { preset: "zoom_punch", intensity: 0.7 },
+            transitionIn: { preset: "pop_zoom", durationMs: 200 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.65 }],
+            overlays: [
+              { id: "ov_rev_3", type: "promo_badge", text: "SKOR 9/10 · WORTH IT", position: "top" },
+            ],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
+];
+
+export function createBlankProjectForFormat(format: ContentFormat): SynkcutProject {
+  const sample = BUILTIN_SAMPLES.find((s) => s.format === format) ?? BUILTIN_SAMPLES[0];
+  const labelMap: Record<ContentFormat, string> = {
+    ad_promo: "Iklan Baru",
+    education: "Edukasi Baru",
+    storytelling: "Cerita Baru",
+    review: "Review Baru",
+  };
+  return sample.buildProject(labelMap[format]);
+}

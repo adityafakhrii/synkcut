@@ -1,3 +1,6 @@
+mod byok;
+mod projects;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -411,7 +414,19 @@ pub fn run() {
             probe_media,
             extract_thumbnails,
             mux_export_mp4,
-            reveal_in_explorer
+            reveal_in_explorer,
+            byok::get_byok_status,
+            byok::save_byok_key,
+            byok::set_active_provider,
+            byok::complete_onboarding,
+            byok::delete_byok_key,
+            byok::test_byok_connection,
+            projects::list_projects,
+            projects::load_project,
+            projects::save_project,
+            projects::duplicate_project,
+            projects::rename_project,
+            projects::delete_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running Synkcut Tauri application");
