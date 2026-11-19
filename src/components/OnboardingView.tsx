@@ -491,7 +491,11 @@ export default function OnboardingView({
   );
 
   if (mode === "onboarding") {
-    return <div className="flex min-h-0 flex-1 overflow-y-auto px-6 py-10">{content}</div>;
+    return (
+      <div className="ui-ambient-surface flex min-h-0 flex-1 overflow-y-auto px-6 py-10">
+        {content}
+      </div>
+    );
   }
 
   return (

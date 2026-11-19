@@ -127,11 +127,12 @@ Seluruh antarmuka Synkcut wajib dirancang mengikuti prinsip **Impeccable (`https
    - *Langkah 1:* Ide/Produk -> Generate 3 Opsi Hook + Script -> Edit cepat.
    - *Langkah 2:* Drop Footage Lokal *(+ tombol `AI Footage: Flow / Seedance` berlabel `Coming Soon`)* -> Pilih TTS atau Rekam/Upload Suara Sendiri *(+ Auto Trim Silence)*.
    - *Langkah 3:* Klik-klik Kartu Preset (Caption, Motion, Transisi, Overlay, BGM, Auto-SFX) -> **"Racik Video"**.
-4. **Studio Editor (3 Kolom Presisi):**
-   - *Kiri:* **Scene Cards** (drag urutan, klik teks edit instan, tukar footage, ubah preset/overlay — **0 token AI**).
-   - *Tengah:* **Live Canvas Preview 9:16** (60fps, scrubber, toggle `Safe Zone`, tombol `Export MP4`).
-   - *Kanan:* **AI Copilot Chat** (revisi berbasis JSON Patch + quick suggestion chips + Undo/Redo).
-5. **Modal Export Lokal:** Pilih `1080p` / `720p`, `30` / `60` FPS, folder tujuan -> progress bar real-time -> **"Buka Folder"** & **"Putar Video"**.
+4. **Studio Editor (Modular Rounded Studio — Terinspirasi CutCut & Reelio):**
+   - **Panel mengambang berjarak rapi (`12px` radius, gap `10px`)** di atas permukaan Obsidian Pine / Sage Mist.
+   - *Far-Left Slim Icon Rail (`60px`) + Left Contextual Inspector (`276px`):* Tab terpisah untuk `Scenes` *(edit mikro 0 token)*, `Footage` *(lokal + thumbnail)*, `Caption`, `Motion`, dan `Audio`.
+   - *Tengah:* **Live Canvas Preview 9:16** (60fps, dot-grid matte, toggle `Safe Zone`, Undo/Redo di top bar) + **Simplified 2-Row Visual Scene Strip** di bawahnya (Baris 1: blok proporsional `Hook / Body / CTA` + playhead geser; Baris 2: visual waveform `Voiceover Auto-Sync` — tetap simpel tanpa timeline 5-track rumit).
+   - *Kanan (`310px`):* **AI Video Director** dengan 2 tab — **`AI Director`** *(kartu saran 1-klik `Apply`, quick chips, chat revisi JSON Patch)* & **`AI Footage`** *(Google Flow / Seedance — `Coming Soon`)*.
+5. **Modal Export Lokal:** Dibuka dari tombol **`Export MP4`** di kanan atas Studio — pilih `1080p` / `720p`, `30` / `60` FPS, folder tujuan -> progress bar real-time -> **"Buka di Folder"**.
 
 ---
 

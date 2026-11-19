@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ArrowUp,
   Check,
   CheckCircle2,
+  Code2,
   Cpu,
   Download,
   Film,
@@ -13,13 +15,27 @@ import {
   Music,
   Pause,
   Play,
+  Redo2,
   RotateCcw,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Sun,
+  Type,
+  Undo2,
   Upload,
+  Volume2,
+  Wand2,
+  X,
 } from "lucide-react";
-import type { CaptionPreset, MotionPreset, SynkcutProject } from "../types/scene";
+import type {
+  ByokStatus,
+  CaptionPreset,
+  MotionPreset,
+  SceneOverlay,
+  SynkcutProject,
+  TransitionPreset,
+} from "../types/scene";
 import { getProjectDurationMs, rebuildWordsFromScenes } from "../engine/sampleProject";
 import { renderProjectFrame } from "../engine/canvasRenderer";
 import { checkWebCodecsSupport, exportProjectToMp4 } from "../engine/exportEngine";
@@ -42,27 +58,62 @@ import {
 
 interface StudioViewProps {
   initialProject: SynkcutProject;
+  byokStatus: ByokStatus;
   theme: "dark" | "light";
   onToggleTheme: () => void;
   onBackHome: () => void;
   onProjectSaved: () => void;
 }
 
-const CAPTION_PRESETS: Array<{ id: CaptionPreset; label: string }> = [
-  { id: "bold_pop", label: "Bold Pop" },
-  { id: "clean_minimal", label: "Clean Minimal" },
-  { id: "kinetic_punch", label: "Kinetic Punch" },
-  { id: "luxury_editorial", label: "Luxury Editorial" },
-  { id: "neon_tech", label: "Neon Tech" },
+type LeftToolTab = "scenes" | "footage" | "caption" | "motion" | "audio";
+type RightPanelTab = "director" | "ai_footage";
+
+interface DirectorLogItem {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+}
+
+const CAPTION_PRESETS: Array<{ id: CaptionPreset; label: string; sample: string }> = [
+  { id: "bold_pop", label: "Bold Pop", sample: "KATA AKTIF TEBAL" },
+  { id: "clean_minimal", label: "Clean Minimal", sample: "Bersih & rapi" },
+  { id: "kinetic_punch", label: "Kinetic Punch", sample: "2 KATA BESAR" },
+  { id: "luxury_editorial", label: "Luxury Editorial", sample: "Serif elegan" },
+  { id: "neon_tech", label: "Neon Tech", sample: "Modern glow tipis" },
 ];
 
 const MOTION_PRESETS: Array<{ id: MotionPreset; label: string }> = [
   { id: "zoom_punch", label: "Zoom Punch" },
-  { id: "smooth_ken_burns", label: "Ken Burns" },
+  { id: "smooth_ken_burns", label: "Smooth Ken Burns" },
   { id: "shake_impact", label: "Shake Impact" },
   { id: "slide_reveal", label: "Slide Reveal" },
   { id: "static_clean", label: "Static Clean" },
 ];
+
+const TRANSITION_PRESETS: Array<{ id: TransitionPreset; label: string }> = [
+  { id: "hard_cut", label: "Hard Cut" },
+  { id: "whip_pan", label: "Whip Pan" },
+  { id: "pop_zoom", label: "Pop Zoom" },
+  { id: "glitch_flash", label: "Glitch Flash" },
+  { id: "smooth_crossfade", label: "Smooth Crossfade" },
+];
+
+const BGM_PRESETS = [
+  { id: "upbeat_promo", label: "Upbeat Promo" },
+  { id: "lofi_education", label: "Lo-Fi Edukasi" },
+  { id: "cinematic_story", label: "Cinematic Story" },
+  { id: "tech_modern", label: "Tech Modern" },
+  { id: "trendy_funk", label: "Trendy Funk" },
+  { id: "chill_aesthetic", label: "Chill Aesthetic" },
+];
+
+const ACCENT_SWATCHES = ["#38E59D", "#F59E0B", "#38BDF8", "#F43F5E", "#FFFFFF"];
+
+// Deterministic pseudo-waveform bars for visual Voiceover Auto-Sync row
+const WAVEFORM_BARS = Array.from({ length: 64 }, (_, i) => {
+  const wave = Math.abs(Math.sin(i * 0.55) * 0.65 + Math.cos(i * 1.35) * 0.35);
+  return Math.max(18, Math.round(wave * 100));
+});
 
 function formatTimecode(ms: number): string {
   const totalSec = Math.max(0, ms / 1000);
@@ -80,17 +131,34 @@ function formatBytes(bytes: number): string {
 
 export default function StudioView({
   initialProject,
+  byokStatus,
   theme,
   onToggleTheme,
   onBackHome,
   onProjectSaved,
 }: StudioViewProps) {
   const [project, setProject] = useState<SynkcutProject>(initialProject);
+  const [pastHistory, setPastHistory] = useState<SynkcutProject[]>([]);
+  const [futureHistory, setFutureHistory] = useState<SynkcutProject[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
+
+  // Studio UI navigation
+  const [leftTab, setLeftTab] = useState<LeftToolTab>("scenes");
+  const [rightTab, setRightTab] = useState<RightPanelTab>("director");
+  const [selectedSceneId, setSelectedSceneId] = useState<string>(
+    initialProject.scenes[0]?.id || ""
+  );
+  const [showSafeZone, setShowSafeZone] = useState(true);
+  const [showJsonModal, setShowJsonModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  // Playback state
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [showSafeZone, setShowSafeZone] = useState(true);
-  const [showJson, setShowJson] = useState(false);
+
+  // AI Director local interactive feed
+  const [promptInput, setPromptInput] = useState("");
+  const [directorLog, setDirectorLog] = useState<DirectorLogItem[]>([]);
 
   // Diagnostics
   const [webCodecs, setWebCodecs] = useState({ supported: false, avcSupported: false });
@@ -116,13 +184,50 @@ export default function StudioView({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const timelineRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastFrameTsRef = useRef<number>(0);
   const isFirstRenderRef = useRef(true);
+  const isScrubbingRef = useRef(false);
 
-  const totalDurationMs = useMemo(() => getProjectDurationMs(project), [project]);
+  const totalDurationMs = useMemo(() => Math.max(1000, getProjectDurationMs(project)), [project]);
 
-  // Debounced auto-save to project.synk.json
+  const activeScene = useMemo(() => {
+    const byId = project.scenes.find((s) => s.id === selectedSceneId);
+    return byId ?? project.scenes[0] ?? null;
+  }, [project.scenes, selectedSceneId]);
+
+  function commitProjectChange(
+    updater: (prev: SynkcutProject) => SynkcutProject,
+    recordHistory = true
+  ) {
+    setProject((prev) => {
+      const next = updater(prev);
+      if (recordHistory) {
+        setPastHistory((h) => [...h.slice(-24), prev]);
+        setFutureHistory([]);
+      }
+      return next;
+    });
+  }
+
+  function handleUndo() {
+    if (pastHistory.length === 0) return;
+    const previous = pastHistory[pastHistory.length - 1];
+    setPastHistory((h) => h.slice(0, -1));
+    setFutureHistory((f) => [project, ...f.slice(0, 24)]);
+    setProject(previous);
+  }
+
+  function handleRedo() {
+    if (futureHistory.length === 0) return;
+    const next = futureHistory[0];
+    setFutureHistory((f) => f.slice(1));
+    setPastHistory((h) => [...h.slice(-24), project]);
+    setProject(next);
+  }
+
+  // Debounced auto-save
   useEffect(() => {
     if (isFirstRenderRef.current) {
       isFirstRenderRef.current = false;
@@ -160,7 +265,7 @@ export default function StudioView({
     };
   }, []);
 
-  // Render preview whenever state or playhead changes
+  // Render preview frame
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -214,12 +319,41 @@ export default function StudioView({
     };
   }, [isPlaying, totalDurationMs, footagePath]);
 
+  // Timeline scrub pointer handlers
+  function updateTimeFromClientX(clientX: number) {
+    const el = timelineRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const nextMs = Math.round(ratio * totalDurationMs);
+    setCurrentTimeMs(nextMs);
+    const matching = project.scenes.find((s) => nextMs >= s.startMs && nextMs < s.endMs);
+    if (matching) setSelectedSceneId(matching.id);
+  }
+
+  function handleTimelinePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    setIsPlaying(false);
+    isScrubbingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateTimeFromClientX(e.clientX);
+  }
+
+  function handleTimelinePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!isScrubbingRef.current) return;
+    updateTimeFromClientX(e.clientX);
+  }
+
+  function handleTimelinePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    isScrubbingRef.current = false;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  }
+
   async function handlePickFootage() {
     if (isTauriRuntime()) {
       const picked = await pickLocalVideo();
       if (!picked) return;
       setFootagePath(picked);
-      setProject((prev) => ({
+      commitProjectChange((prev) => ({
         ...prev,
         scenes: prev.scenes.map((s) => ({
           ...s,
@@ -253,45 +387,191 @@ export default function StudioView({
     if (!picked) return;
     setAudioPath(picked);
     setGenerateDemoAudio(false);
-    setProject((prev) => ({
+    commitProjectChange((prev) => ({
       ...prev,
       voiceover: { ...prev.voiceover, source: "recorded", audioPath: picked },
     }));
   }
 
   function handleSceneTextChange(sceneId: string, newText: string) {
-    setProject((prev) => {
+    commitProjectChange((prev) => {
       const updated: SynkcutProject = {
         ...prev,
         scenes: prev.scenes.map((s) => (s.id === sceneId ? { ...s, text: newText } : s)),
       };
       return {
         ...updated,
-        voiceover: {
-          ...updated.voiceover,
-          words: rebuildWordsFromScenes(updated),
-        },
+        voiceover: { ...updated.voiceover, words: rebuildWordsFromScenes(updated) },
       };
-    });
+    }, false);
   }
 
-  function handleSceneMotionChange(sceneId: string, motionPreset: MotionPreset) {
-    setProject((prev) => ({
+  function updateActiveSceneMotion(motionPreset: MotionPreset) {
+    if (!activeScene) return;
+    commitProjectChange((prev) => ({
       ...prev,
       scenes: prev.scenes.map((s) =>
-        s.id === sceneId ? { ...s, motion: { ...s.motion, preset: motionPreset } } : s
+        s.id === activeScene.id ? { ...s, motion: { ...s.motion, preset: motionPreset } } : s
       ),
     }));
+  }
+
+  function updateActiveSceneTransition(transitionPreset: TransitionPreset) {
+    if (!activeScene) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) =>
+        s.id === activeScene.id
+          ? {
+              ...s,
+              transitionIn: {
+                preset: transitionPreset,
+                durationMs: transitionPreset === "hard_cut" ? 0 : 240,
+              },
+            }
+          : s
+      ),
+    }));
+  }
+
+  function setActiveSceneOverlay(type: "none" | "notification_banner" | "promo_badge") {
+    if (!activeScene) return;
+    const nextOverlays: SceneOverlay[] =
+      type === "none"
+        ? []
+        : type === "notification_banner"
+          ? [
+              {
+                id: `ov_${Date.now()}`,
+                type: "notification_banner",
+                title: "Synkcut · Baru saja",
+                text: "Konten siap tayang dalam hitungan menit",
+                position: "top",
+              },
+            ]
+          : [
+              {
+                id: `ov_${Date.now()}`,
+                type: "promo_badge",
+                text: "PROMO SPESIAL HARI INI",
+                position: "top",
+              },
+            ];
+
+    commitProjectChange((prev) => ({
+      ...prev,
+      scenes: prev.scenes.map((s) =>
+        s.id === activeScene.id ? { ...s, overlays: nextOverlays } : s
+      ),
+    }));
+  }
+
+  function pushDirectorMessage(role: "user" | "assistant", text: string) {
+    setDirectorLog((prev) => [...prev.slice(-8), { id: `${Date.now()}_${Math.random()}`, role, text }]);
+  }
+
+  function applyDirectorPreset(presetKey: "hook_punch" | "clean_edu" | "kinetic_fast") {
+    if (presetKey === "hook_punch") {
+      commitProjectChange((prev) => ({
+        ...prev,
+        globalStyle: { ...prev.globalStyle, captionPreset: "bold_pop", accentColor: "#38E59D" },
+        scenes: prev.scenes.map((s, idx) =>
+          idx === 0
+            ? {
+                ...s,
+                motion: { preset: "zoom_punch", intensity: 0.9 },
+                overlays: [
+                  {
+                    id: "ov_hook_dir",
+                    type: "notification_banner",
+                    title: "Notifikasi · Baru saja",
+                    text: "Hook 3 detik pertama langsung diperkuat",
+                    position: "top",
+                  },
+                ],
+              }
+            : s
+        ),
+      }));
+      setCurrentTimeMs(1000);
+      pushDirectorMessage(
+        "assistant",
+        "Diterapkan: Hook diperkuat dengan Zoom Punch + Bold Pop + Native Notification Banner (0 token)."
+      );
+    } else if (presetKey === "clean_edu") {
+      commitProjectChange((prev) => ({
+        ...prev,
+        globalStyle: { ...prev.globalStyle, captionPreset: "clean_minimal", accentColor: "#38BDF8" },
+        scenes: prev.scenes.map((s) => ({
+          ...s,
+          motion: { preset: "smooth_ken_burns", intensity: 0.65 },
+        })),
+      }));
+      pushDirectorMessage(
+        "assistant",
+        "Diterapkan: Gaya Clean Minimal + Smooth Ken Burns dengan aksen Cyan (0 token)."
+      );
+    } else {
+      commitProjectChange((prev) => ({
+        ...prev,
+        globalStyle: { ...prev.globalStyle, captionPreset: "kinetic_punch", accentColor: "#38E59D" },
+        scenes: prev.scenes.map((s) => ({
+          ...s,
+          motion: { preset: "shake_impact", intensity: 0.8 },
+        })),
+      }));
+      pushDirectorMessage(
+        "assistant",
+        "Diterapkan: Mode energik Kinetic Punch 2 kata + Shake Impact (0 token)."
+      );
+    }
+  }
+
+  function handleDirectorPromptSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const raw = promptInput.trim();
+    if (!raw) return;
+    setPromptInput("");
+    pushDirectorMessage("user", raw);
+
+    const lower = raw.toLowerCase();
+    if (lower.includes("editorial") || lower.includes("luxury") || lower.includes("serif")) {
+      commitProjectChange((prev) => ({
+        ...prev,
+        globalStyle: { ...prev.globalStyle, captionPreset: "luxury_editorial", accentColor: "#F59E0B" },
+      }));
+      pushDirectorMessage("assistant", "Style caption diubah ke Luxury Editorial (serif + aksen amber).");
+    } else if (lower.includes("neon")) {
+      commitProjectChange((prev) => ({
+        ...prev,
+        globalStyle: { ...prev.globalStyle, captionPreset: "neon_tech", accentColor: "#38E59D" },
+      }));
+      pushDirectorMessage("assistant", "Style caption diubah ke Neon Tech dengan aksen Emerald-Mint.");
+    } else if (lower.includes("minimal") || lower.includes("clean")) {
+      applyDirectorPreset("clean_edu");
+    } else if (lower.includes("notif")) {
+      setActiveSceneOverlay("notification_banner");
+      pushDirectorMessage("assistant", "Native Notification Banner ditambahkan pada scene aktif.");
+    } else if (lower.includes("badge") || lower.includes("promo")) {
+      setActiveSceneOverlay("promo_badge");
+      pushDirectorMessage("assistant", "Promo Badge ditambahkan pada scene aktif.");
+    } else {
+      pushDirectorMessage(
+        "assistant",
+        "Perintah lokal siap untuk preset/overlay. Chat AI bebas berbasis JSON Patch dengan BYOK penuh akan aktif pada Milestone 2 & 4."
+      );
+    }
   }
 
   async function handleExport() {
     setExportError(null);
     setExportResult(null);
 
-    const safeSlug = project.meta.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_|_$/g, "") || "synkcut_export";
+    const safeSlug =
+      project.meta.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_|_$/g, "") || "synkcut_export";
 
     const savePath = await pickExportSavePath(`${safeSlug}_9x16`);
     if (!savePath) return;
@@ -328,6 +608,34 @@ export default function StudioView({
     return "var(--role-cta)";
   };
 
+  const roleBgTint = (role: "hook" | "body" | "cta") => {
+    if (role === "hook") return "rgba(245, 158, 11, 0.14)";
+    if (role === "body") return "rgba(56, 189, 248, 0.14)";
+    return "var(--accent-soft)";
+  };
+
+  const playheadPercent = Math.max(0, Math.min(100, (currentTimeMs / totalDurationMs) * 100));
+  const activeByokOk = byokStatus.providers[byokStatus.activeProvider]?.configured;
+  const providerLabel =
+    byokStatus.activeProvider === "gemini"
+      ? "Gemini"
+      : byokStatus.activeProvider === "openai"
+        ? "OpenAI"
+        : "OpenRouter";
+
+  const RAIL_ITEMS: Array<{ id: LeftToolTab; label: string; icon: typeof Layers }> = [
+    { id: "scenes", label: "Scenes", icon: Layers },
+    { id: "footage", label: "Footage", icon: Film },
+    { id: "caption", label: "Caption", icon: Type },
+    { id: "motion", label: "Motion", icon: SlidersHorizontal },
+    { id: "audio", label: "Audio", icon: Volume2 },
+  ];
+
+  const rulerTicks = [0, 0.25, 0.5, 0.75, 1].map((r) => ({
+    ratio: r,
+    label: formatTimecode(totalDurationMs * r).slice(0, 5),
+  }));
+
   return (
     <div
       className="flex h-screen flex-col overflow-hidden"
@@ -346,39 +654,36 @@ export default function StudioView({
         />
       )}
 
-      {/* Studio Top Bar */}
+      {/* Top Studio Bar */}
       <header
-        className="flex h-14 shrink-0 items-center justify-between border-b px-4"
-        style={{
-          backgroundColor: "var(--bg-panel)",
-          borderColor: "var(--border-subtle)",
-        }}
+        className="flex h-[52px] shrink-0 items-center justify-between border-b px-3.5"
+        style={{ backgroundColor: "var(--bg-panel)", borderColor: "var(--border-subtle)" }}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
             onClick={onBackHome}
             className="ui-btn-secondary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium cursor-pointer"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            My Projects
+            Projects
           </button>
 
           <input
             type="text"
             value={project.meta.name}
             onChange={(e) =>
-              setProject((prev) => ({
-                ...prev,
-                meta: { ...prev.meta, name: e.target.value },
-              }))
+              commitProjectChange(
+                (prev) => ({ ...prev, meta: { ...prev.meta, name: e.target.value } }),
+                false
+              )
             }
             aria-label="Nama proyek"
-            className="min-w-0 rounded border border-transparent bg-transparent px-2 py-1 text-sm font-semibold hover:border-[var(--border-subtle)] focus:border-[var(--border-strong)]"
+            className="min-w-0 max-w-[260px] rounded border border-transparent bg-transparent px-2 py-1 text-sm font-semibold hover:border-[var(--border-subtle)] focus:border-[var(--border-strong)]"
           />
 
           <span
-            className="hidden shrink-0 items-center gap-1 text-[11px] sm:inline-flex"
+            className="hidden shrink-0 items-center gap-1 text-[11px] md:inline-flex"
             style={{ color: "var(--text-muted)" }}
           >
             <Check className="h-3 w-3" style={{ color: "var(--success)" }} />
@@ -390,42 +695,57 @@ export default function StudioView({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <div
-            className="hidden items-center gap-1.5 rounded-md px-2.5 py-1 text-xs xl:flex"
-            style={{
-              backgroundColor: "var(--bg-elevated)",
-              border: "1px solid var(--border-subtle)",
-            }}
+        {/* Center Undo / Redo */}
+        <div className="hidden items-center gap-1 sm:flex">
+          <button
+            type="button"
+            disabled={pastHistory.length === 0}
+            onClick={handleUndo}
+            className="ui-btn-secondary flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
+            title="Undo"
+            aria-label="Undo"
           >
-            <Cpu
-              className="h-3.5 w-3.5"
-              style={{ color: webCodecs.avcSupported ? "var(--role-cta)" : "var(--role-hook)" }}
-            />
-            <span>WebCodecs: {webCodecs.avcSupported ? "Siap" : "Cek"}</span>
-          </div>
+            <Undo2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={futureHistory.length === 0}
+            onClick={handleRedo}
+            className="ui-btn-secondary flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
+            title="Redo"
+            aria-label="Redo"
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
 
+        {/* Right Controls */}
+        <div className="flex shrink-0 items-center gap-2">
           <div
-            className="hidden items-center gap-1.5 rounded-md px-2.5 py-1 text-xs xl:flex"
+            className="hidden items-center gap-2 rounded-md px-2.5 py-1 text-[11px] xl:flex"
             style={{
               backgroundColor: "var(--bg-elevated)",
               border: "1px solid var(--border-subtle)",
+              color: "var(--text-secondary)",
             }}
             title={sidecarStatus?.ffmpegVersion || ""}
           >
-            <ShieldCheck
-              className="h-3.5 w-3.5"
-              style={{ color: sidecarStatus?.ffmpegReady ? "var(--role-cta)" : "var(--text-muted)" }}
-            />
-            <span>
-              FFmpeg:{" "}
-              {sidecarStatus?.ffmpegReady
-                ? sidecarStatus.isLgpl
-                  ? "LGPL Siap"
-                  : "Siap"
-                : isTauriRuntime()
-                  ? "Belum Ada"
-                  : "Mode Web"}
+            <span className="inline-flex items-center gap-1">
+              <Cpu
+                className="h-3 w-3"
+                style={{ color: webCodecs.avcSupported ? "var(--success)" : "var(--role-hook)" }}
+              />
+              WebCodecs
+            </span>
+            <span style={{ color: "var(--border-strong)" }}>·</span>
+            <span className="inline-flex items-center gap-1">
+              <ShieldCheck
+                className="h-3 w-3"
+                style={{
+                  color: sidecarStatus?.ffmpegReady ? "var(--success)" : "var(--text-muted)",
+                }}
+              />
+              {sidecarStatus?.ffmpegReady ? "FFmpeg LGPL" : isTauriRuntime() ? "FFmpeg" : "Web"}
             </span>
           </div>
 
@@ -441,146 +761,106 @@ export default function StudioView({
 
           <button
             type="button"
-            disabled={isExporting}
-            onClick={handleExport}
-            className="ui-btn-primary flex h-8 items-center gap-1.5 rounded-md px-3.5 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+            onClick={() => setShowExportModal(true)}
+            className="ui-btn-primary inline-flex h-8 items-center gap-1.5 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
           >
             <Download className="h-3.5 w-3.5" />
-            {isExporting ? `Exporting ${Math.round(exportPct)}%` : "Export MP4 Lokal"}
+            Export MP4
           </button>
         </div>
       </header>
 
-      {/* Main 3-Column Studio Workspace */}
-      <main className="grid min-h-0 flex-1 grid-cols-12">
-        {/* LEFT COLUMN */}
-        <section
-          className="col-span-4 flex min-h-0 flex-col border-r"
+      {/* FLOATING MODULAR BENTO-STUDIO WORKSPACE */}
+      <main className="flex min-h-0 flex-1 gap-2.5 overflow-hidden p-2.5">
+        {/* 1. Far-Left Slim Icon Rail (60px) */}
+        <nav
+          className="flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-xl py-2.5"
           style={{
             backgroundColor: "var(--bg-panel)",
-            borderColor: "var(--border-subtle)",
+            border: "1px solid var(--border-subtle)",
           }}
+          aria-label="Alat Studio"
         >
-          <div className="border-b p-4" style={{ borderColor: "var(--border-subtle)" }}>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-xs font-bold">Bahan Lokal</h2>
-              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                100% di komputer lo
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
+          {RAIL_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const active = leftTab === item.id;
+            return (
               <button
+                key={item.id}
                 type="button"
-                onClick={handlePickFootage}
-                className="ui-btn-secondary flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium cursor-pointer"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                {footagePath ? "Ganti Footage" : "Pilih Footage MP4"}
-              </button>
-
-              <button
-                type="button"
-                onClick={handlePickAudio}
-                disabled={!isTauriRuntime()}
-                className="ui-btn-secondary flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium disabled:opacity-50 cursor-pointer"
-                title={isTauriRuntime() ? "Pilih audio/voiceover lokal" : "Aktif di aplikasi desktop Tauri"}
-              >
-                <Music className="h-3.5 w-3.5" />
-                {audioPath ? "Ganti Audio" : "Pilih Audio Lokal"}
-              </button>
-            </div>
-
-            <div
-              className="mt-2 flex items-center justify-between rounded-md px-3 py-2 text-xs opacity-65"
-              style={{
-                backgroundColor: "var(--bg-elevated)",
-                border: "1px dashed var(--border-strong)",
-              }}
-            >
-              <div className="flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5" style={{ color: "var(--text-muted)" }} />
-                <span style={{ color: "var(--text-secondary)" }}>AI Footage (Google Flow / Seedance)</span>
-              </div>
-              <span
-                className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-                style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-muted)" }}
-              >
-                Coming Soon
-              </span>
-            </div>
-
-            {footageProbe && (
-              <div
-                className="mt-3 rounded-md p-2.5 text-[11px]"
+                onClick={() => setLeftTab(item.id)}
+                className="flex w-[48px] flex-col items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-medium transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: "var(--bg-elevated)",
-                  border: "1px solid var(--border-subtle)",
+                  backgroundColor: active ? "var(--accent-soft)" : "transparent",
+                  color: active ? "var(--accent)" : "var(--text-secondary)",
                 }}
               >
-                <div className="flex items-center justify-between font-mono-num">
-                  <span className="font-semibold">
-                    {footageProbe.width}×{footageProbe.height} · {footageProbe.fps}fps
-                  </span>
-                  <span style={{ color: "var(--text-secondary)" }}>
-                    {formatTimecode(footageProbe.durationMs)} · {footageProbe.videoCodec}
-                  </span>
-                </div>
-                {footageThumbs.length > 0 && (
-                  <div className="mt-2 flex gap-2">
-                    {footageThumbs.map((src, i) => (
-                      <img
-                        key={i}
-                        src={src}
-                        alt={`Thumbnail ${i + 1}`}
-                        className="h-14 w-24 rounded object-cover"
-                        style={{ border: "1px solid var(--border-subtle)" }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+                <Icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* 2. Left Contextual Inspector (276px) */}
+        <aside
+          className="flex w-[276px] shrink-0 flex-col overflow-hidden rounded-xl"
+          style={{
+            backgroundColor: "var(--bg-panel)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <div
+            className="flex h-11 shrink-0 items-center justify-between border-b px-3.5"
+            style={{ borderColor: "var(--border-subtle)" }}
+          >
+            <h2 className="text-xs font-bold">
+              {leftTab === "scenes" && "Scene Cards"}
+              {leftTab === "footage" && "Footage Lokal"}
+              {leftTab === "caption" && "Style & Kinetic Caption"}
+              {leftTab === "motion" && "Motion, Transisi & Overlay"}
+              {leftTab === "audio" && "Suara & Backsound"}
+            </h2>
+            {leftTab === "scenes" && (
+              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                0 token AI
+              </span>
             )}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5" style={{ color: "var(--text-secondary)" }} />
-                <h2 className="text-xs font-bold">Scene Cards</h2>
-              </div>
-              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                Edit mikro = 0 token AI
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {project.scenes.map((scene, index) => {
-                const isActive = currentTimeMs >= scene.startMs && currentTimeMs < scene.endMs;
+          <div className="min-h-0 flex-1 overflow-y-auto p-3.5 space-y-3">
+            {/* TAB: SCENES */}
+            {leftTab === "scenes" &&
+              project.scenes.map((scene, idx) => {
+                const isSelected = activeScene?.id === scene.id;
                 return (
                   <div
                     key={scene.id}
-                    onClick={() => setCurrentTimeMs(scene.startMs)}
+                    onClick={() => {
+                      setSelectedSceneId(scene.id);
+                      setCurrentTimeMs(scene.startMs);
+                    }}
                     className="rounded-lg p-3 transition-colors cursor-pointer"
                     style={{
                       backgroundColor: "var(--bg-elevated)",
-                      border: isActive
+                      border: isSelected
                         ? `1px solid ${roleColor(scene.role)}`
                         : "1px solid var(--border-subtle)",
                     }}
                   >
                     <div className="mb-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide">
                         <span
-                          className="inline-block h-2 w-2 rounded-full"
+                          className="h-2 w-2 rounded-full"
                           style={{ backgroundColor: roleColor(scene.role) }}
                         />
-                        <span className="text-xs font-bold uppercase tracking-wide">
-                          {index + 1}. {scene.role}
-                        </span>
-                      </div>
-                      <span className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                        {formatTimecode(scene.startMs)} – {formatTimecode(scene.endMs)}
+                        {idx + 1}. {scene.role}
+                      </span>
+                      <span
+                        className="font-mono-num text-[11px]"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        {formatTimecode(scene.startMs)}–{formatTimecode(scene.endMs)}
                       </span>
                     </div>
 
@@ -588,184 +868,952 @@ export default function StudioView({
                       value={scene.text}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => handleSceneTextChange(scene.id, e.target.value)}
-                      rows={2}
+                      rows={3}
                       className="ui-input w-full resize-none rounded-md p-2 text-xs leading-relaxed"
                     />
-
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                        Motion:
-                      </span>
-                      <select
-                        value={scene.motion.preset}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) =>
-                          handleSceneMotionChange(scene.id, e.target.value as MotionPreset)
-                        }
-                        className="ui-input rounded px-2 py-1 text-[11px] font-medium"
-                      >
-                        {MOTION_PRESETS.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                   </div>
                 );
               })}
-            </div>
+
+            {/* TAB: FOOTAGE */}
+            {leftTab === "footage" && (
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={handlePickFootage}
+                  className="ui-btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold cursor-pointer"
+                >
+                  <Upload className="h-4 w-4" />
+                  {footagePath ? "Ganti Footage MP4 Lokal" : "Import Footage MP4 Lokal"}
+                </button>
+
+                <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                  Footage diproses langsung dari penyimpanan lokal tanpa upload ke cloud. FFmpeg
+                  otomatis mengekstrak thumbnail kecil untuk AI Multimodal Director.
+                </p>
+
+                {footageProbe ? (
+                  <div
+                    className="rounded-lg p-3 space-y-2.5"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div className="flex items-center justify-between font-mono-num text-[11px]">
+                      <span className="font-semibold">
+                        {footageProbe.width}×{footageProbe.height} · {footageProbe.fps}fps
+                      </span>
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {formatTimecode(footageProbe.durationMs)}
+                      </span>
+                    </div>
+                    {footageThumbs.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {footageThumbs.map((src, i) => (
+                          <img
+                            key={i}
+                            src={src}
+                            alt={`Thumbnail ${i + 1}`}
+                            className="h-20 w-full rounded object-cover"
+                            style={{ border: "1px solid var(--border-subtle)" }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div
+                    className="rounded-lg p-4 text-center text-xs"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px dashed var(--border-strong)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    Belum ada footage lokal dipilih. Preview saat ini menggunakan backdrop studio.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB: CAPTION */}
+            {leftTab === "caption" && (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  {CAPTION_PRESETS.map((preset) => {
+                    const active = project.globalStyle.captionPreset === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() =>
+                          commitProjectChange((prev) => ({
+                            ...prev,
+                            globalStyle: { ...prev.globalStyle, captionPreset: preset.id },
+                          }))
+                        }
+                        className="ui-row flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left cursor-pointer"
+                        style={{
+                          backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                          border: active
+                            ? "1px solid var(--accent)"
+                            : "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        <div>
+                          <div className="text-xs font-semibold">{preset.label}</div>
+                          <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                            {preset.sample}
+                          </div>
+                        </div>
+                        {active && (
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: "var(--accent)" }}
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="border-t pt-3.5" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div className="mb-2 text-xs font-semibold">Warna Sorotan Kata</div>
+                  <div className="flex items-center gap-2">
+                    {ACCENT_SWATCHES.map((hex) => {
+                      const active =
+                        project.globalStyle.accentColor.toUpperCase() === hex.toUpperCase();
+                      return (
+                        <button
+                          key={hex}
+                          type="button"
+                          onClick={() =>
+                            commitProjectChange((prev) => ({
+                              ...prev,
+                              globalStyle: { ...prev.globalStyle, accentColor: hex },
+                            }))
+                          }
+                          className="h-7 w-7 rounded-full cursor-pointer"
+                          style={{
+                            backgroundColor: hex,
+                            border: active
+                              ? "2px solid var(--text-primary)"
+                              : "1px solid var(--border-strong)",
+                          }}
+                          aria-label={`Pilih warna ${hex}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label
+                  className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
+                  style={{
+                    backgroundColor: "var(--bg-elevated)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <span>Progress Bar Atas</span>
+                  <input
+                    type="checkbox"
+                    checked={project.globalStyle.showProgressBar}
+                    onChange={(e) =>
+                      commitProjectChange((prev) => ({
+                        ...prev,
+                        globalStyle: { ...prev.globalStyle, showProgressBar: e.target.checked },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            )}
+
+            {/* TAB: MOTION & OVERLAY */}
+            {leftTab === "motion" && activeScene && (
+              <div className="space-y-4">
+                <div
+                  className="flex items-center justify-between rounded-md px-3 py-2 text-xs"
+                  style={{
+                    backgroundColor: "var(--bg-elevated)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <span style={{ color: "var(--text-secondary)" }}>Scene Aktif:</span>
+                  <span className="font-bold uppercase" style={{ color: roleColor(activeScene.role) }}>
+                    {activeScene.role}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold">Motion Footage</label>
+                  <div className="space-y-1.5">
+                    {MOTION_PRESETS.map((m) => {
+                      const active = activeScene.motion.preset === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => updateActiveSceneMotion(m.id)}
+                          className="ui-row flex w-full items-center justify-between rounded-md px-3 py-2 text-xs font-medium cursor-pointer"
+                          style={{
+                            backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                            border: active
+                              ? "1px solid var(--accent)"
+                              : "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          <span>{m.label}</span>
+                          {active && (
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ backgroundColor: "var(--accent)" }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold">Transisi Masuk</label>
+                  <select
+                    value={activeScene.transitionIn.preset}
+                    onChange={(e) =>
+                      updateActiveSceneTransition(e.target.value as TransitionPreset)
+                    }
+                    className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
+                  >
+                    {TRANSITION_PRESETS.map((tr) => (
+                      <option key={tr.id} value={tr.id}>
+                        {tr.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold">Visual Overlay</label>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {[
+                      { id: "none" as const, label: "Tanpa Overlay" },
+                      { id: "notification_banner" as const, label: "Native Notification Banner" },
+                      { id: "promo_badge" as const, label: "Promo / Callout Badge" },
+                    ].map((ov) => {
+                      const curType = activeScene.overlays[0]?.type ?? "none";
+                      const active = curType === ov.id;
+                      return (
+                        <button
+                          key={ov.id}
+                          type="button"
+                          onClick={() => setActiveSceneOverlay(ov.id)}
+                          className="ui-row flex items-center justify-between rounded-md px-3 py-2 text-left text-xs font-medium cursor-pointer"
+                          style={{
+                            backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                            border: active
+                              ? "1px solid var(--accent)"
+                              : "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          <span>{ov.label}</span>
+                          {active && (
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ backgroundColor: "var(--accent)" }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: AUDIO */}
+            {leftTab === "audio" && (
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-2 text-xs font-semibold">Voiceover Lokal</div>
+                  <button
+                    type="button"
+                    onClick={handlePickAudio}
+                    disabled={!isTauriRuntime()}
+                    className="ui-btn-secondary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  >
+                    <Music className="h-4 w-4" />
+                    {audioPath ? "Ganti File Audio (MP3/WAV)" : "Pilih File Audio / Suara Sendiri"}
+                  </button>
+                  {audioPath && (
+                    <p
+                      className="mt-1.5 truncate font-mono-num text-[11px]"
+                      style={{ color: "var(--text-secondary)" }}
+                      title={audioPath}
+                    >
+                      {audioPath.split(/[\\/]/).pop()}
+                    </p>
+                  )}
+                </div>
+
+                {!audioPath && (
+                  <label
+                    className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <span>Audio Demo saat Export</span>
+                    <input
+                      type="checkbox"
+                      checked={generateDemoAudio}
+                      onChange={(e) => setGenerateDemoAudio(e.target.checked)}
+                    />
+                  </label>
+                )}
+
+                <div className="border-t pt-3.5" style={{ borderColor: "var(--border-subtle)" }}>
+                  <label className="mb-1.5 block text-xs font-semibold">Mood Backsound (BGM)</label>
+                  <select
+                    value={project.globalStyle.bgm.preset}
+                    onChange={(e) =>
+                      commitProjectChange((prev) => ({
+                        ...prev,
+                        globalStyle: {
+                          ...prev.globalStyle,
+                          bgm: { ...prev.globalStyle.bgm, preset: e.target.value },
+                        },
+                      }))
+                    }
+                    className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
+                  >
+                    {BGM_PRESETS.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label
+                    className="mt-2.5 flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <span>Auto-Ducking BGM (-14 dB)</span>
+                    <input
+                      type="checkbox"
+                      checked={project.globalStyle.bgm.autoDucking}
+                      onChange={(e) =>
+                        commitProjectChange((prev) => ({
+                          ...prev,
+                          globalStyle: {
+                            ...prev.globalStyle,
+                            bgm: { ...prev.globalStyle.bgm, autoDucking: e.target.checked },
+                          },
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
-        </section>
+        </aside>
 
-        {/* CENTER COLUMN */}
-        <section
-          className="col-span-5 flex min-h-0 flex-col items-center justify-between p-4"
-          style={{ backgroundColor: "var(--bg-canvas-well)" }}
-        >
-          <div className="flex w-full items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Film className="h-3.5 w-3.5" style={{ color: "var(--text-secondary)" }} />
-              <span className="text-xs font-semibold">Live Preview · 9:16</span>
-            </div>
-
-            <label
-              className="flex items-center gap-1.5 text-xs cursor-pointer"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              <input
-                type="checkbox"
-                checked={showSafeZone}
-                onChange={(e) => setShowSafeZone(e.target.checked)}
-                className="accent-current"
-              />
-              Safe Zone TikTok/Reels
-            </label>
-          </div>
-
-          <div className="flex min-h-0 flex-1 items-center justify-center py-3">
-            <canvas
-              ref={canvasRef}
-              width={1080}
-              height={1920}
-              className="max-h-full w-auto rounded-xl shadow-2xl"
-              style={{
-                aspectRatio: "9 / 16",
-                border: "1px solid var(--border-strong)",
-                backgroundColor: "#000000",
-              }}
-            />
-          </div>
-
+        {/* 3. Center Column: 9:16 Stage + Simplified 2-Row Visual Scene Strip */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5">
+          {/* 9:16 Preview Stage Card */}
           <div
-            className="w-full rounded-lg p-3"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl"
             style={{
               backgroundColor: "var(--bg-panel)",
               border: "1px solid var(--border-subtle)",
             }}
           >
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setIsPlaying((p) => !p)}
-                className="ui-btn-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-md cursor-pointer"
-                aria-label={isPlaying ? "Pause preview" : "Play preview"}
-              >
-                {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              </button>
+            {/* Stage Micro Header */}
+            <div
+              className="flex h-10 shrink-0 items-center justify-between border-b px-3.5 text-xs"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono-num text-[11px] font-semibold">9:16 · 1080×1920</span>
+                {activeScene && (
+                  <span
+                    className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase"
+                    style={{
+                      backgroundColor: roleBgTint(activeScene.role),
+                      color: roleColor(activeScene.role),
+                    }}
+                  >
+                    {activeScene.role}
+                  </span>
+                )}
+              </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  setCurrentTimeMs(0);
-                }}
-                className="ui-btn-secondary flex h-8 w-8 shrink-0 items-center justify-center rounded-md cursor-pointer"
-                title="Ulang dari 00:00"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <label
+                  className="flex items-center gap-1.5 text-[11px] cursor-pointer"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showSafeZone}
+                    onChange={(e) => setShowSafeZone(e.target.checked)}
+                  />
+                  Safe Zone
+                </label>
 
-              <input
-                type="range"
-                min={0}
-                max={totalDurationMs}
-                step={33}
-                value={Math.min(currentTimeMs, totalDurationMs)}
-                onChange={(e) => {
-                  setIsPlaying(false);
-                  setCurrentTimeMs(Number(e.target.value));
+                <button
+                  type="button"
+                  onClick={() => setShowJsonModal(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium cursor-pointer"
+                  style={{ color: "var(--text-muted)" }}
+                  title="Inspeksi project.synk.json"
+                >
+                  <Code2 className="h-3.5 w-3.5" />
+                  JSON
+                </button>
+              </div>
+            </div>
+
+            {/* Recessed Dot-Grid Canvas Stage */}
+            <div className="ui-stage-grid flex min-h-0 flex-1 items-center justify-center p-3">
+              <canvas
+                ref={canvasRef}
+                width={1080}
+                height={1920}
+                className="max-h-full w-auto rounded-xl"
+                style={{
+                  aspectRatio: "9 / 16",
+                  border: "1px solid var(--border-strong)",
+                  boxShadow: "0 14px 36px rgba(0, 0, 0, 0.35)",
+                  backgroundColor: "#000000",
                 }}
-                className="flex-1 cursor-pointer"
               />
+            </div>
 
+            {/* Playback Transport Bar */}
+            <div
+              className="flex h-11 shrink-0 items-center justify-between border-t px-4"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
               <span className="font-mono-num text-xs" style={{ color: "var(--text-secondary)" }}>
-                {formatTimecode(currentTimeMs)} / {formatTimecode(totalDurationMs)}
+                <strong style={{ color: "var(--text-primary)" }}>
+                  {formatTimecode(currentTimeMs)}
+                </strong>{" "}
+                / {formatTimecode(totalDurationMs)}
               </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setCurrentTimeMs(0);
+                  }}
+                  className="ui-btn-secondary flex h-7 w-7 items-center justify-center rounded-full cursor-pointer"
+                  title="Ulang dari 00:00"
+                  aria-label="Ulang dari awal"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPlaying((p) => !p)}
+                  className="ui-btn-primary flex h-8 w-8 items-center justify-center rounded-full cursor-pointer"
+                  aria-label={isPlaying ? "Pause preview" : "Play preview"}
+                >
+                  {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
+                </button>
+              </div>
+
+              <span
+                className="font-mono-num text-[11px]"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {project.meta.fps} FPS
+              </span>
+            </div>
+          </div>
+
+          {/* Simplified 2-Row Visual Scene Strip (Reelio ergonomics without 5-track NLE complexity) */}
+          <div
+            className="flex h-[138px] shrink-0 flex-col overflow-hidden rounded-xl"
+            style={{
+              backgroundColor: "var(--bg-panel)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            {/* Time Ruler */}
+            <div
+              className="flex h-6 shrink-0 items-center justify-between border-b px-3 font-mono-num text-[10px]"
+              style={{
+                borderColor: "var(--border-subtle)",
+                backgroundColor: "var(--bg-elevated)",
+                color: "var(--text-muted)",
+              }}
+            >
+              <div className="flex flex-1 items-center justify-between pr-2 pl-14">
+                {rulerTicks.map((tick, idx) => (
+                  <span key={idx}>{tick.label}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Interactive Scrub Tracks */}
+            <div className="flex min-h-0 flex-1">
+              {/* Row Labels */}
+              <div
+                className="flex w-16 shrink-0 flex-col justify-center gap-2 border-r px-2.5 text-[10px] font-semibold"
+                style={{
+                  borderColor: "var(--border-subtle)",
+                  color: "var(--text-muted)",
+                }}
+              >
+                <div className="flex h-10 items-center">Scene</div>
+                <div className="flex h-8 items-center">Audio</div>
+              </div>
+
+              {/* Track Lanes + Draggable Playhead */}
+              <div className="flex min-w-0 flex-1 overflow-hidden px-2.5 py-2">
+                <div
+                  ref={timelineRef}
+                  onPointerDown={handleTimelinePointerDown}
+                  onPointerMove={handleTimelinePointerMove}
+                  onPointerUp={handleTimelinePointerUp}
+                  className="relative flex min-w-0 flex-1 flex-col justify-center gap-2 select-none cursor-ew-resize"
+                >
+                  {/* Row 1: Scene Blocks */}
+                  <div className="relative flex h-10 w-full gap-1">
+                    {project.scenes.map((scene, idx) => {
+                      const widthPct = ((scene.endMs - scene.startMs) / totalDurationMs) * 100;
+                      const isSelected = activeScene?.id === scene.id;
+                      return (
+                        <div
+                          key={scene.id}
+                          style={{
+                            width: `${widthPct}%`,
+                            backgroundColor: roleBgTint(scene.role),
+                            border: isSelected
+                              ? `1px solid ${roleColor(scene.role)}`
+                              : "1px solid var(--border-subtle)",
+                          }}
+                          className="flex h-full min-w-0 flex-col justify-center overflow-hidden rounded-md px-2"
+                        >
+                          <div
+                            className="flex items-center gap-1 text-[10px] font-bold uppercase"
+                            style={{ color: roleColor(scene.role) }}
+                          >
+                            <span>
+                              {idx + 1}. {scene.role}
+                            </span>
+                          </div>
+                          <div
+                            className="truncate text-[10px]"
+                            style={{ color: "var(--text-secondary)" }}
+                          >
+                            {scene.text}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Row 2: Voiceover Auto-Sync Waveform Bar */}
+                  <div
+                    className="flex h-8 w-full items-center gap-2.5 overflow-hidden rounded-md px-2.5"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <span className="shrink-0 text-[10px] font-semibold">
+                      {audioPath
+                        ? audioPath.split(/[\\/]/).pop()
+                        : "Voiceover · Auto-Sync"}
+                    </span>
+                    <div className="flex h-full min-w-0 flex-1 items-center justify-between gap-[2px] opacity-55">
+                      {WAVEFORM_BARS.slice(0, 44).map((h, i) => (
+                        <span
+                          key={i}
+                          className="w-[2px] rounded-full"
+                          style={{
+                            height: `${Math.max(18, h * 0.58)}%`,
+                            backgroundColor: "var(--accent)",
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <span
+                      className="shrink-0 font-mono-num text-[10px]"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      BGM Ducking
+                    </span>
+                  </div>
+
+                  {/* Vertical Playhead aligned pixel-perfect to track bounds */}
+                  <div
+                    className="pointer-events-none absolute top-0 bottom-0 z-20 w-[2px]"
+                    style={{
+                      left: `${playheadPercent}%`,
+                      backgroundColor: "var(--accent)",
+                    }}
+                  >
+                    <div
+                      className="h-2.5 w-2.5 -translate-x-[4px] rounded-b-sm"
+                      style={{ backgroundColor: "var(--accent)" }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
-        {/* RIGHT COLUMN */}
-        <section
-          className="col-span-3 flex min-h-0 flex-col border-l"
+        {/* 4. Right Panel: AI Video Director + AI Footage (Coming Soon) */}
+        <aside
+          className="flex w-[310px] shrink-0 flex-col overflow-hidden rounded-xl"
           style={{
             backgroundColor: "var(--bg-panel)",
-            borderColor: "var(--border-subtle)",
+            border: "1px solid var(--border-subtle)",
           }}
         >
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-5">
-            <div>
-              <div className="mb-2.5 flex items-center gap-1.5">
-                <Sparkles className="h-3.5 w-3.5" style={{ color: "var(--text-secondary)" }} />
-                <h2 className="text-xs font-bold">Style Caption</h2>
+          {/* Top Segmented Tabs (Inspired by CutCut) */}
+          <div
+            className="grid h-11 shrink-0 grid-cols-2 border-b p-1.5"
+            style={{ borderColor: "var(--border-subtle)" }}
+          >
+            <button
+              type="button"
+              onClick={() => setRightTab("director")}
+              className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer"
+              style={{
+                backgroundColor: rightTab === "director" ? "var(--bg-elevated)" : "transparent",
+                color: rightTab === "director" ? "var(--text-primary)" : "var(--text-muted)",
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+              AI Director
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("ai_footage")}
+              className="inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer"
+              style={{
+                backgroundColor: rightTab === "ai_footage" ? "var(--bg-elevated)" : "transparent",
+                color: rightTab === "ai_footage" ? "var(--text-primary)" : "var(--text-muted)",
+              }}
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+              AI Footage
+            </button>
+          </div>
+
+          {rightTab === "director" ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              {/* Director Status Strip */}
+              <div
+                className="flex items-center justify-between border-b px-3.5 py-2 text-[11px]"
+                style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
+              >
+                <span className="inline-flex items-center gap-1.5 font-medium">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: activeByokOk ? "var(--success)" : "var(--role-hook)" }}
+                  />
+                  {activeByokOk ? `BYOK · ${providerLabel}` : "BYOK Offline"}
+                </span>
+                <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                  0 Credit Burn
+                </span>
               </div>
-              <div className="grid grid-cols-1 gap-1.5">
-                {CAPTION_PRESETS.map((preset) => {
-                  const active = project.globalStyle.captionPreset === preset.id;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() =>
-                        setProject((prev) => ({
-                          ...prev,
-                          globalStyle: { ...prev.globalStyle, captionPreset: preset.id },
-                        }))
-                      }
-                      className="ui-row flex items-center justify-between rounded-md px-3 py-2 text-left text-xs font-medium cursor-pointer"
+
+              {/* Scrollable Suggestions + Activity Feed */}
+              <div className="min-h-0 flex-1 overflow-y-auto p-3.5 space-y-3">
+                <p className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                  Klik saran di bawah untuk menerapkan gaya & pacing secara instan tanpa membakar
+                  token AI, atau ketik arahan revisi.
+                </p>
+
+                {/* 1-Click Apply Suggestion Cards (Inspired by Reelio) */}
+                <div className="space-y-2">
+                  {[
+                    {
+                      key: "hook_punch" as const,
+                      title: "Perkuat Hook 3 Detik Pertama",
+                      desc: "Zoom Punch + Bold Pop + Notifikasi Pop-up",
+                      time: "00:00–00:03",
+                    },
+                    {
+                      key: "clean_edu" as const,
+                      title: "Gaya Edukasi Bersih",
+                      desc: "Clean Minimal + Smooth Ken Burns + Cyan",
+                      time: "Semua scene",
+                    },
+                    {
+                      key: "kinetic_fast" as const,
+                      title: "Pacing Cepat & Nendang",
+                      desc: "Kinetic Punch 2 kata + Shake Impact",
+                      time: "Semua scene",
+                    },
+                  ].map((item) => (
+                    <div
+                      key={item.key}
+                      className="rounded-lg p-3"
                       style={{
-                        backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
-                        border: active
-                          ? "1px solid var(--accent)"
-                          : "1px solid var(--border-subtle)",
+                        backgroundColor: "var(--bg-elevated)",
+                        border: "1px solid var(--border-subtle)",
                       }}
                     >
-                      <span>{preset.label}</span>
-                      {active && (
+                      <div className="text-xs font-bold">{item.title}</div>
+                      <div
+                        className="mt-0.5 text-[11px] leading-snug"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        {item.desc}
+                      </div>
+                      <div className="mt-2.5 flex items-center justify-between">
                         <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: "var(--accent)" }}
-                        />
-                      )}
+                          className="font-mono-num text-[10px]"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {item.time}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => applyDirectorPreset(item.key)}
+                          className="ui-btn-primary rounded px-2.5 py-1 text-[11px] font-semibold cursor-pointer"
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Activity Log */}
+                {directorLog.length > 0 && (
+                  <div className="space-y-2 pt-1">
+                    {directorLog.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className="rounded-lg px-3 py-2 text-xs leading-relaxed"
+                        style={{
+                          backgroundColor:
+                            msg.role === "user" ? "var(--accent-soft)" : "var(--bg-elevated)",
+                          border: "1px solid var(--border-subtle)",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {msg.text}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Quick Chips + Prompt Composer */}
+              <div
+                className="ui-ambient-surface border-t p-3 space-y-2.5"
+                style={{ borderColor: "var(--border-subtle)" }}
+              >
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    {
+                      label: "+ Notif Pop-up",
+                      action: () => {
+                        setActiveSceneOverlay("notification_banner");
+                        pushDirectorMessage("assistant", "Notifikasi pop-up aktif di scene terpilih.");
+                      },
+                    },
+                    {
+                      label: "+ Badge Promo",
+                      action: () => {
+                        setActiveSceneOverlay("promo_badge");
+                        pushDirectorMessage("assistant", "Badge promo aktif di scene terpilih.");
+                      },
+                    },
+                    {
+                      label: "Toggle Safe Zone",
+                      action: () => setShowSafeZone((v) => !v),
+                    },
+                  ].map((chip) => (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      onClick={chip.action}
+                      className="ui-btn-secondary rounded-md px-2 py-1 text-[11px] font-medium cursor-pointer"
+                    >
+                      {chip.label}
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
+
+                <form
+                  onSubmit={handleDirectorPromptSubmit}
+                  className="flex items-end gap-2 rounded-lg p-2"
+                  style={{
+                    backgroundColor: "var(--bg-app)",
+                    border: "1px solid var(--border-strong)",
+                  }}
+                >
+                  <textarea
+                    rows={2}
+                    value={promptInput}
+                    onChange={(e) => setPromptInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleDirectorPromptSubmit(e);
+                      }
+                    }}
+                    placeholder="Ketik arahan... mis. ubah style ke editorial atau tambah notif"
+                    className="min-w-0 flex-1 resize-none bg-transparent text-xs leading-relaxed outline-none"
+                    style={{ color: "var(--text-primary)" }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!promptInput.trim()}
+                    className="ui-btn-primary flex h-7 w-7 shrink-0 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
+                    aria-label="Kirim arahan"
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </button>
+                </form>
               </div>
             </div>
+          ) : (
+            /* TAB 2: AI FOOTAGE (GOOGLE FLOW / SEEDANCE — COMING SOON) */
+            <div className="flex flex-1 flex-col justify-between p-4">
+              <div className="space-y-4 opacity-70">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold">Text-to-Video Footage</span>
+                  <span
+                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      backgroundColor: "var(--accent-soft)",
+                      color: "var(--accent)",
+                    }}
+                  >
+                    <Lock className="h-3 w-3" />
+                    Coming Soon
+                  </span>
+                </div>
 
-            <div className="border-t pt-4" style={{ borderColor: "var(--border-subtle)" }}>
-              <h2 className="mb-2.5 text-xs font-bold">Pengaturan Export MP4</h2>
-
-              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="mb-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  <label className="mb-1.5 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Deskripsi Klip
+                  </label>
+                  <textarea
+                    disabled
+                    rows={4}
+                    value="Close-up sinematik kopi susu dituang perlahan ke gelas es dengan pencahayaan studio hangat..."
+                    className="ui-input w-full resize-none rounded-md p-2.5 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Provider Video AI
+                  </label>
+                  <select disabled className="ui-input w-full rounded-md px-2.5 py-2 text-xs">
+                    <option>Google Flow / Veo</option>
+                    <option>Seedance</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      Rasio
+                    </label>
+                    <input
+                      disabled
+                      value="9:16 Vertikal"
+                      className="ui-input w-full rounded-md px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      Durasi
+                    </label>
+                    <input
+                      disabled
+                      value="5 detik"
+                      className="ui-input w-full rounded-md px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="rounded-lg p-3 text-xs leading-relaxed"
+                style={{
+                  backgroundColor: "var(--bg-elevated)",
+                  border: "1px dashed var(--border-strong)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Rilis v1 fokus pada <strong>footage lokal 100% gratis render</strong>. Integrasi
+                Google Flow & Seedance disiapkan pada Phase 3.
+              </div>
+            </div>
+          )}
+        </aside>
+      </main>
+
+      {/* EXPORT MP4 MODAL (Layar 5 PRD) */}
+      {showExportModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.62)" }}
+          onClick={() => !isExporting && setShowExportModal(false)}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl shadow-2xl"
+            style={{
+              backgroundColor: "var(--bg-panel)",
+              border: "1px solid var(--border-strong)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex items-center justify-between border-b px-5 py-3.5"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
+              <div>
+                <h2 className="text-sm font-bold">Export Video Lokal (MP4)</h2>
+                <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                  Unlimited, tanpa watermark, diproses langsung di perangkat lo.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isExporting}
+                onClick={() => setShowExportModal(false)}
+                className="ui-btn-secondary flex h-7 w-7 items-center justify-center rounded disabled:opacity-40 cursor-pointer"
+                aria-label="Tutup modal export"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
                     Resolusi
                   </label>
                   <select
+                    disabled={isExporting}
                     value={resolution}
                     onChange={(e) => setResolution(e.target.value as "1080p" | "720p")}
-                    className="ui-input w-full rounded-md px-2.5 py-1.5 text-xs font-medium"
+                    className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
                   >
                     <option value="1080p">1080×1920 (Full HD)</option>
                     <option value="720p">720×1280 (Draft Cepat)</option>
@@ -773,13 +1821,14 @@ export default function StudioView({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
                     Frame Rate
                   </label>
                   <select
+                    disabled={isExporting}
                     value={exportFps}
                     onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
-                    className="ui-input w-full rounded-md px-2.5 py-1.5 text-xs font-medium"
+                    className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
                   >
                     <option value={30}>30 FPS</option>
                     <option value={60}>60 FPS</option>
@@ -789,21 +1838,25 @@ export default function StudioView({
 
               {!audioPath && (
                 <label
-                  className="mt-3 flex items-center gap-2 text-xs cursor-pointer"
-                  style={{ color: "var(--text-secondary)" }}
+                  className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
+                  style={{
+                    backgroundColor: "var(--bg-elevated)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
                 >
+                  <span>Sertakan audio demo (tes muxing FFmpeg)</span>
                   <input
                     type="checkbox"
+                    disabled={isExporting}
                     checked={generateDemoAudio}
                     onChange={(e) => setGenerateDemoAudio(e.target.checked)}
                   />
-                  Sertakan audio demo (tes FFmpeg mux)
                 </label>
               )}
 
               {(isExporting || exportMessage) && (
                 <div
-                  className="mt-3 rounded-lg p-3"
+                  className="rounded-lg p-3"
                   style={{
                     backgroundColor: "var(--bg-elevated)",
                     border: "1px solid var(--border-subtle)",
@@ -833,7 +1886,7 @@ export default function StudioView({
 
               {exportError && (
                 <div
-                  className="mt-3 rounded-lg p-3 text-xs"
+                  className="rounded-lg p-3 text-xs"
                   style={{
                     backgroundColor: "var(--danger-soft)",
                     border: "1px solid var(--danger)",
@@ -846,21 +1899,27 @@ export default function StudioView({
 
               {exportResult && (
                 <div
-                  className="mt-3 rounded-lg p-3 text-xs"
+                  className="rounded-lg p-3 text-xs"
                   style={{
-                    backgroundColor: "var(--bg-elevated)",
-                    border: "1px solid var(--role-cta)",
+                    backgroundColor: "var(--success-soft)",
+                    border: "1px solid var(--success)",
                   }}
                 >
-                  <div className="flex items-center gap-1.5 font-semibold" style={{ color: "var(--role-cta)" }}>
+                  <div
+                    className="flex items-center gap-1.5 font-semibold"
+                    style={{ color: "var(--success)" }}
+                  >
                     <CheckCircle2 className="h-4 w-4" />
-                    MP4 Lokal Siap Diputar
+                    Export MP4 Selesai
                   </div>
-                  <p className="mt-1 break-all font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  <p
+                    className="mt-1 break-all font-mono-num text-[11px]"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
                     {exportResult.outputPath}
                   </p>
                   <div
-                    className="mt-1.5 flex items-center justify-between font-mono-num text-[11px]"
+                    className="mt-1 flex items-center justify-between font-mono-num text-[11px]"
                     style={{ color: "var(--text-muted)" }}
                   >
                     <span>{formatBytes(exportResult.fileSizeBytes)}</span>
@@ -878,34 +1937,71 @@ export default function StudioView({
                   )}
                 </div>
               )}
-            </div>
 
-            <div className="border-t pt-4" style={{ borderColor: "var(--border-subtle)" }}>
-              <button
-                type="button"
-                onClick={() => setShowJson((v) => !v)}
-                className="flex w-full items-center justify-between text-xs font-semibold cursor-pointer"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                <span>Inspeksi project.synk.json</span>
-                <span className="font-mono-num text-[11px]">{showJson ? "Sembunyikan" : "Lihat"}</span>
-              </button>
-              {showJson && (
-                <pre
-                  className="mt-2 max-h-56 overflow-auto rounded-md p-2.5 font-mono-num text-[10px] leading-relaxed"
-                  style={{
-                    backgroundColor: "var(--bg-canvas-well)",
-                    border: "1px solid var(--border-subtle)",
-                    color: "var(--text-secondary)",
-                  }}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isExporting}
+                  onClick={() => setShowExportModal(false)}
+                  className="ui-btn-secondary h-9 rounded-md px-3.5 text-xs font-medium disabled:opacity-40 cursor-pointer"
                 >
-                  {JSON.stringify(project, null, 2)}
-                </pre>
-              )}
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  disabled={isExporting}
+                  onClick={handleExport}
+                  className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {isExporting ? `Rendering ${Math.round(exportPct)}%` : "Mulai Export MP4"}
+                </button>
+              </div>
             </div>
           </div>
-        </section>
-      </main>
+        </div>
+      )}
+
+      {/* JSON INSPECTOR MODAL */}
+      {showJsonModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+          onClick={() => setShowJsonModal(false)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl shadow-2xl"
+            style={{
+              backgroundColor: "var(--bg-panel)",
+              border: "1px solid var(--border-strong)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex items-center justify-between border-b px-4 py-3"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
+              <span className="font-mono-num text-xs font-semibold">project.synk.json</span>
+              <button
+                type="button"
+                onClick={() => setShowJsonModal(false)}
+                className="ui-btn-secondary flex h-7 w-7 items-center justify-center rounded cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <pre
+              className="min-h-0 flex-1 overflow-auto p-4 font-mono-num text-[11px] leading-relaxed"
+              style={{
+                backgroundColor: "var(--bg-canvas-well)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {JSON.stringify(project, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

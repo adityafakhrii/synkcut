@@ -118,6 +118,12 @@ export default function App() {
         setView(hash);
         return;
       }
+      if (hash === "studio" || hash === "studio-light") {
+        if (hash === "studio-light") setTheme("light");
+        setActiveProject(createBlankProjectForFormat("ad_promo"));
+        setView("studio");
+        return;
+      }
 
       const hasAnyKey = Object.values(status.providers).some((p) => p.configured);
       if (!status.onboardingCompleted && !hasAnyKey) {
@@ -184,6 +190,7 @@ export default function App() {
       <StudioView
         key={activeProject.meta.id}
         initialProject={activeProject}
+        byokStatus={byokStatus}
         theme={theme}
         onToggleTheme={toggleTheme}
         onBackHome={() => {

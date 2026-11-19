@@ -49,10 +49,10 @@ function drawProceduralBackdrop(
   isPosterThumbnail = false
 ) {
   const formatPalettes: Record<SynkcutProject["meta"]["format"], [string, string, string]> = {
-    ad_promo: ["#12151e", "#1e1b29", project.globalStyle.accentColor || "#bef264"],
-    education: ["#0c1522", "#102338", project.globalStyle.accentColor || "#38bdf8"],
-    storytelling: ["#191412", "#261c17", project.globalStyle.accentColor || "#f59e0b"],
-    review: ["#0c1816", "#112822", project.globalStyle.accentColor || "#34d399"],
+    ad_promo: ["#0a1410", "#11241c", project.globalStyle.accentColor || "#38e59d"],
+    education: ["#09131d", "#0e2233", project.globalStyle.accentColor || "#38bdf8"],
+    storytelling: ["#171310", "#241b15", project.globalStyle.accentColor || "#f59e0b"],
+    review: ["#091714", "#0f2720", project.globalStyle.accentColor || "#38e59d"],
   };
   const roleFallback: Record<SceneItem["role"], [string, string, string]> = {
     hook: ["#13161f", "#1e1b2e", "#f59e0b"],

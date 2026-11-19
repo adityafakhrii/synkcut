@@ -96,7 +96,7 @@ export function createSampleProject(): SynkcutProject {
     },
     globalStyle: {
       captionPreset: "bold_pop",
-      accentColor: "#BEF264",
+      accentColor: "#38E59D",
       showProgressBar: true,
       bgm: {
         preset: "upbeat_promo",

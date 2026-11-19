@@ -2,50 +2,54 @@
 
 :root {
   color-scheme: light;
-  --bg-app: #f5f6f8;
+  --bg-app: #f3f7f5;
   --bg-panel: #ffffff;
-  --bg-elevated: #eef0f4;
-  --bg-hover: #e5e8ef;
-  --bg-canvas-well: #e6e9ef;
-  --border-subtle: #dcdfe6;
-  --border-strong: #c2c7d2;
-  --text-primary: #111318;
-  --text-secondary: #4b5362;
-  --text-muted: #667082;
-  --accent: #0f766e;
-  --accent-hover: #0d645d;
+  --bg-elevated: #e8f0ec;
+  --bg-hover: #dce8e2;
+  --bg-canvas-well: #e4ece8;
+  --border-subtle: #d1dfd8;
+  --border-strong: #b6cbc1;
+  --text-primary: #0b1712;
+  --text-secondary: #435c52;
+  --text-muted: #5d786d;
+  --accent: #0e9466;
+  --accent-hover: #0b7d55;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(15, 118, 110, 0.1);
+  --accent-soft: rgba(14, 148, 102, 0.11);
+  --ambient-wash: rgba(14, 148, 102, 0.08);
+  --stage-dot: rgba(11, 23, 18, 0.09);
   --role-hook: #d97706;
   --role-body: #0284c7;
-  --role-cta: #059669;
+  --role-cta: #0e9466;
   --success: #059669;
-  --success-soft: rgba(5, 150, 105, 0.1);
+  --success-soft: rgba(5, 150, 105, 0.11);
   --danger: #dc2626;
   --danger-soft: rgba(220, 38, 38, 0.1);
 }
 
 .dark {
   color-scheme: dark;
-  --bg-app: #0d0f12;
-  --bg-panel: #14171d;
-  --bg-elevated: #1c2028;
-  --bg-hover: #232833;
-  --bg-canvas-well: #090b0e;
-  --border-subtle: #242934;
-  --border-strong: #353d4d;
-  --text-primary: #f1f3f7;
-  --text-secondary: #9aa3b2;
-  --text-muted: #768092;
-  --accent: #bef264;
-  --accent-hover: #a3e635;
-  --accent-fg: #0d0f12;
-  --accent-soft: rgba(190, 242, 100, 0.12);
+  --bg-app: #0a120f;
+  --bg-panel: #0f1a16;
+  --bg-elevated: #15241e;
+  --bg-hover: #1c3028;
+  --bg-canvas-well: #060b09;
+  --border-subtle: #1e332b;
+  --border-strong: #2c4a3e;
+  --text-primary: #eef7f3;
+  --text-secondary: #9ab5aa;
+  --text-muted: #6b877c;
+  --accent: #38e59d;
+  --accent-hover: #2cd18d;
+  --accent-fg: #06140e;
+  --accent-soft: rgba(56, 229, 157, 0.12);
+  --ambient-wash: rgba(34, 154, 114, 0.16);
+  --stage-dot: rgba(238, 247, 243, 0.08);
   --role-hook: #f59e0b;
   --role-body: #38bdf8;
-  --role-cta: #34d399;
-  --success: #34d399;
-  --success-soft: rgba(52, 211, 153, 0.12);
+  --role-cta: #38e59d;
+  --success: #38e59d;
+  --success-soft: rgba(56, 229, 157, 0.12);
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.12);
 }
@@ -94,6 +98,22 @@ textarea:focus-visible {
 .font-mono-num {
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/* Restrained atmospheric wash for welcome/onboarding/prompt focus only */
+.ui-ambient-surface {
+  background-image: radial-gradient(
+    ellipse 70% 45% at 50% 0%,
+    var(--ambient-wash),
+    transparent 72%
+  );
+}
+
+/* Subtle studio viewport dot grid (inspired by Reelio / Figma canvas) */
+.ui-stage-grid {
+  background-color: var(--bg-canvas-well);
+  background-image: radial-gradient(var(--stage-dot) 1px, transparent 1px);
+  background-size: 16px 16px;
 }
 
 /* Native-feeling utility interaction surfaces */

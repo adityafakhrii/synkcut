@@ -70,7 +70,7 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         .to_string();
     let accent_color = val["globalStyle"]["accentColor"]
         .as_str()
-        .unwrap_or("#BEF264")
+        .unwrap_or("#38E59D")
         .to_string();
 
     let scenes = val["scenes"].as_array();

@@ -42,7 +42,7 @@ export const BUILTIN_SAMPLES: SampleTemplate[] = [
         },
         globalStyle: {
           captionPreset: "bold_pop",
-          accentColor: "#BEF264",
+          accentColor: "#38E59D",
           showProgressBar: true,
           bgm: { preset: "upbeat_promo", volume: 0.25, autoDucking: true },
           safeZone: "tiktok_reels",

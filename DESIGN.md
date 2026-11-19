@@ -4,8 +4,12 @@
 - **Mode:** `Operate` (Precision Native Desktop Video Studio)
 - **Color Direction ("Obsidian Pine & Emerald-Mint"):** Inspired by deep atmospheric emerald-black studio aesthetics—replacing cold generic blue-gray/purple AI palettes with rich pine-tinted obsidian surfaces and a crisp emerald-mint primary accent.
 - **Layout Architecture:** True desktop application shell — **not** a centered marketing/SaaS web page.
-  - **Persistent Left Workspace Sidebar (`228px`):** Brand mark, primary `+ Buat Konten Baru` action, workspace navigation (`My Projects`, `Sample Bawaan`, `Komunitas · Phase 2`, `Pengaturan AI`), and pinned footer with live BYOK provider status + Dark/Light Studio segmented switch.
-  - **Full-Bleed Contextual Workspace:** Sticky `56px` top toolbar (page title, search, format filter pills, Grid/List toggle) above a visual **9:16 Poster Grid** (default) or collision-free precision table.
+  - **Beranda (`My Projects` & `Sample Bawaan`):** Persistent Left Workspace Sidebar (`228px`) + sticky `56px` contextual toolbar + visual **9:16 Poster Grid** (default) or collision-free precision list.
+  - **Studio Editor (Modular Rounded Bento-Studio — Inspired by CutCut & Reelio):**
+    - Floating rounded panels (`12px` radius) separated by crisp `10px` studio gaps on `--bg-app`.
+    - **Slim Far-Left Icon Rail (`60px`):** `Scenes`, `Footage`, `Caption`, `Motion`, `Audio` — keeps the adjacent **Left Contextual Inspector (`276px`)** clean and uncluttered.
+    - **Center Stage + Simplified 2-Row Visual Scene Strip:** 9:16 Canvas preview over subtle dot-grid matte surface, paired directly below with a **2-Row Visual Scene Strip** (Row 1: proportional `Hook / Body / CTA` blocks + scrubbable playhead; Row 2: `Voiceover Auto-Sync` waveform bar) — retaining pro editor ergonomics without 5-track NLE complexity.
+    - **Right Panel (`310px`) — `AI Video Director`:** Segmented tabs **`AI Director`** *(1-click `Apply` suggestion cards, Quick Action Chips, prompt composer)* & **`AI Footage`** *(Google Flow / Seedance — `Coming Soon`)*, while final rendering lives cleanly in the top-right **`Export MP4`** modal.
   - **Visual-First Identity:** Every saved project and sample renders a **real 9:16 miniature Canvas poster** via `renderProjectFrame()` so typography style, overlays, and color accents are immediately visible.
 - **Dual Theme Parity:**
   - **Dark Studio (Default — Obsidian Pine):** Deep forest-black surfaces (`#060b09` canvas well, `#0a120f` app shell, `#0f1a16` panels, `#15241e` controls) paired with crisp sage-white ink (`#eef7f3`) and signature **Emerald-Mint (`#38e59d`)** accent. Calm behind 9:16 video footage while unmistakably distinctive.

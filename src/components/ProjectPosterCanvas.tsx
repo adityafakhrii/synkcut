@@ -47,7 +47,7 @@ function buildPreviewProjectFromSummary(summary: ProjectSummary): SynkcutProject
     },
     globalStyle: {
       captionPreset: summary.captionPreset,
-      accentColor: summary.accentColor || "#BEF264",
+      accentColor: summary.accentColor || "#38E59D",
       showProgressBar: true,
       bgm: { preset: "upbeat_promo", volume: 0.25, autoDucking: true },
       safeZone: "none",
