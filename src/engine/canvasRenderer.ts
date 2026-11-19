@@ -105,7 +105,7 @@ function drawProceduralBackdrop(
   ctx.fillText(`SCENE: ${scene.role.toUpperCase()}`, width / 2, cardY + cardH * 0.42);
 
   ctx.fillStyle = "rgba(241, 243, 247, 0.78)";
-  ctx.font = '500 32px "Instrument Sans", sans-serif';
+  ctx.font = '500 32px "IBM Plex Sans", sans-serif';
   ctx.fillText("Mode Backdrop Demo (Pilih Footage MP4 Lokal)", width / 2, cardY + cardH * 0.56);
   ctx.restore();
 }
@@ -227,18 +227,18 @@ function drawOverlay(
     ctx.fill();
 
     ctx.fillStyle = "#0d0f12";
-    ctx.font = '800 36px "Instrument Sans", sans-serif';
+    ctx.font = '800 36px "IBM Plex Sans", sans-serif';
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("S", x + 70, y + 76);
 
     ctx.textAlign = "left";
     ctx.fillStyle = "rgba(241, 243, 247, 0.68)";
-    ctx.font = '600 24px "Instrument Sans", sans-serif';
+    ctx.font = '600 24px "IBM Plex Sans", sans-serif';
     ctx.fillText(overlay.title || "Notifikasi · Baru saja", x + 136, y + 54);
 
     ctx.fillStyle = "#f8fafc";
-    ctx.font = '700 30px "Instrument Sans", sans-serif';
+    ctx.font = '700 30px "IBM Plex Sans", sans-serif';
     const maxChars = 34;
     const label =
       overlay.text.length > maxChars ? `${overlay.text.slice(0, maxChars - 1)}…` : overlay.text;
@@ -298,7 +298,7 @@ function drawKineticCaptions(
   const fontFamily =
     preset === "luxury_editorial"
       ? 'Georgia, "Times New Roman", serif'
-      : '"Instrument Sans", sans-serif';
+      : '"IBM Plex Sans", sans-serif';
   const fontWeight = preset === "luxury_editorial" ? "600" : "800";
 
   ctx.save();

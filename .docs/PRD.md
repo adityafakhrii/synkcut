@@ -112,7 +112,7 @@ Seluruh antarmuka Synkcut wajib dirancang mengikuti prinsip **Impeccable (`https
 - **Dual Theme:** **Dark Studio** *(default — permukaan arang bersih untuk fokus pada preview video)* + **Light Studio** *(opsi ganti tema instan yang sama matangnya, kontras terkalibrasi, bukan sekadar inversi warna)*.
 - **Bahasa UI:** Full Bahasa Indonesia natural + istilah editing standar tetap Bahasa Inggris (`Footage`, `Hook`, `CTA`, `Scene`, `Motion`, `Transition`, `SFX`, `Backsound`, `Voiceover`, `Safe Zone`, `Preset`, `Export`, `Render`).
 - **Kode Warna Peran Scene (Fungsional):** `Hook` (Amber) · `Body` (Cyan/Biru) · `CTA / Payoff` (Emerald).
-- **Tipografi:** Sans-serif modern berkarakter (`Instrument Sans`) + monospace (`JetBrains Mono`) dengan *tabular numerals* khusus untuk durasi & timecode (`00:03.2`).
+- **Tipografi:** Sans-serif modern berkarakter presisi (`IBM Plex Sans`) + monospace (`JetBrains Mono`) dengan *tabular numerals* khusus untuk durasi & timecode (`00:03.2`).
 
 ### Peta 5 Layar Utama v1
 1. **Onboarding BYOK:** Pilih provider (Gemini / OpenAI / OpenRouter) -> panduan mini 3 langkah -> input API key -> **"Tes Koneksi"**.
