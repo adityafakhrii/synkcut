@@ -30,8 +30,9 @@ import {
 import OnboardingView from "./components/OnboardingView";
 import ProjectsHomeView from "./components/ProjectsHomeView";
 import StudioView from "./components/StudioView";
+import WizardView from "./components/WizardView";
 
-type AppView = "loading" | "onboarding" | "projects" | "samples" | "settings" | "studio";
+type AppView = "loading" | "onboarding" | "projects" | "samples" | "settings" | "wizard" | "studio";
 
 const THEME_STORAGE_KEY = "synkcut_theme_v1";
 const FORMAT_ORDER: ContentFormat[] = ["ad_promo", "education", "storytelling", "review"];
@@ -66,6 +67,7 @@ function SynkcutMark() {
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(loadInitialTheme);
   const [view, setView] = useState<AppView>("loading");
+  const [wizardFormat, setWizardFormat] = useState<ContentFormat>("ad_promo");
   const [showNewPicker, setShowNewPicker] = useState(false);
   const [byokStatus, setByokStatus] = useState<ByokStatus>({
     activeProvider: "gemini",
@@ -118,6 +120,10 @@ export default function App() {
         setView(hash);
         return;
       }
+      if (hash === "wizard") {
+        setView("wizard");
+        return;
+      }
       if (hash === "studio" || hash === "studio-light") {
         if (hash === "studio-light") setTheme("light");
         setActiveProject(createBlankProjectForFormat("ad_promo"));
@@ -142,12 +148,25 @@ export default function App() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
-  async function handleCreateFormat(format: ContentFormat) {
+  async function handleStartWizard(format: ContentFormat) {
+    setShowNewPicker(false);
+    setWizardFormat(format);
+    setView("wizard");
+  }
+
+  async function handleCreateBlankFormat(format: ContentFormat) {
     setShowNewPicker(false);
     const fresh = createBlankProjectForFormat(format);
     await saveProject(fresh);
     await refreshProjects();
     setActiveProject(fresh);
+    setView("studio");
+  }
+
+  async function handleWizardProjectCreated(project: SynkcutProject) {
+    await saveProject(project);
+    await refreshProjects();
+    setActiveProject(project);
     setView("studio");
   }
 
@@ -452,6 +471,17 @@ export default function App() {
           />
         )}
 
+        {view === "wizard" && (
+          <WizardView
+            initialFormat={wizardFormat}
+            byokStatus={byokStatus}
+            onCancel={() => setView("projects")}
+            onOpenSettings={() => setView("settings")}
+            onSkipToBlank={handleCreateBlankFormat}
+            onProjectCreated={handleWizardProjectCreated}
+          />
+        )}
+
         {view === "settings" && (
           <OnboardingView
             mode="settings"
@@ -504,7 +534,7 @@ export default function App() {
                   <button
                     key={fmt}
                     type="button"
-                    onClick={() => handleCreateFormat(fmt)}
+                    onClick={() => handleStartWizard(fmt)}
                     className="ui-row flex w-full items-center justify-between gap-4 px-5 py-3.5 text-left cursor-pointer"
                     style={{
                       borderBottom:

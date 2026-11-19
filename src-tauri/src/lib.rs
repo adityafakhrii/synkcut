@@ -1,3 +1,5 @@
+mod ai;
+mod audio;
 mod byok;
 mod projects;
 
@@ -426,7 +428,12 @@ pub fn run() {
             projects::save_project,
             projects::duplicate_project,
             projects::rename_project,
-            projects::delete_project
+            projects::delete_project,
+            ai::ai_generate_script,
+            ai::ai_assemble_project,
+            ai::ai_copilot_patch,
+            audio::generate_tts_audio,
+            audio::process_user_audio
         ])
         .run(tauri::generate_context!())
         .expect("error while running Synkcut Tauri application");

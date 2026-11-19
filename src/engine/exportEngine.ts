@@ -9,7 +9,7 @@ import {
 import type { SynkcutProject } from "../types/scene";
 import { renderProjectFrame } from "./canvasRenderer";
 import { getProjectDurationMs } from "./sampleProject";
-import { isTauriRuntime, muxExportMp4, type ExportResult } from "../lib/tauriBridge";
+import { isTauriRuntime, muxExportMp4, toAssetUrl, type ExportResult } from "../lib/tauriBridge";
 
 export interface ExportOptions {
   resolution: "1080p" | "720p";
@@ -37,9 +37,32 @@ export async function checkWebCodecsSupport(): Promise<{
   }
 }
 
+async function loadHiddenVideo(localPath: string): Promise<HTMLVideoElement | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous";
+
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok ? video : null);
+    };
+
+    video.addEventListener("loadeddata", () => finish(true), { once: true });
+    video.addEventListener("error", () => finish(false), { once: true });
+    video.src = toAssetUrl(localPath);
+    video.load();
+    window.setTimeout(() => finish(video.readyState >= 2), 4000);
+  });
+}
+
 async function seekVideoDeterministic(video: HTMLVideoElement, targetSec: number): Promise<void> {
   if (!Number.isFinite(video.duration) || video.duration <= 0) return;
-  const clampedSec = targetSec % video.duration;
+  const clampedSec = Math.max(0, targetSec % video.duration);
   if (Math.abs(video.currentTime - clampedSec) < 0.008) return;
 
   await new Promise<void>((resolve) => {
@@ -52,7 +75,6 @@ async function seekVideoDeterministic(video: HTMLVideoElement, targetSec: number
     };
     video.addEventListener("seeked", done, { once: true });
     video.currentTime = clampedSec;
-    // Safety timeout in case WebView2 skips a seeked event for identical frames
     window.setTimeout(done, 150);
   });
 }
@@ -69,6 +91,18 @@ export async function exportProjectToMp4(
   const totalFrames = Math.max(1, Math.ceil(durationSec * fps));
 
   options.onProgress?.(2, "init", `Menyiapkan canvas ${width}×${height} @ ${fps}fps...`);
+
+  // Preload distinct local video clips assigned across scenes (supports multi-clip AI Director output!)
+  const uniquePaths = Array.from(
+    new Set(project.scenes.map((s) => s.media.path).filter((p): p is string => Boolean(p)))
+  );
+  const videoMap = new Map<string, HTMLVideoElement>();
+  for (const path of uniquePaths) {
+    const loaded = await loadHiddenVideo(path);
+    if (loaded) {
+      videoMap.set(path, loaded);
+    }
+  }
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -92,7 +126,6 @@ export async function exportProjectToMp4(
   output.addVideoTrack(videoSource, { frameRate: fps });
   await output.start();
 
-  // Pause live playback if a local video element is attached
   if (options.videoElement && !options.videoElement.paused) {
     options.videoElement.pause();
   }
@@ -101,12 +134,23 @@ export async function exportProjectToMp4(
     const timeSec = frame / fps;
     const timeMs = timeSec * 1000;
 
-    if (options.videoElement && options.videoElement.readyState >= 2) {
-      await seekVideoDeterministic(options.videoElement, timeSec);
+    const activeScene =
+      project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
+      project.scenes[project.scenes.length - 1];
+
+    const sceneVideo =
+      (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
+      options.videoElement ??
+      null;
+
+    if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
+      const localSceneSec =
+        Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
+      await seekVideoDeterministic(sceneVideo, localSceneSec);
     }
 
     renderProjectFrame(ctx, project, timeMs, {
-      videoElement: options.videoElement,
+      videoElement: sceneVideo,
       showSafeZone: false,
     });
 
@@ -126,6 +170,12 @@ export async function exportProjectToMp4(
 
   videoSource.close();
   await output.finalize();
+
+  // Cleanup offscreen video elements
+  for (const v of videoMap.values()) {
+    v.src = "";
+    v.load();
+  }
 
   const buffer = target.buffer;
   if (!buffer) {
@@ -151,7 +201,6 @@ export async function exportProjectToMp4(
     return result;
   }
 
-  // Fallback for pure browser preview mode
   const blob = new Blob([videoBytes], { type: "video/mp4" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

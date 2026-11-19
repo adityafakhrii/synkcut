@@ -77,6 +77,17 @@ export async function checkSidecars(): Promise<SidecarStatus> {
   return invoke<SidecarStatus>("check_sidecars");
 }
 
+export async function pickLocalVideos(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  const selected = await open({
+    multiple: true,
+    title: "Pilih Satu atau Beberapa Footage Video Lokal",
+    filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "webm"] }],
+  });
+  if (Array.isArray(selected)) return selected;
+  return typeof selected === "string" ? [selected] : [];
+}
+
 export async function pickLocalVideo(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const selected = await open({
@@ -366,4 +377,184 @@ export async function deleteProject(projectId: string): Promise<void> {
     return;
   }
   await invoke("delete_project", { projectId });
+}
+
+/* ---------------- Milestone 2: AI Script, Audio Auto-Sync & Multimodal Director ---------------- */
+
+export interface HookOption {
+  id: string;
+  angle: string;
+  text: string;
+}
+
+export interface GeneratedScriptResponse {
+  projectTitle: string;
+  hooks: HookOption[];
+  bodySegments: string[];
+  cta: string;
+  providerUsed: string;
+}
+
+export interface ProcessedAudioResult {
+  audioPath: string;
+  durationMs: number;
+  transcript: string;
+  words: Array<{ word: string; startMs: number; endMs: number }>;
+  providerUsed: string;
+  silenceTrimmed: boolean;
+}
+
+export interface FootageInputItem {
+  path: string;
+  fileName: string;
+  durationMs: number;
+  thumbnails: string[];
+}
+
+export interface AssembleProjectRequest {
+  projectTitle: string;
+  format: string;
+  hookText: string;
+  bodySegments: string[];
+  ctaText: string;
+  audioPath: string | null;
+  audioSource: "tts" | "recorded" | "demo";
+  trimSilence: boolean;
+  durationMs: number;
+  words: Array<{ word: string; startMs: number; endMs: number }>;
+  footage: FootageInputItem[];
+  captionPreset: string;
+  accentColor: string;
+  motionPreset: string;
+  transitionPreset: string;
+  overlayMode: "auto" | "notification_banner" | "promo_badge" | "none";
+  bgmPreset: string;
+  autoDucking: boolean;
+  autoSfx: boolean;
+}
+
+export interface CopilotPatchResponse {
+  project: SynkcutProject;
+  reply: string;
+  providerUsed: string;
+}
+
+export async function aiGenerateScript(req: {
+  topic: string;
+  format: string;
+  tone: string;
+  targetDurationSec: number;
+}): Promise<GeneratedScriptResponse> {
+  if (!isTauriRuntime()) {
+    return {
+      projectTitle: req.topic.slice(0, 32) || "Konten Baru",
+      hooks: [
+        {
+          id: "h1",
+          angle: "Pain Point",
+          text: `Masih bingung cari cara cepat untuk ${req.topic}?`,
+        },
+        {
+          id: "h2",
+          angle: "Curiosity",
+          text: `Ternyata ini rahasia di balik ${req.topic} yang jarang orang tahu!`,
+        },
+        {
+          id: "h3",
+          angle: "Bold Claim",
+          text: `Stop cara lama! ${req.topic} sekarang bisa 10x lebih cepat.`,
+        },
+      ],
+      bodySegments: [
+        `Fokus pada keunggulan utama ${req.topic} dengan visual dekat yang langsung jelas.`,
+        "Bandingkan hasil sebelum dan sesudah dalam tiga detik agar audiens langsung percaya.",
+      ],
+      cta: "Coba sekarang juga sebelum promo minggu ini berakhir!",
+      providerUsed: "demo (browser preview)",
+    };
+  }
+  return invoke<GeneratedScriptResponse>("ai_generate_script", { req });
+}
+
+export async function generateTtsAudio(params: {
+  text: string;
+  voiceName: string;
+  tone: string;
+  engine: "gemini" | "openai" | "windows_offline";
+}): Promise<ProcessedAudioResult> {
+  return invoke<ProcessedAudioResult>("generate_tts_audio", params);
+}
+
+export async function processUserAudio(params: {
+  inputPath?: string | null;
+  recordedBytes?: Uint8Array | null;
+  recordedExt?: string | null;
+  trimSilence: boolean;
+  knownScript?: string | null;
+}): Promise<ProcessedAudioResult> {
+  return invoke<ProcessedAudioResult>("process_user_audio", {
+    inputPath: params.inputPath ?? null,
+    recordedBytes: params.recordedBytes ? Array.from(params.recordedBytes) : null,
+    recordedExt: params.recordedExt ?? null,
+    trimSilence: params.trimSilence,
+    knownScript: params.knownScript ?? null,
+  });
+}
+
+export async function aiAssembleProject(req: AssembleProjectRequest): Promise<SynkcutProject> {
+  if (!isTauriRuntime()) {
+    const now = new Date().toISOString();
+    const totalMs = Math.max(6000, req.durationMs || 9000);
+    const segments = [
+      { role: "hook" as const, text: req.hookText },
+      ...req.bodySegments.map((t) => ({ role: "body" as const, text: t })),
+      { role: "cta" as const, text: req.ctaText },
+    ];
+    const perSeg = Math.round(totalMs / segments.length);
+    return {
+      version: "1.0",
+      meta: {
+        id: `proj_${Date.now()}`,
+        name: req.projectTitle || "Konten Baru",
+        format: req.format as SynkcutProject["meta"]["format"],
+        aspectRatio: "9:16",
+        fps: 30,
+        createdAt: now,
+        updatedAt: now,
+      },
+      globalStyle: {
+        captionPreset: req.captionPreset as SynkcutProject["globalStyle"]["captionPreset"],
+        accentColor: req.accentColor,
+        showProgressBar: true,
+        bgm: { preset: req.bgmPreset, volume: 0.24, autoDucking: req.autoDucking },
+        safeZone: "tiktok_reels",
+      },
+      voiceover: {
+        source: req.audioSource,
+        audioPath: req.audioPath,
+        trimSilence: req.trimSilence,
+        words: req.words,
+      },
+      scenes: segments.map((s, i) => ({
+        id: `scene_${i + 1}`,
+        role: s.role,
+        startMs: i * perSeg,
+        endMs: i === segments.length - 1 ? totalMs : (i + 1) * perSeg,
+        text: s.text,
+        media: { path: req.footage[i % Math.max(1, req.footage.length)]?.path ?? null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: req.motionPreset as SynkcutProject["scenes"][number]["motion"]["preset"], intensity: 0.78 },
+        transitionIn: { preset: (i === 0 ? "hard_cut" : req.transitionPreset) as SynkcutProject["scenes"][number]["transitionIn"]["preset"], durationMs: i === 0 ? 0 : 240 },
+        sfx: req.autoSfx ? [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.65 }] : [],
+        overlays: [],
+      })),
+    };
+  }
+  return invoke<SynkcutProject>("ai_assemble_project", { req });
+}
+
+export async function aiCopilotPatch(
+  project: SynkcutProject,
+  instruction: string
+): Promise<CopilotPatchResponse> {
+  return invoke<CopilotPatchResponse>("ai_copilot_patch", { project, instruction });
 }

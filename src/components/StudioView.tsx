@@ -10,6 +10,7 @@ import {
   Film,
   FolderOpen,
   Layers,
+  Loader2,
   Lock,
   Moon,
   Music,
@@ -40,6 +41,7 @@ import { getProjectDurationMs, rebuildWordsFromScenes } from "../engine/samplePr
 import { renderProjectFrame } from "../engine/canvasRenderer";
 import { checkWebCodecsSupport, exportProjectToMp4 } from "../engine/exportEngine";
 import {
+  aiCopilotPatch,
   checkSidecars,
   extractThumbnails,
   isTauriRuntime,
@@ -156,8 +158,9 @@ export default function StudioView({
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // AI Director local interactive feed
+  // AI Director interactive feed
   const [promptInput, setPromptInput] = useState("");
+  const [isPatchingAi, setIsPatchingAi] = useState(false);
   const [directorLog, setDirectorLog] = useState<DirectorLogItem[]>([]);
 
   // Diagnostics
@@ -184,6 +187,7 @@ export default function StudioView({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastFrameTsRef = useRef<number>(0);
@@ -265,6 +269,16 @@ export default function StudioView({
     };
   }, []);
 
+  const currentPlayScene = useMemo(() => {
+    return (
+      project.scenes.find((s) => currentTimeMs >= s.startMs && currentTimeMs < s.endMs) ??
+      project.scenes[project.scenes.length - 1] ??
+      null
+    );
+  }, [project.scenes, currentTimeMs]);
+
+  const activeMediaPath = currentPlayScene?.media.path || footagePath;
+
   // Render preview frame
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -273,29 +287,45 @@ export default function StudioView({
     if (!ctx) return;
 
     const videoEl = videoRef.current;
-    if (videoEl && footagePath && !isPlaying && videoEl.readyState >= 2 && videoEl.duration > 0) {
-      const targetSec = (currentTimeMs / 1000) % videoEl.duration;
+    if (videoEl && activeMediaPath && !isPlaying && videoEl.readyState >= 2 && videoEl.duration > 0) {
+      const localSec =
+        Math.max(
+          0,
+          currentTimeMs -
+            (currentPlayScene?.startMs ?? 0) +
+            (currentPlayScene?.media.trimStartMs ?? 0)
+        ) / 1000;
+      const targetSec = localSec % videoEl.duration;
       if (Math.abs(videoEl.currentTime - targetSec) > 0.04) {
         videoEl.currentTime = targetSec;
       }
     }
 
     renderProjectFrame(ctx, project, currentTimeMs, {
-      videoElement: footagePath ? videoEl : null,
+      videoElement: activeMediaPath ? videoEl : null,
       showSafeZone,
     });
-  }, [project, currentTimeMs, showSafeZone, footagePath, isPlaying]);
+  }, [project, currentTimeMs, showSafeZone, activeMediaPath, isPlaying, currentPlayScene]);
 
-  // Playback loop
+  // Playback loop + real synced <audio> voiceover playback
   useEffect(() => {
+    const audioEl = audioRef.current;
     if (!isPlaying) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       videoRef.current?.pause();
+      audioEl?.pause();
       return;
     }
 
-    if (videoRef.current && footagePath) {
+    if (videoRef.current && activeMediaPath) {
       videoRef.current.play().catch(() => {});
+    }
+    if (audioEl && audioPath) {
+      const targetAudioSec = currentTimeMs / 1000;
+      if (Math.abs(audioEl.currentTime - targetAudioSec) > 0.15) {
+        audioEl.currentTime = Math.min(targetAudioSec, audioEl.duration || targetAudioSec);
+      }
+      audioEl.play().catch(() => {});
     }
 
     lastFrameTsRef.current = performance.now();
@@ -306,6 +336,7 @@ export default function StudioView({
         const next = prev + delta;
         if (next >= totalDurationMs) {
           if (videoRef.current) videoRef.current.currentTime = 0;
+          if (audioEl) audioEl.currentTime = 0;
           return 0;
         }
         return next;
@@ -317,7 +348,7 @@ export default function StudioView({
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isPlaying, totalDurationMs, footagePath]);
+  }, [isPlaying, totalDurationMs, activeMediaPath, audioPath]);
 
   // Timeline scrub pointer handlers
   function updateTimeFromClientX(clientX: number) {
@@ -527,13 +558,38 @@ export default function StudioView({
     }
   }
 
-  function handleDirectorPromptSubmit(e: React.FormEvent) {
+  async function handleDirectorPromptSubmit(e: React.FormEvent) {
     e.preventDefault();
     const raw = promptInput.trim();
-    if (!raw) return;
+    if (!raw || isPatchingAi) return;
     setPromptInput("");
     pushDirectorMessage("user", raw);
 
+    // When running in Tauri desktop with BYOK configured, invoke real LLM JSON Patching!
+    if (isTauriRuntime() && activeByokOk) {
+      setIsPatchingAi(true);
+      try {
+        const res = await aiCopilotPatch(project, raw);
+        commitProjectChange(() => ({
+          ...res.project,
+          voiceover: {
+            ...res.project.voiceover,
+            words: rebuildWordsFromScenes(res.project),
+          },
+        }));
+        pushDirectorMessage("assistant", `${res.reply} (${res.providerUsed})`);
+      } catch (err) {
+        pushDirectorMessage(
+          "assistant",
+          `Gagal memproses revisi AI: ${err instanceof Error ? err.message : String(err)}`
+        );
+      } finally {
+        setIsPatchingAi(false);
+      }
+      return;
+    }
+
+    // Zero-token offline/local instant command fallback
     const lower = raw.toLowerCase();
     if (lower.includes("editorial") || lower.includes("luxury") || lower.includes("serif")) {
       commitProjectChange((prev) => ({
@@ -558,7 +614,7 @@ export default function StudioView({
     } else {
       pushDirectorMessage(
         "assistant",
-        "Perintah lokal siap untuk preset/overlay. Chat AI bebas berbasis JSON Patch dengan BYOK penuh akan aktif pada Milestone 2 & 4."
+        "Atur API Key BYOK di Pengaturan AI agar AI Director dapat mengeksekusi revisi bebas lewat JSON Patch."
       );
     }
   }
@@ -635,10 +691,10 @@ export default function StudioView({
       className="flex h-screen flex-col overflow-hidden"
       style={{ backgroundColor: "var(--bg-app)", color: "var(--text-primary)" }}
     >
-      {footagePath && (
+      {activeMediaPath && (
         <video
           ref={videoRef}
-          src={toAssetUrl(footagePath)}
+          src={toAssetUrl(activeMediaPath)}
           muted
           playsInline
           preload="auto"
@@ -646,6 +702,9 @@ export default function StudioView({
           className="hidden"
           onLoadedData={() => setCurrentTimeMs((t) => t)}
         />
+      )}
+      {audioPath && (
+        <audio ref={audioRef} src={toAssetUrl(audioPath)} preload="auto" className="hidden" />
       )}
 
       {/* Top Studio Bar */}
@@ -1657,11 +1716,15 @@ export default function StudioView({
                   />
                   <button
                     type="submit"
-                    disabled={!promptInput.trim()}
+                    disabled={!promptInput.trim() || isPatchingAi}
                     className="ui-btn-primary flex h-7 w-7 shrink-0 items-center justify-center rounded-md disabled:opacity-40 cursor-pointer"
                     aria-label="Kirim arahan"
                   >
-                    <ArrowUp className="h-3.5 w-3.5" />
+                    {isPatchingAi ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    )}
                   </button>
                 </form>
               </div>
