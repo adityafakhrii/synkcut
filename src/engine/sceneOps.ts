@@ -1,5 +1,6 @@
 import type { SceneItem, SceneRole, SynkcutProject } from "../types/scene";
 import { rebuildWordsFromScenes } from "./sampleProject";
+import { createDefaultAiMotion } from "./aiMotionPresets";
 
 const MIN_SCENE_DURATION_MS = 800;
 const MAX_SCENE_DURATION_MS = 20000;
@@ -77,12 +78,21 @@ export function addSceneAfter(
     cta: "Klik link sekarang sebelum promo berakhir!",
   };
 
+  const inheritMotion = templateScene?.visualSource === "motion";
   const newScene: SceneItem = {
     id: newSceneId,
     role,
     startMs: 0,
-    endMs: 2500,
+    endMs: 2800,
     text: defaultText[role],
+    visualSource: inheritMotion ? "motion" : "footage",
+    aiMotion: inheritMotion
+      ? createDefaultAiMotion(
+          templateScene?.aiMotion?.engine ?? "flow_diagram",
+          templateScene?.aiMotion?.theme ?? "carbon",
+          defaultText[role]
+        )
+      : null,
     media: {
       path: templateScene?.media.path ?? null,
       secondaryPath: null,
@@ -122,6 +132,7 @@ export function duplicateScene(
   const clone: SceneItem = {
     ...orig,
     id: newSceneId,
+    aiMotion: orig.aiMotion ? JSON.parse(JSON.stringify(orig.aiMotion)) : null,
     media: { ...orig.media },
     motion: { ...orig.motion },
     transitionIn: { ...orig.transitionIn },
@@ -222,6 +233,18 @@ export function summarizeProjectDiff(before: SynkcutProject, after: SynkcutProje
     const a = after.scenes[i];
     if (b.text !== a.text) {
       changes.push(`Scene ${i + 1}: teks diperbarui`);
+    }
+    const bSrc = b.visualSource ?? "footage";
+    const aSrc = a.visualSource ?? "footage";
+    if (bSrc !== aSrc || b.aiMotion?.engine !== a.aiMotion?.engine) {
+      changes.push(
+        aSrc === "motion"
+          ? `Scene ${i + 1} Visual → AI Motion (${a.aiMotion?.engine ?? "flow"})`
+          : `Scene ${i + 1} Visual → Footage Lokal`
+      );
+    }
+    if (b.aiMotion?.theme !== a.aiMotion?.theme && a.aiMotion?.theme) {
+      changes.push(`Scene ${i + 1} Tema Motion → ${a.aiMotion.theme}`);
     }
     if (b.motion.preset !== a.motion.preset) {
       changes.push(`Scene ${i + 1} Motion → ${MOTION_NAMES[a.motion.preset] ?? a.motion.preset}`);

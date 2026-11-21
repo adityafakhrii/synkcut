@@ -25,6 +25,131 @@ export type TransitionPreset =
 
 export type SceneRole = "hook" | "body" | "cta";
 
+export type SceneVisualSource = "footage" | "motion";
+
+export type AiMotionEngine =
+  | "flow_diagram"
+  | "motion_chart"
+  | "tech_cards"
+  | "stick_figure"
+  | "breakdown_3d";
+
+export type AiMotionTheme = "carbon" | "paper" | "coral" | "mint" | "blue";
+
+export interface FlowDiagramConfig {
+  pattern: "flow" | "spread" | "cycle" | "converge" | "compare";
+  steps?: string[];
+  branches?: number;
+  depth?: number;
+  sequence?: string[];
+  center?: string;
+  sources?: string[];
+  direction?: "in" | "out";
+  groups?: Array<{ label: string; value: number; unit?: string }>;
+  highlightIndex?: number;
+}
+
+export interface MotionChartConfig {
+  chartType: "bar" | "line" | "stat_counter";
+  data: Array<{ label: string; value: number }>;
+  prefix?: string;
+  suffix?: string;
+  callout?: string;
+  goodDirection?: "up" | "down";
+  highlightIndex?: number;
+  sourceNote?: string;
+}
+
+export interface TechCardsConfig {
+  layout: "staggered_steps" | "terminal_code" | "comparison_split";
+  cards?: Array<{ badge?: string; title: string; detail?: string }>;
+  codeTitle?: string;
+  codeLines?: string[];
+  highlightLine?: number;
+  leftTitle?: string;
+  leftItems?: string[];
+  rightTitle?: string;
+  rightItems?: string[];
+}
+
+export type StickFigureAction =
+  | "talk"
+  | "walk"
+  | "point"
+  | "think"
+  | "idea"
+  | "surprised"
+  | "laugh"
+  | "cheer"
+  | "wave"
+  | "shrug"
+  | "sad";
+
+export interface StickFigureConfig {
+  setting: "room" | "office" | "street" | "classroom" | "plain";
+  figures: Array<{
+    id: string;
+    kind: "person" | "cat" | "dog";
+    x: number;
+    label?: string;
+    facing?: "left" | "right";
+    color?: string;
+  }>;
+  props?: Array<{
+    type: "desk" | "table" | "plant" | "phone" | "cup" | "board";
+    x: number;
+    text?: string;
+  }>;
+  beats: Array<{
+    who: string;
+    action: StickFigureAction;
+    atSec: number;
+    durationSec: number;
+    toX?: number;
+    say?: string;
+  }>;
+  arrow?: {
+    fromId: string;
+    toId: string;
+    atSec: number;
+    label?: string;
+  } | null;
+}
+
+export interface Breakdown3DConfig {
+  parts: Array<{
+    name: string;
+    shape: string;
+    color?: string;
+    material?: string;
+    level: number;
+    size?: [number, number, number];
+    pos?: [number, number, number];
+  }>;
+  spinSpeed?: number;
+}
+
+export interface AiMotionSpec {
+  engine: AiMotionEngine;
+  theme: AiMotionTheme;
+  title: string;
+  subtitle?: string;
+  takeaway?: string;
+  flow?: FlowDiagramConfig;
+  chart?: MotionChartConfig;
+  techCards?: TechCardsConfig;
+  stickFigure?: StickFigureConfig;
+  breakdown3d?: Breakdown3DConfig;
+}
+
+export interface ProjectStyleReference {
+  sourceType: "youtube" | "images" | "local_video";
+  url?: string;
+  title?: string;
+  thumbnails: string[];
+  styleDnaSummary: string;
+}
+
 export interface WordTimestamp {
   word: string;
   startMs: number;
@@ -56,6 +181,8 @@ export interface SceneItem {
   startMs: number;
   endMs: number;
   text: string;
+  visualSource?: SceneVisualSource;
+  aiMotion?: AiMotionSpec | null;
   media: {
     path: string | null;
     secondaryPath?: string | null;
@@ -75,7 +202,7 @@ export interface SceneItem {
 }
 
 export interface SynkcutProject {
-  version: "1.0";
+  version: "1.0" | "1.1";
   meta: {
     id: string;
     name: string;
@@ -85,6 +212,7 @@ export interface SynkcutProject {
     createdAt?: string;
     updatedAt?: string;
   };
+  styleReference?: ProjectStyleReference | null;
   globalStyle: {
     captionPreset: CaptionPreset;
     accentColor: string;

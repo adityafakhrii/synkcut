@@ -172,10 +172,10 @@ export async function exportProjectToMp4(
     etaMs: null,
   });
 
-  // Preload distinct primary & secondary (Split-Screen) local video clips
+  // Preload distinct primary & secondary (Split-Screen) local video clips (skip pure AI Motion scenes)
   const pathList: string[] = [];
   for (const s of project.scenes) {
-    if (s.media.path) pathList.push(s.media.path);
+    if (s.visualSource !== "motion" && s.media.path) pathList.push(s.media.path);
     if (s.media.secondaryPath) pathList.push(s.media.secondaryPath);
   }
   const uniquePaths = Array.from(new Set(pathList));
@@ -239,10 +239,12 @@ export async function exportProjectToMp4(
         project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
         project.scenes[project.scenes.length - 1];
 
-      const sceneVideo =
-        (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
-        options.videoElement ??
-        null;
+      const isMotionScene = activeScene?.visualSource === "motion";
+      const sceneVideo = isMotionScene
+        ? null
+        : (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
+          options.videoElement ??
+          null;
       const secondaryVideo = activeScene?.media.secondaryPath
         ? videoMap.get(activeScene.media.secondaryPath) ?? null
         : null;

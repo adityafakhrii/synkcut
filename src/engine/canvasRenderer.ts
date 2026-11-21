@@ -1,5 +1,7 @@
 import type { SceneItem, SceneOverlay, SynkcutProject, WordTimestamp } from "../types/scene";
 import { getProjectDurationMs } from "./sampleProject";
+import { isLightAiMotionTheme } from "./aiMotionPresets";
+import { renderAiMotionScene } from "./aiMotionRenderer";
 
 export interface RenderFrameOptions {
   videoElement?: HTMLVideoElement | null;
@@ -176,44 +178,48 @@ function drawFootageWithMotion(
   sceneLocalMs: number,
   videoEl?: HTMLVideoElement | null,
   secondaryVideoEl?: HTMLVideoElement | null,
-  isPosterThumbnail = false
+  isPosterThumbnail = false,
+  settledPreview = false
 ) {
-  const intensity = scene.motion.intensity;
+  const isAiMotion = scene.visualSource === "motion" && Boolean(scene.aiMotion);
+  const intensity = isAiMotion ? 0 : scene.motion.intensity;
   let scale = 1;
   let offsetX = 0;
   let offsetY = 0;
   let alpha = 1;
 
-  // Base motion preset
-  switch (scene.motion.preset) {
-    case "zoom_punch": {
-      const punch = easeOutCubic(Math.min(1, progress * 3.2));
-      scale = 1 + 0.14 * intensity * (1 - punch) + 0.04 * intensity * progress;
-      break;
+  // Base motion preset (applied to footage scenes; AI Motion has its own native choreography)
+  if (!isAiMotion) {
+    switch (scene.motion.preset) {
+      case "zoom_punch": {
+        const punch = easeOutCubic(Math.min(1, progress * 3.2));
+        scale = 1 + 0.14 * intensity * (1 - punch) + 0.04 * intensity * progress;
+        break;
+      }
+      case "smooth_ken_burns": {
+        scale = 1 + 0.12 * intensity * progress;
+        offsetX = (progress - 0.5) * 44 * intensity;
+        offsetY = (0.5 - progress) * 28 * intensity;
+        break;
+      }
+      case "shake_impact": {
+        const decay = Math.max(0, 1 - progress * 4.5);
+        scale = 1 + 0.08 * intensity * decay;
+        offsetX = Math.sin(progress * 90) * 24 * intensity * decay;
+        offsetY = Math.cos(progress * 75) * 18 * intensity * decay;
+        break;
+      }
+      case "slide_reveal": {
+        const slide = easeOutCubic(Math.min(1, progress * 4));
+        offsetY = (1 - slide) * 140 * intensity;
+        scale = 1.03;
+        break;
+      }
+      case "static_clean":
+      default:
+        scale = 1;
+        break;
     }
-    case "smooth_ken_burns": {
-      scale = 1 + 0.12 * intensity * progress;
-      offsetX = (progress - 0.5) * 44 * intensity;
-      offsetY = (0.5 - progress) * 28 * intensity;
-      break;
-    }
-    case "shake_impact": {
-      const decay = Math.max(0, 1 - progress * 4.5);
-      scale = 1 + 0.08 * intensity * decay;
-      offsetX = Math.sin(progress * 90) * 24 * intensity * decay;
-      offsetY = Math.cos(progress * 75) * 18 * intensity * decay;
-      break;
-    }
-    case "slide_reveal": {
-      const slide = easeOutCubic(Math.min(1, progress * 4));
-      offsetY = (1 - slide) * 140 * intensity;
-      scale = 1.03;
-      break;
-    }
-    case "static_clean":
-    default:
-      scale = 1;
-      break;
   }
 
   // Deterministic Entry Transitions (`transitionIn`)
@@ -255,7 +261,19 @@ function drawFootageWithMotion(
   ctx.scale(scale, scale);
   ctx.translate(-width / 2, -height / 2);
 
-  if (splitOverlay) {
+  if (isAiMotion && scene.aiMotion) {
+    const durSec = Math.max(0.8, (scene.endMs - scene.startMs) / 1000);
+    renderAiMotionScene(
+      ctx,
+      width,
+      height,
+      scene.aiMotion,
+      progress,
+      durSec,
+      project.globalStyle.accentColor,
+      settledPreview
+    );
+  } else if (splitOverlay) {
     // True 50/50 Vertical Split-Screen / B-Roll Comparison
     const halfH = Math.round(height / 2);
 
@@ -544,7 +562,7 @@ function drawKineticCaptions(
   const preset = project.globalStyle.captionPreset;
   const accent = project.globalStyle.accentColor;
 
-  const fontSize =
+  const baseFontSize =
     preset === "kinetic_punch"
       ? 86
       : preset === "luxury_editorial"
@@ -559,38 +577,54 @@ function drawKineticCaptions(
   const fontWeight = preset === "luxury_editorial" ? "600" : "800";
 
   ctx.save();
-  ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.textBaseline = "middle";
 
-  const baseSpaceW = ctx.measureText(" ").width;
-  const spaceW =
-    preset === "bold_pop" || preset === "kinetic_punch" ? baseSpaceW * 1.65 : baseSpaceW * 1.15;
-  const items = activeChunk.map((w) => {
-    const label =
-      preset === "bold_pop" || preset === "kinetic_punch" ? w.word.toUpperCase() : w.word;
-    const isActive = timeMs >= w.startMs && timeMs <= w.endMs;
-    const wordDur = Math.max(80, w.endMs - w.startMs);
-    const wordProg = isActive ? Math.min(1, (timeMs - w.startMs) / Math.min(140, wordDur)) : 0;
-    const springBoost =
-      isActive && (preset === "bold_pop" || preset === "kinetic_punch")
-        ? 1 + 0.13 * easeOutCubic(wordProg)
-        : 1;
-    return {
-      word: w,
-      label,
-      width: ctx.measureText(label).width * springBoost,
-      isActive,
-      springBoost,
-    };
-  });
+  const measureChunk = (sz: number) => {
+    ctx.font = `${fontWeight} ${sz}px ${fontFamily}`;
+    const baseSpaceW = ctx.measureText(" ").width;
+    const spW =
+      preset === "bold_pop" || preset === "kinetic_punch" ? baseSpaceW * 1.5 : baseSpaceW * 1.15;
+    const measured = activeChunk.map((w) => {
+      const label =
+        preset === "bold_pop" || preset === "kinetic_punch" ? w.word.toUpperCase() : w.word;
+      const isActive = timeMs >= w.startMs && timeMs <= w.endMs;
+      const wordDur = Math.max(80, w.endMs - w.startMs);
+      const wordProg = isActive ? Math.min(1, (timeMs - w.startMs) / Math.min(140, wordDur)) : 0;
+      const springBoost =
+        isActive && (preset === "bold_pop" || preset === "kinetic_punch")
+          ? 1 + 0.13 * easeOutCubic(wordProg)
+          : 1;
+      return {
+        word: w,
+        label,
+        width: ctx.measureText(label).width * springBoost,
+        isActive,
+        springBoost,
+      };
+    });
+    const tw =
+      measured.reduce((acc, it) => acc + it.width, 0) + spW * Math.max(0, measured.length - 1);
+    return { items: measured, spaceW: spW, totalW: tw };
+  };
 
-  const totalW =
-    items.reduce((acc, it) => acc + it.width, 0) + spaceW * Math.max(0, items.length - 1);
+  const maxRowW = width * 0.80;
+  let fontSize = baseFontSize;
+  let layout = measureChunk(fontSize);
+  if (layout.totalW > maxRowW && layout.totalW > 0) {
+    fontSize = Math.max(32, Math.floor(baseFontSize * (maxRowW / layout.totalW)));
+    layout = measureChunk(fontSize);
+  }
+  const { items, spaceW, totalW } = layout;
 
-  if (preset === "clean_minimal") {
+  const isLightMotionBg =
+    scene.visualSource === "motion" &&
+    Boolean(scene.aiMotion) &&
+    isLightAiMotionTheme(scene.aiMotion!.theme);
+
+  if (preset === "clean_minimal" || (isLightMotionBg && preset !== "bold_pop" && preset !== "kinetic_punch")) {
     const padX = 36;
     const padY = 22;
-    ctx.fillStyle = "rgba(13, 15, 18, 0.78)";
+    ctx.fillStyle = "rgba(13, 15, 18, 0.84)";
     roundRectPath(
       ctx,
       (width - totalW) / 2 - padX,
@@ -673,7 +707,9 @@ export function renderProjectFrame(
   const sceneLocalMs = Math.max(0, timeMs - scene.startMs);
   const sceneProgress = Math.max(0, Math.min(1, sceneLocalMs / sceneDuration));
 
-  // 1. Footage + Motion + Visual Entry Transition + Optional Split-Screen
+  const settledPreview = Boolean(options.isPosterThumbnail || (options.isPreviewPaused && sceneLocalMs < 350));
+
+  // 1. Footage OR Native AI Motion + Visual Entry Transition + Optional Split-Screen
   drawFootageWithMotion(
     ctx,
     width,
@@ -684,11 +720,11 @@ export function renderProjectFrame(
     sceneLocalMs,
     options.videoElement,
     options.secondaryVideoElement,
-    Boolean(options.isPosterThumbnail)
+    Boolean(options.isPosterThumbnail),
+    settledPreview
   );
 
   // 2. Scene overlays (Hook Headline, Native Notification, Promo Badge, Doodle Marker)
-  const settledPreview = Boolean(options.isPosterThumbnail || (options.isPreviewPaused && sceneLocalMs < 350));
   for (const overlay of scene.overlays) {
     drawOverlay(
       ctx,

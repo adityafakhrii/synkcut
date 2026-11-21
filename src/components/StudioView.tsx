@@ -22,6 +22,7 @@ import {
   Plus,
   Redo2,
   RotateCcw,
+  Shapes,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -36,14 +37,18 @@ import {
   X,
 } from "lucide-react";
 import type {
+  AiMotionSpec,
   ByokStatus,
   CaptionPreset,
   MotionPreset,
   SceneOverlay,
   SceneRole,
+  SceneVisualSource,
   SynkcutProject,
   TransitionPreset,
 } from "../types/scene";
+import { AI_MOTION_ENGINES, createDefaultAiMotion } from "../engine/aiMotionPresets";
+import AiMotionEditor from "./AiMotionEditor";
 import { getProjectDurationMs, rebuildWordsFromScenes } from "../engine/sampleProject";
 import {
   addSceneAfter,
@@ -89,6 +94,8 @@ interface StudioViewProps {
   onToggleTheme: () => void;
   onBackHome: () => void;
   onProjectSaved: () => void;
+  initialLeftTab?: LeftToolTab;
+  initialTimeMs?: number;
 }
 
 type LeftToolTab = "scenes" | "footage" | "caption" | "motion" | "audio";
@@ -183,6 +190,8 @@ export default function StudioView({
   onToggleTheme,
   onBackHome,
   onProjectSaved,
+  initialLeftTab = "scenes",
+  initialTimeMs = 0,
 }: StudioViewProps) {
   const [project, setProject] = useState<SynkcutProject>(initialProject);
   const [pastHistory, setPastHistory] = useState<SynkcutProject[]>([]);
@@ -190,17 +199,20 @@ export default function StudioView({
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
 
   // Studio UI navigation
-  const [leftTab, setLeftTab] = useState<LeftToolTab>("scenes");
+  const [leftTab, setLeftTab] = useState<LeftToolTab>(initialLeftTab);
   const [rightTab, setRightTab] = useState<RightPanelTab>("director");
-  const [selectedSceneId, setSelectedSceneId] = useState<string>(
-    initialProject.scenes[0]?.id || ""
-  );
+  const [selectedSceneId, setSelectedSceneId] = useState<string>(() => {
+    const matched = initialProject.scenes.find(
+      (s) => initialTimeMs >= s.startMs && initialTimeMs < s.endMs
+    );
+    return matched?.id || initialProject.scenes[0]?.id || "";
+  });
   const [showSafeZone, setShowSafeZone] = useState(true);
   const [showJsonModal, setShowJsonModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
   // Playback state
-  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [currentTimeMs, setCurrentTimeMs] = useState(initialTimeMs);
   const [isPlaying, setIsPlaying] = useState(false);
 
   // AI Director interactive feed
@@ -284,6 +296,7 @@ export default function StudioView({
   }, [project.scenes, footagePath]);
 
   const hasAnyFootage = projectClipPaths.length > 0;
+  const hasAnyMotion = project.scenes.some((s) => s.visualSource === "motion");
 
   function commitProjectChange(
     updater: (prev: SynkcutProject) => SynkcutProject,
@@ -633,6 +646,7 @@ export default function StudioView({
           scope === "all" || s.id === activeScene?.id
             ? {
                 ...s,
+                visualSource: "footage",
                 media: {
                   ...s.media,
                   path: picked,
@@ -664,7 +678,7 @@ export default function StudioView({
           ...prev,
           scenes: prev.scenes.map((s) =>
             scope === "all" || s.id === activeScene?.id
-              ? { ...s, media: { ...s.media, path: url, trimStartMs: 0 } }
+              ? { ...s, visualSource: "footage", media: { ...s.media, path: url, trimStartMs: 0 } }
               : s
           ),
         }));
@@ -679,7 +693,58 @@ export default function StudioView({
       ...prev,
       scenes: prev.scenes.map((s) =>
         s.id === activeScene.id
-          ? { ...s, media: { ...s.media, path: clipPath, trimStartMs: 0 } }
+          ? { ...s, visualSource: "footage", media: { ...s.media, path: clipPath, trimStartMs: 0 } }
+          : s
+      ),
+    }));
+  }
+
+  function setActiveSceneVisualSource(source: SceneVisualSource) {
+    if (!activeScene) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      version: source === "motion" ? "1.1" : prev.version,
+      scenes: prev.scenes.map((s) => {
+        if (s.id !== activeScene.id) return s;
+        if (source === "motion") {
+          return {
+            ...s,
+            visualSource: "motion",
+            aiMotion:
+              s.aiMotion ??
+              createDefaultAiMotion("flow_diagram", "carbon", s.text),
+          };
+        }
+        return { ...s, visualSource: "footage" };
+      }),
+    }));
+  }
+
+  function updateActiveSceneAiMotion(nextSpec: AiMotionSpec, recordHistory = false) {
+    if (!activeScene) return;
+    commitProjectChange(
+      (prev) => ({
+        ...prev,
+        version: "1.1",
+        scenes: prev.scenes.map((s) =>
+          s.id === activeScene.id
+            ? { ...s, visualSource: "motion", aiMotion: nextSpec }
+            : s
+        ),
+      }),
+      recordHistory
+    );
+  }
+
+  function applyAiMotionThemeToAll() {
+    const activeTheme = activeScene?.aiMotion?.theme;
+    if (!activeTheme) return;
+    commitProjectChange((prev) => ({
+      ...prev,
+      version: "1.1",
+      scenes: prev.scenes.map((s) =>
+        s.visualSource === "motion" && s.aiMotion
+          ? { ...s, aiMotion: { ...s.aiMotion, theme: activeTheme } }
           : s
       ),
     }));
@@ -1180,10 +1245,128 @@ export default function StudioView({
         },
         "Backsound (BGM) dimatikan."
       );
+    } else if (
+      lower.includes("stick") ||
+      lower.includes("kartun") ||
+      lower.includes("analogi")
+    ) {
+      if (activeScene) {
+        const nextSpec = createDefaultAiMotion(
+          "stick_figure",
+          activeScene.aiMotion?.theme ?? "paper",
+          activeScene.text
+        );
+        applyLocalPatch(
+          {
+            ...before,
+            version: "1.1",
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id
+                ? { ...s, visualSource: "motion", aiMotion: nextSpec }
+                : s
+            ),
+          },
+          "Scene aktif diubah ke AI Motion · Stick-Figure Story (0 token)."
+        );
+      }
+    } else if (
+      lower.includes("chart") ||
+      lower.includes("grafik") ||
+      lower.includes("statistik")
+    ) {
+      if (activeScene) {
+        const nextSpec = createDefaultAiMotion(
+          "motion_chart",
+          activeScene.aiMotion?.theme ?? "carbon",
+          activeScene.text
+        );
+        applyLocalPatch(
+          {
+            ...before,
+            version: "1.1",
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id
+                ? { ...s, visualSource: "motion", aiMotion: nextSpec }
+                : s
+            ),
+          },
+          "Scene aktif diubah ke AI Motion · Motion Chart (0 token)."
+        );
+      }
+    } else if (
+      lower.includes("kartu") ||
+      lower.includes("kode") ||
+      lower.includes("terminal") ||
+      lower.includes("banding")
+    ) {
+      if (activeScene) {
+        const nextSpec = createDefaultAiMotion(
+          "tech_cards",
+          activeScene.aiMotion?.theme ?? "blue",
+          activeScene.text
+        );
+        if (lower.includes("kode") || lower.includes("terminal")) {
+          if (nextSpec.techCards) nextSpec.techCards.layout = "terminal_code";
+        } else if (lower.includes("banding")) {
+          if (nextSpec.techCards) nextSpec.techCards.layout = "comparison_split";
+        }
+        applyLocalPatch(
+          {
+            ...before,
+            version: "1.1",
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id
+                ? { ...s, visualSource: "motion", aiMotion: nextSpec }
+                : s
+            ),
+          },
+          "Scene aktif diubah ke AI Motion · Tech & UI Cards (0 token)."
+        );
+      }
+    } else if (
+      lower.includes("ai motion") ||
+      lower.includes("diagram") ||
+      lower.includes("flow") ||
+      lower.includes("siklus")
+    ) {
+      if (activeScene) {
+        const nextSpec = createDefaultAiMotion(
+          "flow_diagram",
+          activeScene.aiMotion?.theme ?? "carbon",
+          activeScene.text
+        );
+        if (lower.includes("siklus") && nextSpec.flow) {
+          nextSpec.flow.pattern = "cycle";
+        }
+        applyLocalPatch(
+          {
+            ...before,
+            version: "1.1",
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id
+                ? { ...s, visualSource: "motion", aiMotion: nextSpec }
+                : s
+            ),
+          },
+          "Scene aktif diubah ke AI Motion · Flow & Diagram (0 token)."
+        );
+      }
+    } else if (lower.includes("footage") || lower.includes("video lokal")) {
+      if (activeScene) {
+        applyLocalPatch(
+          {
+            ...before,
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id ? { ...s, visualSource: "footage" } : s
+            ),
+          },
+          "Scene aktif dikembalikan ke mode Footage Lokal (0 token)."
+        );
+      }
     } else {
       pushDirectorMessage(
         "assistant",
-        "Atur API Key BYOK di Pengaturan AI agar AI Director dapat mengeksekusi revisi bebas lewat JSON Patch (atau coba ketik: editorial, neon, doodle, split, headline, lofi, tambah scene)."
+        "Atur API Key BYOK di Pengaturan AI agar AI Director dapat mengeksekusi revisi bebas lewat JSON Patch (atau coba ketik: diagram, chart, terminal, stick figure, editorial, neon, doodle, lofi)."
       );
     }
   }
@@ -1267,7 +1450,7 @@ export default function StudioView({
 
   const RAIL_ITEMS: Array<{ id: LeftToolTab; label: string; icon: typeof Layers }> = [
     { id: "scenes", label: "Scenes", icon: Layers },
-    { id: "footage", label: "Footage", icon: Film },
+    { id: "footage", label: "Visual", icon: Film },
     { id: "caption", label: "Caption", icon: Type },
     { id: "motion", label: "Motion", icon: SlidersHorizontal },
     { id: "audio", label: "Audio", icon: Volume2 },
@@ -1470,12 +1653,12 @@ export default function StudioView({
           >
             <h2 className="text-xs font-bold">
               {leftTab === "scenes" && "Scene Cards"}
-              {leftTab === "footage" && "Footage Lokal"}
+              {leftTab === "footage" && "Visual Scene"}
               {leftTab === "caption" && "Style & Kinetic Caption"}
               {leftTab === "motion" && "Motion, Transisi & Overlay"}
               {leftTab === "audio" && "Suara & Backsound"}
             </h2>
-            {leftTab === "scenes" && (
+            {(leftTab === "scenes" || leftTab === "footage") && (
               <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                 0 token AI
               </span>
@@ -1486,7 +1669,7 @@ export default function StudioView({
             {/* TAB: SCENES */}
             {leftTab === "scenes" && (
               <div className="space-y-2.5">
-                {!hasAnyFootage && !dismissRemixHint && (
+                {!hasAnyFootage && !hasAnyMotion && !dismissRemixHint && (
                   <div
                     className="rounded-lg p-2.5 text-[11px] leading-relaxed"
                     style={{
@@ -1497,8 +1680,8 @@ export default function StudioView({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <span>
-                        Tarik grip kiri untuk geser urutan scene. Pasang video lokal kapan saja di
-                        tab <strong>Footage</strong>.
+                        Belum ada klip? Pasang video lokal atau nyalakan <strong>AI Motion</strong>{" "}
+                        native di tab <strong>Visual</strong>.
                       </span>
                       <button
                         type="button"
@@ -1510,15 +1693,29 @@ export default function StudioView({
                         <X className="h-3 w-3" />
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setLeftTab("footage")}
-                      className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold hover:underline cursor-pointer"
-                      style={{ color: "var(--accent)" }}
-                    >
-                      <Film className="h-3 w-3" />
-                      Pasang Footage Lokal →
-                    </button>
+                    <div className="mt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setLeftTab("footage")}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold hover:underline cursor-pointer"
+                        style={{ color: "var(--accent)" }}
+                      >
+                        <Film className="h-3 w-3" />
+                        Footage
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSceneVisualSource("motion");
+                          setLeftTab("footage");
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold hover:underline cursor-pointer"
+                        style={{ color: "var(--accent)" }}
+                      >
+                        <Shapes className="h-3 w-3" />
+                        Pakai AI Motion →
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1620,6 +1817,53 @@ export default function StudioView({
                         className="ui-input w-full resize-none rounded-md p-2 text-xs leading-relaxed"
                       />
 
+                      {/* Visual Source Strip (AI Motion vs Footage Lokal) */}
+                      <div
+                        className="mt-1.5 flex items-center justify-between gap-1.5 text-[11px]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {scene.visualSource === "motion" ? (
+                          <span
+                            className="inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 font-semibold"
+                            style={{
+                              backgroundColor: "var(--accent-soft)",
+                              color: "var(--accent)",
+                            }}
+                          >
+                            <Shapes className="h-3 w-3 shrink-0" />
+                            <span className="truncate">
+                              AI Motion ·{" "}
+                              {AI_MOTION_ENGINES.find((e) => e.id === scene.aiMotion?.engine)
+                                ?.label ?? "Diagram"}
+                            </span>
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex min-w-0 items-center gap-1"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            <Film className="h-3 w-3 shrink-0" />
+                            <span className="truncate">
+                              {scene.media.path
+                                ? scene.media.path.split(/[\\/]/).pop()
+                                : "Footage / Backdrop"}
+                            </span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSceneId(scene.id);
+                            setCurrentTimeMs(scene.startMs);
+                            setLeftTab("footage");
+                          }}
+                          className="shrink-0 font-semibold hover:underline cursor-pointer"
+                          style={{ color: "var(--text-secondary)" }}
+                        >
+                          Visual →
+                        </button>
+                      </div>
+
                       {/* Compact Micro Controls Footer: Duration Stepper + Duplicate/Delete */}
                       <div
                         className="mt-2 flex items-center justify-between gap-2 pt-1.5 border-t"
@@ -1691,7 +1935,7 @@ export default function StudioView({
               </div>
             )}
 
-            {/* TAB: FOOTAGE */}
+            {/* TAB: VISUAL (HYBRID FOOTAGE LOKAL <-> AI MOTION) */}
             {leftTab === "footage" && (
               <div className="space-y-3">
                 {activeScene && (
@@ -1709,173 +1953,253 @@ export default function StudioView({
                   </div>
                 )}
 
-                <div className="space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handlePickFootage("active")}
-                    className="ui-btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <Upload className="h-4 w-4" />
-                    {activeScene?.media.path
-                      ? "Ganti Footage Scene Ini"
-                      : "Pilih Footage untuk Scene Ini"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handlePickFootage("all")}
-                    className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium cursor-pointer"
-                  >
-                    <Film className="h-3.5 w-3.5" />
-                    Pasang 1 Footage ke Semua Scene
-                  </button>
-                </div>
-
-                {/* Active Scene Clip & Trim Start Control */}
-                {activeScene?.media.path && (
+                {/* Per-Scene Hybrid Visual Source Switch */}
+                {activeScene && (
                   <div
-                    className="rounded-lg p-3 space-y-2.5"
+                    className="grid grid-cols-2 gap-1 rounded-lg p-1"
                     style={{
                       backgroundColor: "var(--bg-elevated)",
                       border: "1px solid var(--border-subtle)",
                     }}
                   >
-                    <div className="flex items-center justify-between gap-2 text-[11px]">
-                      <span className="truncate font-mono-num font-semibold" title={activeScene.media.path}>
-                        {activeScene.media.path.split(/[\\/]/).pop()}
-                      </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSceneVisualSource("footage")}
+                      className="flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor:
+                          activeScene.visualSource !== "motion"
+                            ? "var(--bg-panel)"
+                            : "transparent",
+                        color:
+                          activeScene.visualSource !== "motion"
+                            ? "var(--text-primary)"
+                            : "var(--text-secondary)",
+                        border:
+                          activeScene.visualSource !== "motion"
+                            ? "1px solid var(--border-strong)"
+                            : "1px solid transparent",
+                      }}
+                    >
+                      <Film className="h-3.5 w-3.5" />
+                      Footage Lokal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSceneVisualSource("motion")}
+                      className="flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor:
+                          activeScene.visualSource === "motion"
+                            ? "var(--bg-panel)"
+                            : "transparent",
+                        color:
+                          activeScene.visualSource === "motion"
+                            ? "var(--accent)"
+                            : "var(--text-secondary)",
+                        border:
+                          activeScene.visualSource === "motion"
+                            ? "1px solid var(--accent)"
+                            : "1px solid transparent",
+                      }}
+                    >
+                      <Shapes className="h-3.5 w-3.5" />
+                      AI Motion
+                    </button>
+                  </div>
+                )}
+
+                {activeScene?.visualSource === "motion" ? (
+                  <div className="space-y-3">
+                    <AiMotionEditor
+                      spec={
+                        activeScene.aiMotion ??
+                        createDefaultAiMotion("flow_diagram", "carbon", activeScene.text)
+                      }
+                      sceneText={activeScene.text}
+                      onChange={updateActiveSceneAiMotion}
+                    />
+                    {project.scenes.filter((s) => s.visualSource === "motion").length > 1 && (
                       <button
                         type="button"
-                        onClick={() =>
-                          commitProjectChange((prev) => ({
-                            ...prev,
-                            scenes: prev.scenes.map((s) =>
-                              s.id === activeScene.id
-                                ? { ...s, media: { ...s.media, path: null, trimStartMs: 0 } }
-                                : s
-                            ),
-                          }))
-                        }
-                        className="shrink-0 text-[11px] underline cursor-pointer"
-                        style={{ color: "var(--text-muted)" }}
+                        onClick={applyAiMotionThemeToAll}
+                        className="ui-btn-secondary flex w-full items-center justify-center rounded-md py-1.5 text-[11px] font-semibold cursor-pointer"
                       >
-                        Lepas
+                        Samakan Tema Kanvas ke Semua AI Motion
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handlePickFootage("active")}
+                        className="ui-btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold cursor-pointer"
+                      >
+                        <Upload className="h-4 w-4" />
+                        {activeScene?.media.path
+                          ? "Ganti Footage Scene Ini"
+                          : "Pilih Footage untuk Scene Ini"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handlePickFootage("all")}
+                        className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium cursor-pointer"
+                      >
+                        <Film className="h-3.5 w-3.5" />
+                        Pasang 1 Footage ke Semua Scene
                       </button>
                     </div>
 
-                    <div>
-                      <div className="mb-1 flex items-center justify-between text-[11px]">
-                        <span style={{ color: "var(--text-secondary)" }}>Mulai Klip (Trim Start)</span>
-                        <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
-                          {formatTimecode(activeScene.media.trimStartMs || 0)}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={Math.max(
-                          10000,
-                          (clipProbes[activeScene.media.path]?.durationMs ??
-                            footageProbe?.durationMs ??
-                            20000) - 1000
-                        )}
-                        step={200}
-                        value={activeScene.media.trimStartMs || 0}
-                        onChange={(e) => updateActiveSceneTrimStart(Number(e.target.value))}
-                        className="w-full accent-[var(--accent)] cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Reusable Project Clips Tray */}
-                {projectClipPaths.length > 0 && (
-                  <div className="space-y-1.5">
-                    <div className="text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-                      Klip di Proyek ({projectClipPaths.length})
-                    </div>
-                    {projectClipPaths.map((clipPath) => {
-                      const isCurrent = activeScene?.media.path === clipPath;
-                      return (
-                        <div
-                          key={clipPath}
-                          className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[11px]"
-                          style={{
-                            backgroundColor: isCurrent ? "var(--accent-soft)" : "var(--bg-elevated)",
-                            border: isCurrent
-                              ? "1px solid var(--accent)"
-                              : "1px solid var(--border-subtle)",
-                          }}
-                        >
-                          <span className="min-w-0 flex-1 truncate font-mono-num" title={clipPath}>
-                            {clipPath.split(/[\\/]/).pop()}
+                    {/* Active Scene Clip & Trim Start Control */}
+                    {activeScene?.media.path && (
+                      <div
+                        className="rounded-lg p-3 space-y-2.5"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          border: "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="truncate font-mono-num font-semibold" title={activeScene.media.path}>
+                            {activeScene.media.path.split(/[\\/]/).pop()}
                           </span>
-                          {isCurrent ? (
-                            <span className="shrink-0 font-semibold" style={{ color: "var(--accent)" }}>
-                              Aktif
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => assignClipToActiveScene(clipPath)}
-                              className="ui-btn-secondary shrink-0 rounded px-2 py-0.5 text-[11px] font-medium cursor-pointer"
-                            >
-                              Pakai
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              commitProjectChange((prev) => ({
+                                ...prev,
+                                scenes: prev.scenes.map((s) =>
+                                  s.id === activeScene.id
+                                    ? { ...s, media: { ...s.media, path: null, trimStartMs: 0 } }
+                                    : s
+                                ),
+                              }))
+                            }
+                            className="shrink-0 text-[11px] underline cursor-pointer"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            Lepas
+                          </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
 
-                <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                  Footage diproses langsung dari penyimpanan lokal tanpa upload ke cloud. FFmpeg
-                  otomatis mengekstrak thumbnail kecil untuk AI Multimodal Director.
-                </p>
-
-                {footageProbe ? (
-                  <div
-                    className="rounded-lg p-3 space-y-2.5"
-                    style={{
-                      backgroundColor: "var(--bg-elevated)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <div className="flex items-center justify-between font-mono-num text-[11px]">
-                      <span className="font-semibold">
-                        {footageProbe.width}×{footageProbe.height} · {footageProbe.fps}fps
-                      </span>
-                      <span style={{ color: "var(--text-secondary)" }}>
-                        {formatTimecode(footageProbe.durationMs)}
-                      </span>
-                    </div>
-                    {footageThumbs.length > 0 && (
-                      <div className="grid grid-cols-2 gap-2">
-                        {footageThumbs.map((src, i) => (
-                          <img
-                            key={i}
-                            src={src}
-                            alt={`Thumbnail ${i + 1}`}
-                            className="h-20 w-full rounded object-cover"
-                            style={{ border: "1px solid var(--border-subtle)" }}
+                        <div>
+                          <div className="mb-1 flex items-center justify-between text-[11px]">
+                            <span style={{ color: "var(--text-secondary)" }}>Mulai Klip (Trim Start)</span>
+                            <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                              {formatTimecode(activeScene.media.trimStartMs || 0)}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(
+                              10000,
+                              (clipProbes[activeScene.media.path]?.durationMs ??
+                                footageProbe?.durationMs ??
+                                20000) - 1000
+                            )}
+                            step={200}
+                            value={activeScene.media.trimStartMs || 0}
+                            onChange={(e) => updateActiveSceneTrimStart(Number(e.target.value))}
+                            className="w-full accent-[var(--accent)] cursor-pointer"
                           />
-                        ))}
+                        </div>
                       </div>
                     )}
+
+                    {/* Reusable Project Clips Tray */}
+                    {projectClipPaths.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+                          Klip di Proyek ({projectClipPaths.length})
+                        </div>
+                        {projectClipPaths.map((clipPath) => {
+                          const isCurrent = activeScene?.media.path === clipPath;
+                          return (
+                            <div
+                              key={clipPath}
+                              className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[11px]"
+                              style={{
+                                backgroundColor: isCurrent ? "var(--accent-soft)" : "var(--bg-elevated)",
+                                border: isCurrent
+                                  ? "1px solid var(--accent)"
+                                  : "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-mono-num" title={clipPath}>
+                                {clipPath.split(/[\\/]/).pop()}
+                              </span>
+                              {isCurrent ? (
+                                <span className="shrink-0 font-semibold" style={{ color: "var(--accent)" }}>
+                                  Aktif
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => assignClipToActiveScene(clipPath)}
+                                  className="ui-btn-secondary shrink-0 rounded px-2 py-0.5 text-[11px] font-medium cursor-pointer"
+                                >
+                                  Pakai
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                      Footage diproses langsung dari penyimpanan lokal tanpa upload ke cloud. Tanpa
+                      footage? Klik tab <strong>AI Motion</strong> di atas untuk animasi 2D lokal.
+                    </p>
+
+                    {footageProbe ? (
+                      <div
+                        className="rounded-lg p-3 space-y-2.5"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          border: "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between font-mono-num text-[11px]">
+                          <span className="font-semibold">
+                            {footageProbe.width}×{footageProbe.height} · {footageProbe.fps}fps
+                          </span>
+                          <span style={{ color: "var(--text-secondary)" }}>
+                            {formatTimecode(footageProbe.durationMs)}
+                          </span>
+                        </div>
+                        {footageThumbs.length > 0 && (
+                          <div className="grid grid-cols-2 gap-2">
+                            {footageThumbs.map((src, i) => (
+                              <img
+                                key={i}
+                                src={src}
+                                alt={`Thumbnail ${i + 1}`}
+                                className="h-20 w-full rounded object-cover"
+                                style={{ border: "1px solid var(--border-subtle)" }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : !hasAnyFootage ? (
+                      <div
+                        className="rounded-lg p-4 text-center text-xs"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          border: "1px dashed var(--border-strong)",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Belum ada footage lokal dipilih. Preview saat ini menggunakan backdrop studio.
+                      </div>
+                    ) : null}
                   </div>
-                ) : !hasAnyFootage ? (
-                  <div
-                    className="rounded-lg p-4 text-center text-xs"
-                    style={{
-                      backgroundColor: "var(--bg-elevated)",
-                      border: "1px dashed var(--border-strong)",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    Belum ada footage lokal dipilih. Preview saat ini menggunakan backdrop studio.
-                  </div>
-                ) : null}
+                )}
               </div>
             )}
 
@@ -2417,6 +2741,19 @@ export default function StudioView({
                     {activeScene.role}
                   </span>
                 )}
+                {activeScene?.visualSource === "motion" && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold"
+                    style={{
+                      backgroundColor: "var(--accent-soft)",
+                      color: "var(--accent)",
+                    }}
+                  >
+                    <Shapes className="h-3 w-3" />
+                    {AI_MOTION_ENGINES.find((e) => e.id === activeScene.aiMotion?.engine)?.label ??
+                      "AI Motion"}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-3">
@@ -2571,6 +2908,13 @@ export default function StudioView({
                             <span style={{ color: "var(--text-primary)" }}>
                               {idx + 1}. {scene.role}
                             </span>
+                            {scene.visualSource === "motion" && (
+                              <Shapes
+                                className="h-3 w-3 shrink-0"
+                                style={{ color: "var(--accent)" }}
+                                aria-label="AI Motion"
+                              />
+                            )}
                           </div>
                           <div
                             className="truncate text-[11px]"

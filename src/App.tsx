@@ -18,6 +18,8 @@ import {
   type SynkcutProject,
 } from "./types/scene";
 import { BUILTIN_SAMPLES, createBlankProjectForFormat, type SampleTemplate } from "./engine/sampleTemplates";
+import { createDefaultAiMotion } from "./engine/aiMotionPresets";
+import { rebuildWordsFromScenes } from "./engine/sampleProject";
 import {
   deleteProject,
   duplicateProject,
@@ -64,6 +66,108 @@ function SynkcutMark() {
   );
 }
 
+function createAiMotionShowcaseProject(): SynkcutProject {
+  const now = new Date().toISOString();
+  const s1Motion = createDefaultAiMotion("flow_diagram", "carbon", "Cara Kerja Internet");
+  const s2Motion = createDefaultAiMotion("motion_chart", "paper", "Waktu Muat Halaman");
+  const s3Motion = createDefaultAiMotion("tech_cards", "blue", "Alur Request Browser");
+  s3Motion.subtitle = "Dari lookup DNS sampai halaman dirender";
+  if (s3Motion.techCards) {
+    s3Motion.techCards.layout = "terminal_code";
+  }
+  const s4Motion = createDefaultAiMotion("stick_figure", "mint", "Analogi DNS Internet");
+
+  const project: SynkcutProject = {
+    version: "1.1",
+    meta: {
+      id: "demo_ai_motion_m6",
+      name: "Cara Kerja Internet (AI Motion)",
+      aspectRatio: "9:16",
+      fps: 30,
+      format: "education",
+      createdAt: now,
+    },
+    globalStyle: {
+      captionPreset: "bold_pop",
+      accentColor: "#38E59D",
+      safeZone: "tiktok_reels",
+      showProgressBar: true,
+      bgm: {
+        preset: "tech_modern",
+        volume: 0.22,
+        autoDucking: true,
+      },
+    },
+    voiceover: {
+      source: "tts",
+      audioPath: null,
+      trimSilence: true,
+      words: [],
+    },
+    scenes: [
+      {
+        id: "sc_m1",
+        role: "hook",
+        startMs: 0,
+        endMs: 3600,
+        text: "Pernah kepikiran gimana satu klik bisa buka website dalam sekejap?",
+        visualSource: "motion",
+        aiMotion: s1Motion,
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "hard_cut", durationMs: 0 },
+        overlays: [],
+        sfx: [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.6 }],
+      },
+      {
+        id: "sc_m2",
+        role: "body",
+        startMs: 3600,
+        endMs: 7400,
+        text: "Dengan Edge CDN waktu muat halaman turun drastis ke 68 milidetik.",
+        visualSource: "motion",
+        aiMotion: s2Motion,
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "pop_zoom", durationMs: 240 },
+        overlays: [],
+        sfx: [{ preset: "pop_clean", offsetMs: 0, volume: 0.55 }],
+      },
+      {
+        id: "sc_m3",
+        role: "body",
+        startMs: 7400,
+        endMs: 11200,
+        text: "Di balik layar browser cukup jalankan empat langkah jaringan ini.",
+        visualSource: "motion",
+        aiMotion: s3Motion,
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "smooth_crossfade", durationMs: 240 },
+        overlays: [],
+        sfx: [{ preset: "tech_click", offsetMs: 0, volume: 0.5 }],
+      },
+      {
+        id: "sc_m4",
+        role: "cta",
+        startMs: 11200,
+        endMs: 15200,
+        text: "Singkatnya DNS itu seperti buku telepon raksasa internet yang serba cepat.",
+        visualSource: "motion",
+        aiMotion: s4Motion,
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "whip_pan", durationMs: 240 },
+        overlays: [],
+        sfx: [{ preset: "ding_chime", offsetMs: 0, volume: 0.6 }],
+      },
+    ],
+  };
+
+  project.voiceover.words = rebuildWordsFromScenes(project);
+  return project;
+}
+
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(loadInitialTheme);
   const [view, setView] = useState<AppView>("loading");
@@ -81,6 +185,10 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [activeProject, setActiveProject] = useState<SynkcutProject | null>(null);
+  const [studioInitOpts, setStudioInitOpts] = useState<{
+    leftTab?: "scenes" | "footage" | "caption" | "motion" | "audio";
+    timeMs?: number;
+  }>({});
 
   useEffect(() => {
     const root = document.documentElement;
@@ -126,7 +234,29 @@ export default function App() {
       }
       if (hash === "studio" || hash === "studio-light") {
         if (hash === "studio-light") setTheme("light");
+        setStudioInitOpts({});
         setActiveProject(createBlankProjectForFormat("ad_promo"));
+        setView("studio");
+        return;
+      }
+      if (
+        hash === "studio-motion" ||
+        hash === "studio-motion-light" ||
+        hash === "studio-motion-tech" ||
+        hash === "studio-motion-stick"
+      ) {
+        if (hash === "studio-motion-light") setTheme("light");
+        else setTheme("dark");
+        const opts =
+          hash === "studio-motion-light"
+            ? { leftTab: "footage" as const, timeMs: 5800 }
+            : hash === "studio-motion-tech"
+              ? { leftTab: "scenes" as const, timeMs: 9600 }
+              : hash === "studio-motion-stick"
+                ? { leftTab: "footage" as const, timeMs: 13600 }
+                : { leftTab: "footage" as const, timeMs: 2200 };
+        setStudioInitOpts(opts);
+        setActiveProject(createAiMotionShowcaseProject());
         setView("studio");
         return;
       }
@@ -211,8 +341,11 @@ export default function App() {
         initialProject={activeProject}
         byokStatus={byokStatus}
         theme={theme}
+        initialLeftTab={studioInitOpts.leftTab}
+        initialTimeMs={studioInitOpts.timeMs}
         onToggleTheme={toggleTheme}
         onBackHome={() => {
+          setStudioInitOpts({});
           refreshProjects();
           setView("projects");
         }}
