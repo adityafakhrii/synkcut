@@ -1,4 +1,10 @@
-import type { AiMotionEngine, AiMotionSpec, AiMotionTheme } from "../types/scene";
+import type {
+  AiMotionEngine,
+  AiMotionSpec,
+  AiMotionTheme,
+  Breakdown3DConfig,
+  Breakdown3DPresetId,
+} from "../types/scene";
 
 export const AI_MOTION_ENGINES: Array<{
   id: AiMotionEngine;
@@ -28,7 +34,7 @@ export const AI_MOTION_ENGINES: Array<{
   {
     id: "breakdown_3d",
     label: "3D Breakdown",
-    shortDesc: "Bedah komponen 3D lapis demi lapis (M7)",
+    shortDesc: "Bedah komponen 3D real-time lapis demi lapis",
   },
 ];
 
@@ -205,23 +211,342 @@ export function createDefaultAiMotion(
       };
 
     case "breakdown_3d":
-    default:
+    default: {
+      const preset = createBreakdown3DPreset("smartphone");
       return {
         engine: "breakdown_3d",
         theme,
-        title: shortSeed || "Inside a Smartphone",
-        subtitle: "Lapisan komponen utama",
-        takeaway: "Komponen padat dalam tebal 8 milimeter",
-        breakdown3d: {
-          spinSpeed: 0.08,
-          parts: [
-            { name: "Cover Glass", shape: "slab", material: "glass", level: 0 },
-            { name: "OLED Display", shape: "slab", material: "black", level: 1 },
-            { name: "Aluminum Frame", shape: "frame", material: "aluminum", level: 2 },
-            { name: "Logic Board", shape: "slab", material: "pcb", level: 3 },
-            { name: "Battery 5000mAh", shape: "slab", material: "battery", level: 4 },
-          ],
-        },
+        title: shortSeed || preset.title,
+        subtitle: preset.subtitle,
+        takeaway: preset.takeaway,
+        breakdown3d: preset.config,
       };
+    }
   }
+}
+
+export const BREAKDOWN_3D_SHAPES: Array<{ id: string; label: string }> = [
+  { id: "slab", label: "Slab (Rounded)" },
+  { id: "frame", label: "Frame (Hollow)" },
+  { id: "box", label: "Box" },
+  { id: "cylinder", label: "Cylinder / Disc" },
+  { id: "ring", label: "Ring" },
+  { id: "lens", label: "Camera Lens" },
+  { id: "capsule", label: "Capsule" },
+  { id: "torus", label: "Torus / Cushion" },
+  { id: "sphere", label: "Sphere" },
+  { id: "cone", label: "Cone" },
+];
+
+export const BREAKDOWN_3D_MATERIALS: Array<{ id: string; label: string }> = [
+  { id: "glass", label: "Glass (Clearcoat)" },
+  { id: "screen", label: "OLED Screen" },
+  { id: "aluminum", label: "Aluminum / Metal" },
+  { id: "steel", label: "Brushed Steel" },
+  { id: "gold", label: "Gold Metallic" },
+  { id: "copper", label: "Copper" },
+  { id: "pcb", label: "PCB Circuit" },
+  { id: "battery", label: "Li-ion Battery" },
+  { id: "coil", label: "Copper Coil" },
+  { id: "lens", label: "Optical Lens" },
+  { id: "ceramic", label: "Ceramic" },
+  { id: "rubber", label: "Matte Rubber" },
+  { id: "plastic", label: "Studio Plastic" },
+  { id: "black", label: "Anodized Black" },
+  { id: "white", label: "Matte White" },
+  { id: "wood", label: "Wood Grain" },
+  { id: "emissive", label: "Emissive Glow" },
+];
+
+export const BREAKDOWN_3D_PRESETS: Array<{
+  id: Exclude<Breakdown3DPresetId, "custom">;
+  label: string;
+  title: string;
+  subtitle: string;
+  takeaway: string;
+  config: Breakdown3DConfig;
+}> = [
+  {
+    id: "smartphone",
+    label: "Smartphone Flagship",
+    title: "Bedah Isi Smartphone",
+    subtitle: "6 lapisan komponen di bodi setebal 8mm",
+    takeaway: "Presisi mikro dari kaca hingga coil MagSafe",
+    config: {
+      presetId: "smartphone",
+      axis: "y",
+      spin: 0.72,
+      spinSpeed: 0.14,
+      elevation0: 36,
+      elevation1: 22,
+      parts: [
+        {
+          name: "Cover Glass",
+          shape: "slab",
+          size: [72, 1.4, 148],
+          pos: [0, 8.6, 0],
+          radius: 10,
+          material: "glass",
+          color: "#dbeafe",
+          level: 5,
+        },
+        {
+          name: "OLED Display",
+          shape: "slab",
+          size: [69, 1.8, 144],
+          pos: [0, 6.6, 0],
+          radius: 9,
+          material: "screen",
+          level: 4,
+        },
+        {
+          name: "Titanium Frame",
+          shape: "frame",
+          size: [74, 5.6, 150],
+          pos: [0, 1.6, 0],
+          radius: 11,
+          wall: 3.6,
+          material: "aluminum",
+          color: "#94a3b8",
+          level: 3,
+        },
+        {
+          name: "Logic Board SoC",
+          shape: "slab",
+          size: [60, 1.8, 56],
+          pos: [0, 3.8, -36],
+          radius: 4,
+          material: "pcb",
+          level: 2,
+        },
+        {
+          name: "Li-ion 5000mAh",
+          shape: "slab",
+          size: [56, 4.0, 76],
+          pos: [0, 2.0, 22],
+          radius: 4,
+          material: "battery",
+          text: "5000 mAh|Li-ion Polymer",
+          level: 1,
+        },
+        {
+          name: "MagSafe Coil",
+          shape: "cylinder",
+          size: [50, 1.4, 50],
+          pos: [0, 0.2, 10],
+          radius: 25,
+          material: "coil",
+          level: 0,
+        },
+      ],
+    },
+  },
+  {
+    id: "laptop",
+    label: "Laptop Ultrabook",
+    title: "Anatomi Laptop Tipis",
+    subtitle: "Arsitektur pendingin & chip modern",
+    takeaway: "Desain unibody memadatkan tenaga desktop",
+    config: {
+      presetId: "laptop",
+      axis: "y",
+      spin: 0.78,
+      spinSpeed: 0.13,
+      elevation0: 36,
+      elevation1: 23,
+      parts: [
+        {
+          name: "Retina Display",
+          shape: "slab",
+          size: [146, 2.6, 98],
+          pos: [0, 11.8, 0],
+          radius: 6,
+          material: "screen",
+          level: 4,
+        },
+        {
+          name: "Unibody Chassis",
+          shape: "frame",
+          size: [150, 6.8, 102],
+          pos: [0, 4.4, 0],
+          radius: 7,
+          wall: 6.5,
+          material: "aluminum",
+          color: "#cbd5e1",
+          level: 3,
+        },
+        {
+          name: "Mainboard & SoC",
+          shape: "slab",
+          size: [130, 2.2, 46],
+          pos: [0, 5.6, -22],
+          radius: 3,
+          material: "pcb",
+          level: 2,
+        },
+        {
+          name: "Cooling Blower",
+          shape: "ring",
+          size: [40, 4.0, 40],
+          pos: [34, 4.0, -20],
+          radius: 20,
+          inner: 13,
+          material: "steel",
+          color: "#64748b",
+          level: 1,
+        },
+        {
+          name: "Battery 70Wh",
+          shape: "slab",
+          size: [126, 4.6, 42],
+          pos: [0, 1.0, 22],
+          radius: 4,
+          material: "battery",
+          text: "70 Wh|6-Cell Pack",
+          level: 0,
+        },
+      ],
+    },
+  },
+  {
+    id: "earbuds",
+    label: "Earbuds TWS Pro",
+    title: "Rahasia Earbuds ANC",
+    subtitle: "Driver 11mm & chip peredam bising",
+    takeaway: "Audio hi-res dalam ruang kurang dari 3cm",
+    config: {
+      presetId: "earbuds",
+      axis: "y",
+      spin: 0.65,
+      spinSpeed: 0.18,
+      elevation0: 34,
+      elevation1: 22,
+      parts: [
+        {
+          name: "Silicone Ear Tip",
+          shape: "torus",
+          size: [22, 6.5, 22],
+          pos: [0, 23, 0],
+          radius: 11,
+          material: "rubber",
+          color: "#e2e8f0",
+          level: 4,
+        },
+        {
+          name: "Acoustic Shell",
+          shape: "capsule",
+          size: [20, 16, 20],
+          pos: [0, 12, 0],
+          material: "ceramic",
+          color: "#f8fafc",
+          level: 3,
+        },
+        {
+          name: "11mm Copper Driver",
+          shape: "cylinder",
+          size: [16, 3.0, 16],
+          pos: [0, 9.5, 0],
+          radius: 8,
+          material: "coil",
+          level: 2,
+        },
+        {
+          name: "ANC Audio PCB",
+          shape: "cylinder",
+          size: [15, 2.0, 15],
+          pos: [0, 6.0, 0],
+          radius: 7.5,
+          material: "pcb",
+          level: 1,
+        },
+        {
+          name: "Micro Lithium Cell",
+          shape: "cylinder",
+          size: [12, 8.0, 12],
+          pos: [0, 0, 0],
+          radius: 6,
+          material: "gold",
+          level: 0,
+        },
+      ],
+    },
+  },
+  {
+    id: "smartwatch",
+    label: "Smartwatch Titanium",
+    title: "Isi Dalam Smartwatch",
+    subtitle: "Sensor optik & layar safir tangguh",
+    takeaway: "Komputer mini lengkap di pergelangan tangan",
+    config: {
+      presetId: "smartwatch",
+      axis: "y",
+      spin: 0.72,
+      spinSpeed: 0.15,
+      elevation0: 38,
+      elevation1: 23,
+      parts: [
+        {
+          name: "Sapphire Glass",
+          shape: "slab",
+          size: [42, 2.0, 48],
+          pos: [0, 11.4, 0],
+          radius: 11,
+          material: "glass",
+          color: "#e0f2fe",
+          level: 4,
+        },
+        {
+          name: "AMOLED Display",
+          shape: "slab",
+          size: [38, 1.6, 44],
+          pos: [0, 9.5, 0],
+          radius: 9,
+          material: "screen",
+          level: 3,
+        },
+        {
+          name: "Titanium Case",
+          shape: "frame",
+          size: [44, 8.2, 50],
+          pos: [0, 2.2, 0],
+          radius: 12,
+          wall: 4.2,
+          material: "aluminum",
+          color: "#a8a29e",
+          level: 2,
+        },
+        {
+          name: "SiP Chip Board",
+          shape: "slab",
+          size: [32, 2.0, 34],
+          pos: [0, 5.0, 0],
+          radius: 5,
+          material: "pcb",
+          level: 1,
+        },
+        {
+          name: "Heart Rate Sensor",
+          shape: "lens",
+          size: [24, 3.6, 24],
+          pos: [0, 0, 0],
+          radius: 11,
+          material: "lens",
+          level: 0,
+        },
+      ],
+    },
+  },
+];
+
+export function createBreakdown3DPreset(
+  presetId: Exclude<Breakdown3DPresetId, "custom"> = "smartphone"
+) {
+  const found =
+    BREAKDOWN_3D_PRESETS.find((p) => p.id === presetId) ?? BREAKDOWN_3D_PRESETS[0];
+  return {
+    title: found.title,
+    subtitle: found.subtitle,
+    takeaway: found.takeaway,
+    config: JSON.parse(JSON.stringify(found.config)) as Breakdown3DConfig,
+  };
 }

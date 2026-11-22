@@ -18,7 +18,7 @@ import {
   type SynkcutProject,
 } from "./types/scene";
 import { BUILTIN_SAMPLES, createBlankProjectForFormat, type SampleTemplate } from "./engine/sampleTemplates";
-import { createDefaultAiMotion } from "./engine/aiMotionPresets";
+import { createBreakdown3DPreset, createDefaultAiMotion } from "./engine/aiMotionPresets";
 import { rebuildWordsFromScenes } from "./engine/sampleProject";
 import {
   deleteProject,
@@ -168,6 +168,91 @@ function createAiMotionShowcaseProject(): SynkcutProject {
   return project;
 }
 
+function createBreakdown3DShowcaseProject(presetId: "smartphone" | "laptop" = "smartphone"): SynkcutProject {
+  const now = new Date().toISOString();
+  const mainPreset = createBreakdown3DPreset(presetId);
+  const secondPreset = createBreakdown3DPreset(presetId === "smartphone" ? "earbuds" : "smartwatch");
+
+  const project: SynkcutProject = {
+    version: "1.1",
+    meta: {
+      id: `demo_3d_${presetId}_m7`,
+      name: presetId === "smartphone" ? "Bedah Smartphone 3D" : "Anatomi Laptop 3D",
+      aspectRatio: "9:16",
+      fps: 30,
+      format: "education",
+      createdAt: now,
+    },
+    globalStyle: {
+      captionPreset: "bold_pop",
+      accentColor: "#38E59D",
+      safeZone: "tiktok_reels",
+      showProgressBar: true,
+      bgm: {
+        preset: "tech_modern",
+        volume: 0.22,
+        autoDucking: true,
+      },
+    },
+    voiceover: {
+      source: "tts",
+      audioPath: null,
+      trimSilence: true,
+      words: [],
+    },
+    scenes: [
+      {
+        id: "sc_3d_1",
+        role: "hook",
+        startMs: 0,
+        endMs: 4600,
+        text:
+          presetId === "smartphone"
+            ? "Pernah lihat 6 lapisan komponen di dalam HP setipis delapan milimeter?"
+            : "Begini cara laptop tipis memadatkan chip kencang dan baterai besar.",
+        visualSource: "motion",
+        aiMotion: {
+          engine: "breakdown_3d",
+          theme: presetId === "smartphone" ? "carbon" : "paper",
+          title: mainPreset.title,
+          subtitle: mainPreset.subtitle,
+          takeaway: mainPreset.takeaway,
+          breakdown3d: mainPreset.config,
+        },
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "hard_cut", durationMs: 0 },
+        overlays: [],
+        sfx: [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.6 }],
+      },
+      {
+        id: "sc_3d_2",
+        role: "body",
+        startMs: 4600,
+        endMs: 9200,
+        text: "Setiap lapisan dirancang presisi agar dingin stabil dan super hemat daya.",
+        visualSource: "motion",
+        aiMotion: {
+          engine: "breakdown_3d",
+          theme: "blue",
+          title: secondPreset.title,
+          subtitle: secondPreset.subtitle,
+          takeaway: secondPreset.takeaway,
+          breakdown3d: secondPreset.config,
+        },
+        media: { path: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.4 },
+        transitionIn: { preset: "pop_zoom", durationMs: 240 },
+        overlays: [],
+        sfx: [{ preset: "pop_clean", offsetMs: 0, volume: 0.55 }],
+      },
+    ],
+  };
+
+  project.voiceover.words = rebuildWordsFromScenes(project);
+  return project;
+}
+
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(loadInitialTheme);
   const [view, setView] = useState<AppView>("loading");
@@ -257,6 +342,14 @@ export default function App() {
                 : { leftTab: "footage" as const, timeMs: 2200 };
         setStudioInitOpts(opts);
         setActiveProject(createAiMotionShowcaseProject());
+        setView("studio");
+        return;
+      }
+      if (hash === "studio-motion-3d" || hash === "studio-motion-3d-light") {
+        const isLight = hash === "studio-motion-3d-light";
+        setTheme(isLight ? "light" : "dark");
+        setStudioInitOpts({ leftTab: "footage", timeMs: 3600 });
+        setActiveProject(createBreakdown3DShowcaseProject(isLight ? "laptop" : "smartphone"));
         setView("studio");
         return;
       }

@@ -116,17 +116,70 @@ export interface StickFigureConfig {
   } | null;
 }
 
+export type Breakdown3DShape =
+  | "slab"
+  | "frame"
+  | "box"
+  | "cylinder"
+  | "ring"
+  | "lens"
+  | "sphere"
+  | "capsule"
+  | "cone"
+  | "torus";
+
+export type Breakdown3DMaterial =
+  | "glass"
+  | "aluminum"
+  | "steel"
+  | "gold"
+  | "copper"
+  | "black"
+  | "white"
+  | "ceramic"
+  | "rubber"
+  | "pcb"
+  | "chip"
+  | "battery"
+  | "coil"
+  | "lens"
+  | "screen"
+  | "wood"
+  | "plastic"
+  | "emissive";
+
+export type Breakdown3DPresetId =
+  | "smartphone"
+  | "laptop"
+  | "earbuds"
+  | "smartwatch"
+  | "custom";
+
+export interface Breakdown3DPart {
+  name: string;
+  shape: Breakdown3DShape | string;
+  color?: string;
+  material?: Breakdown3DMaterial | string;
+  level: number;
+  size?: [number, number, number];
+  pos?: [number, number, number];
+  rot?: [number, number, number];
+  radius?: number;
+  inner?: number;
+  wall?: number;
+  text?: string;
+}
+
 export interface Breakdown3DConfig {
-  parts: Array<{
-    name: string;
-    shape: string;
-    color?: string;
-    material?: string;
-    level: number;
-    size?: [number, number, number];
-    pos?: [number, number, number];
-  }>;
+  presetId?: Breakdown3DPresetId;
+  parts: Breakdown3DPart[];
+  axis?: "y" | "x" | "z";
+  spin?: number;
   spinSpeed?: number;
+  gap?: number;
+  elevation0?: number;
+  elevation1?: number;
+  zoom?: number;
 }
 
 export interface AiMotionSpec {

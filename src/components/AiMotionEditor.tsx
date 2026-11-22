@@ -3,6 +3,8 @@ import type {
   AiMotionEngine,
   AiMotionSpec,
   AiMotionTheme,
+  Breakdown3DConfig,
+  Breakdown3DPresetId,
   FlowDiagramConfig,
   MotionChartConfig,
   StickFigureAction,
@@ -12,6 +14,10 @@ import type {
 import {
   AI_MOTION_ENGINES,
   AI_MOTION_THEMES,
+  BREAKDOWN_3D_MATERIALS,
+  BREAKDOWN_3D_PRESETS,
+  BREAKDOWN_3D_SHAPES,
+  createBreakdown3DPreset,
   createDefaultAiMotion,
 } from "../engine/aiMotionPresets";
 
@@ -73,10 +79,36 @@ export default function AiMotionEditor({ spec, sceneText, onChange }: AiMotionEd
     onChange({ ...spec, stickFigure: { ...base, ...partial } }, record);
   }
 
+  function patchBreakdown(partial: Partial<Breakdown3DConfig>, record = false) {
+    const base =
+      spec.breakdown3d ?? createDefaultAiMotion("breakdown_3d", spec.theme).breakdown3d!;
+    onChange(
+      { ...spec, breakdown3d: { ...base, ...partial, presetId: partial.presetId ?? "custom" } },
+      record
+    );
+  }
+
+  function applyBreakdownPreset(presetId: Exclude<Breakdown3DPresetId, "custom">) {
+    const p = createBreakdown3DPreset(presetId);
+    onChange(
+      {
+        ...spec,
+        engine: "breakdown_3d",
+        title: p.title,
+        subtitle: p.subtitle,
+        takeaway: p.takeaway,
+        breakdown3d: p.config,
+      },
+      true
+    );
+  }
+
   const flow = spec.flow ?? createDefaultAiMotion("flow_diagram", spec.theme).flow!;
   const chart = spec.chart ?? createDefaultAiMotion("motion_chart", spec.theme).chart!;
   const tech = spec.techCards ?? createDefaultAiMotion("tech_cards", spec.theme).techCards!;
   const stick = spec.stickFigure ?? createDefaultAiMotion("stick_figure", spec.theme).stickFigure!;
+  const breakdown =
+    spec.breakdown3d ?? createDefaultAiMotion("breakdown_3d", spec.theme).breakdown3d!;
 
   return (
     <div className="space-y-3.5">
@@ -763,18 +795,200 @@ export default function AiMotionEditor({ spec, sceneText, onChange }: AiMotionEd
         </div>
       )}
 
-      {/* ========== ENGINE 5 STUB: 3D BREAKDOWN ========== */}
+      {/* ========== ENGINE 5: 3D PRODUCT BREAKDOWN (THREE.JS OFFLINE) ========== */}
       {spec.engine === "breakdown_3d" && (
         <div
-          className="rounded-lg p-2.5 text-[11px] leading-relaxed"
-          style={{
-            backgroundColor: "var(--bg-elevated)",
-            border: "1px dashed var(--border-strong)",
-            color: "var(--text-secondary)",
-          }}
+          className="space-y-3 border-t pt-3"
+          style={{ borderColor: "var(--border-subtle)" }}
         >
-          Mode preview isometrik aktif. Engine <strong>3D WebGL Three.js penuh</strong> (turntable +
-          exploded view material studio) akan diaktifkan di <strong>Milestone 7</strong>.
+          {/* 1-Click 3D Product Presets */}
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold">Preset Produk 3D</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {BREAKDOWN_3D_PRESETS.map((preset) => {
+                const active = breakdown.presetId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyBreakdownPreset(preset.id)}
+                    className="rounded-md px-2 py-1.5 text-left text-[11px] font-semibold transition-colors cursor-pointer"
+                    style={{
+                      backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                      color: active ? "var(--accent)" : "var(--text-primary)",
+                      border: active
+                        ? "1px solid var(--accent)"
+                        : "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Explode Axis & Spin Speed */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium" style={{ color: "var(--text-secondary)" }}>
+                Sumbu Ledak
+              </label>
+              <select
+                value={breakdown.axis ?? "y"}
+                onChange={(e) =>
+                  patchBreakdown({ axis: e.target.value as "y" | "x" | "z" }, true)
+                }
+                className="ui-input w-full rounded-md px-2 py-1.5 text-xs"
+              >
+                <option value="y">Vertikal (Y)</option>
+                <option value="x">Horizontal (X)</option>
+                <option value="z">Depan (Z)</option>
+              </select>
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between text-[11px]">
+                <span style={{ color: "var(--text-secondary)" }}>Putaran</span>
+                <span className="font-mono-num" style={{ color: "var(--text-muted)" }}>
+                  {(breakdown.spinSpeed ?? 0.14).toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={0.45}
+                step={0.02}
+                value={breakdown.spinSpeed ?? 0.14}
+                onChange={(e) => patchBreakdown({ spinSpeed: Number(e.target.value) }, false)}
+                className="mt-1.5 w-full accent-[var(--accent)] cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* 3D Parts List */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold">
+                Lapisan Komponen 3D ({breakdown.parts.length})
+              </span>
+              {breakdown.parts.length < 8 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextLevel =
+                      breakdown.parts.reduce((m, p) => Math.max(m, p.level), -1) + 1;
+                    patchBreakdown(
+                      {
+                        parts: [
+                          ...breakdown.parts,
+                          {
+                            name: `Layer ${breakdown.parts.length + 1}`,
+                            shape: "slab",
+                            material: "aluminum",
+                            size: [60, 2.5, 110],
+                            pos: [0, nextLevel * 2, 0],
+                            level: nextLevel,
+                          },
+                        ],
+                      },
+                      true
+                    );
+                  }}
+                  className="inline-flex items-center gap-0.5 text-[11px] font-semibold cursor-pointer"
+                  style={{ color: "var(--accent)" }}
+                >
+                  <Plus className="h-3 w-3" />
+                  Tambah
+                </button>
+              )}
+            </div>
+
+            {breakdown.parts.map((part, idx) => (
+              <div
+                key={idx}
+                className="space-y-1.5 rounded-md p-2"
+                style={{
+                  backgroundColor: "var(--bg-elevated)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={part.name}
+                    onChange={(e) => {
+                      const next = [...breakdown.parts];
+                      next[idx] = { ...next[idx], name: e.target.value };
+                      patchBreakdown({ parts: next }, false);
+                    }}
+                    placeholder="Nama komponen"
+                    className="ui-input min-w-0 flex-1 rounded px-2 py-1 text-xs font-medium"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={8}
+                    value={part.level}
+                    onChange={(e) => {
+                      const next = [...breakdown.parts];
+                      next[idx] = { ...next[idx], level: Math.max(0, Number(e.target.value) || 0) };
+                      patchBreakdown({ parts: next }, true);
+                    }}
+                    title="Urutan lapisan ledak (0 = paling bawah)"
+                    aria-label={`Level ${part.name}`}
+                    className="ui-input w-11 rounded px-1.5 py-1 text-center font-mono-num text-xs"
+                  />
+                  {breakdown.parts.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = breakdown.parts.filter((_, i) => i !== idx);
+                        patchBreakdown({ parts: next }, true);
+                      }}
+                      className="p-1 cursor-pointer"
+                      style={{ color: "var(--danger)" }}
+                      aria-label={`Hapus ${part.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <select
+                    value={part.shape}
+                    onChange={(e) => {
+                      const next = [...breakdown.parts];
+                      next[idx] = { ...next[idx], shape: e.target.value };
+                      patchBreakdown({ parts: next }, true);
+                    }}
+                    className="ui-input rounded px-1.5 py-1 text-[11px]"
+                  >
+                    {BREAKDOWN_3D_SHAPES.map((sh) => (
+                      <option key={sh.id} value={sh.id}>
+                        {sh.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={part.material || "plastic"}
+                    onChange={(e) => {
+                      const next = [...breakdown.parts];
+                      next[idx] = { ...next[idx], material: e.target.value };
+                      patchBreakdown({ parts: next }, true);
+                    }}
+                    className="ui-input rounded px-1.5 py-1 text-[11px]"
+                  >
+                    {BREAKDOWN_3D_MATERIALS.map((mat) => (
+                      <option key={mat.id} value={mat.id}>
+                        {mat.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

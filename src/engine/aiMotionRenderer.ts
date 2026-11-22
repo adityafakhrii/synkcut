@@ -6,6 +6,7 @@ import type {
   StickFigureConfig,
   TechCardsConfig,
 } from "../types/scene";
+import { renderBreakdown3DScene } from "./breakdown3dRenderer";
 
 const SANS = '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const MONO = '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace';
@@ -1907,9 +1908,23 @@ export function renderAiMotionScene(
       );
       break;
     case "breakdown_3d":
-    default:
-      renderBreakdownPreviewStub(ctx, width, stageTop, stageBottom, spec, pal, p);
+    default: {
+      const rendered3d = renderBreakdown3DScene(
+        ctx,
+        width,
+        height,
+        stageTop,
+        stageBottom,
+        spec,
+        pal,
+        p,
+        sceneDurationSec
+      );
+      if (!rendered3d) {
+        renderBreakdownPreviewStub(ctx, width, stageTop, stageBottom, spec, pal, p);
+      }
       break;
+    }
   }
 
   // 4. Optional Takeaway pill (54.5%-58%, cleanly above 63%-74% Kinetic Captions)

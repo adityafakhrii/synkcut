@@ -47,7 +47,11 @@ import type {
   SynkcutProject,
   TransitionPreset,
 } from "../types/scene";
-import { AI_MOTION_ENGINES, createDefaultAiMotion } from "../engine/aiMotionPresets";
+import {
+  AI_MOTION_ENGINES,
+  createBreakdown3DPreset,
+  createDefaultAiMotion,
+} from "../engine/aiMotionPresets";
 import AiMotionEditor from "./AiMotionEditor";
 import { getProjectDurationMs, rebuildWordsFromScenes } from "../engine/sampleProject";
 import {
@@ -1349,6 +1353,48 @@ export default function StudioView({
             ),
           },
           "Scene aktif diubah ke AI Motion · Flow & Diagram (0 token)."
+        );
+      }
+    } else if (
+      lower.includes("3d") ||
+      lower.includes("breakdown") ||
+      lower.includes("bedah") ||
+      lower.includes("smartphone") ||
+      lower.includes("laptop") ||
+      lower.includes("earbuds") ||
+      lower.includes("smartwatch")
+    ) {
+      if (activeScene) {
+        const presetId = lower.includes("laptop")
+          ? "laptop"
+          : lower.includes("earbuds")
+            ? "earbuds"
+            : lower.includes("smartwatch") || lower.includes("jam")
+              ? "smartwatch"
+              : "smartphone";
+        const preset = createBreakdown3DPreset(presetId);
+        applyLocalPatch(
+          {
+            ...before,
+            version: "1.1",
+            scenes: before.scenes.map((s) =>
+              s.id === activeScene.id
+                ? {
+                    ...s,
+                    visualSource: "motion",
+                    aiMotion: {
+                      engine: "breakdown_3d",
+                      theme: activeScene.aiMotion?.theme ?? "carbon",
+                      title: preset.title,
+                      subtitle: preset.subtitle,
+                      takeaway: preset.takeaway,
+                      breakdown3d: preset.config,
+                    },
+                  }
+                : s
+            ),
+          },
+          `Scene aktif diubah ke AI Motion · 3D Breakdown (${presetId}) — 0 token.`
         );
       }
     } else if (lower.includes("footage") || lower.includes("video lokal")) {
