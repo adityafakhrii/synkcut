@@ -313,8 +313,14 @@ export default function App() {
         setView(hash);
         return;
       }
-      if (hash === "wizard") {
+      if (hash === "wizard" || hash === "wizard-light") {
+        setTheme(hash === "wizard-light" ? "light" : "dark");
         setView("wizard");
+        return;
+      }
+      if (hash === "samples" || hash === "samples-light") {
+        setTheme(hash === "samples-light" ? "light" : "dark");
+        setView("samples");
         return;
       }
       if (hash === "studio" || hash === "studio-light") {
@@ -520,7 +526,7 @@ export default function App() {
             className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v1.0
+            v1.1
           </span>
         </div>
 
@@ -578,7 +584,7 @@ export default function App() {
           </button>
 
           <div
-            className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-xs font-medium opacity-55"
+            className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-xs font-medium"
             style={{ color: "var(--text-muted)" }}
             title="Hadir di Phase 2 — berbagi & remix sample kreator"
           >

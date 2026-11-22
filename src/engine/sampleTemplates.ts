@@ -1,4 +1,5 @@
 import type { ContentFormat, SynkcutProject } from "../types/scene";
+import { createBreakdown3DPreset, createDefaultAiMotion } from "./aiMotionPresets";
 import { rebuildWordsFromScenes } from "./sampleProject";
 
 export interface SampleTemplate {
@@ -9,6 +10,7 @@ export interface SampleTemplate {
   captionLabel: string;
   motionLabel: string;
   durationLabel: string;
+  isAiMotion?: boolean;
   roles: Array<"hook" | "body" | "cta">;
   buildProject: (customName?: string) => SynkcutProject;
 }
@@ -18,6 +20,219 @@ function makeProjectId(prefix: string): string {
 }
 
 export const BUILTIN_SAMPLES: SampleTemplate[] = [
+  {
+    id: "sample_ai_motion_internet",
+    title: "Cara Kerja Internet (AI Motion)",
+    format: "education",
+    summary:
+      "Tanpa footage kamera — full animasi 2D native: diagram alur DNS, grafik Edge CDN, terminal kode, & cerita stick-figure.",
+    captionLabel: "Bold Pop",
+    motionLabel: "AI Motion 2D (4 Engine)",
+    durationLabel: "00:15.2",
+    isAiMotion: true,
+    roles: ["hook", "body", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const s1Motion = createDefaultAiMotion("flow_diagram", "carbon", "Cara Kerja Internet");
+      const s2Motion = createDefaultAiMotion("motion_chart", "paper", "Waktu Muat Halaman");
+      const s3Motion = createDefaultAiMotion("tech_cards", "blue", "Alur Request Browser");
+      s3Motion.subtitle = "Dari lookup DNS sampai halaman dirender";
+      if (s3Motion.techCards) s3Motion.techCards.layout = "terminal_code";
+      const s4Motion = createDefaultAiMotion("stick_figure", "mint", "Analogi DNS Internet");
+
+      const base: SynkcutProject = {
+        version: "1.1",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Cara Kerja Internet (AI Motion)",
+          format: "education",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "bold_pop",
+          accentColor: "#38E59D",
+          showProgressBar: true,
+          bgm: { preset: "tech_modern", volume: 0.22, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 3600,
+            text: "Pernah kepikiran gimana satu klik bisa buka website dalam sekejap?",
+            visualSource: "motion",
+            aiMotion: s1Motion,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.6 }],
+            overlays: [],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 3600,
+            endMs: 7400,
+            text: "Dengan Edge CDN waktu muat halaman turun drastis ke 68 milidetik.",
+            visualSource: "motion",
+            aiMotion: s2Motion,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "pop_zoom", durationMs: 240 },
+            sfx: [{ preset: "pop_text", offsetMs: 0, volume: 0.55 }],
+            overlays: [],
+          },
+          {
+            id: "scene_3",
+            role: "body",
+            startMs: 7400,
+            endMs: 11200,
+            text: "Di balik layar browser cukup jalankan empat langkah jaringan ini.",
+            visualSource: "motion",
+            aiMotion: s3Motion,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "smooth_crossfade", durationMs: 240 },
+            sfx: [{ preset: "keyboard_click", offsetMs: 0, volume: 0.55 }],
+            overlays: [],
+          },
+          {
+            id: "scene_4",
+            role: "cta",
+            startMs: 11200,
+            endMs: 15200,
+            text: "Singkatnya DNS itu seperti buku telepon raksasa internet yang serba cepat.",
+            visualSource: "motion",
+            aiMotion: s4Motion,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "whip_pan", durationMs: 240 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.6 }],
+            overlays: [],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
+  {
+    id: "sample_ai_motion_3d_smartphone",
+    title: "Bedah Isi Smartphone 3D",
+    format: "review",
+    summary:
+      "Teardown 3D WebGL real-time 6 lapis komponen HP + perbandingan benchmark & kartu ringkasan teknis, 100% lokal.",
+    captionLabel: "Neon Tech",
+    motionLabel: "3D Breakdown + Chart",
+    durationLabel: "00:12.6",
+    isAiMotion: true,
+    roles: ["hook", "body", "cta"],
+    buildProject: (customName) => {
+      const now = new Date().toISOString();
+      const phone3d = createBreakdown3DPreset("smartphone");
+      const chartSpec = createDefaultAiMotion("motion_chart", "carbon", "Efisiensi Baterai 5000mAh");
+      if (chartSpec.chart) {
+        chartSpec.chart.chartType = "bar";
+        chartSpec.chart.data = [
+          { label: "Chip Lama", value: 11 },
+          { label: "Generasi Lalu", value: 15 },
+          { label: "Flagship Baru", value: 21 },
+        ];
+        chartSpec.chart.suffix = " jam";
+        chartSpec.chart.goodDirection = "up";
+        chartSpec.chart.highlightIndex = 2;
+      }
+      const vsSpec = createDefaultAiMotion("tech_cards", "blue", "Kenapa Bisa Setipis 8mm?");
+      vsSpec.subtitle = "Perbandingan arsitektur tumpukan internal";
+      if (vsSpec.techCards) {
+        vsSpec.techCards.layout = "comparison_split";
+        vsSpec.techCards.leftTitle = "HP Lama";
+        vsSpec.techCards.leftItems = ["PCB lebar 2 lapis", "Baterai terpisah tebal", "Frame plastik rongga"];
+        vsSpec.techCards.rightTitle = "Flagship 3D";
+        vsSpec.techCards.rightItems = ["Logic board bertingkat", "Sel Li-ion rapat 5000mAh", "Unibody titanium presisi"];
+      }
+
+      const base: SynkcutProject = {
+        version: "1.1",
+        meta: {
+          id: makeProjectId("proj"),
+          name: customName || "Bedah Isi Smartphone 3D",
+          format: "review",
+          aspectRatio: "9:16",
+          fps: 30,
+          createdAt: now,
+          updatedAt: now,
+        },
+        globalStyle: {
+          captionPreset: "neon_tech",
+          accentColor: "#38E59D",
+          showProgressBar: true,
+          bgm: { preset: "tech_modern", volume: 0.24, autoDucking: true },
+          safeZone: "tiktok_reels",
+        },
+        voiceover: { source: "demo", audioPath: null, trimSilence: true, words: [] },
+        scenes: [
+          {
+            id: "scene_1",
+            role: "hook",
+            startMs: 0,
+            endMs: 4800,
+            text: "Pernah lihat enam lapisan komponen di dalam HP setipis delapan milimeter?",
+            visualSource: "motion",
+            aiMotion: {
+              engine: "breakdown_3d",
+              theme: "carbon",
+              title: phone3d.title,
+              subtitle: phone3d.subtitle,
+              takeaway: phone3d.takeaway,
+              breakdown3d: phone3d.config,
+            },
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "hard_cut", durationMs: 0 },
+            sfx: [{ preset: "impact_boom", offsetMs: 0, volume: 0.65 }],
+            overlays: [],
+          },
+          {
+            id: "scene_2",
+            role: "body",
+            startMs: 4800,
+            endMs: 8800,
+            text: "Berkat efisiensi chip baru, baterai lima ribu mAh tahan sampai dua puluh satu jam.",
+            visualSource: "motion",
+            aiMotion: chartSpec,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "pop_zoom", durationMs: 240 },
+            sfx: [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.6 }],
+            overlays: [],
+          },
+          {
+            id: "scene_3",
+            role: "cta",
+            startMs: 8800,
+            endMs: 12600,
+            text: "Produk teknologi apa lagi yang mau kita bedah tiga dimensi besok?",
+            visualSource: "motion",
+            aiMotion: vsSpec,
+            media: { path: null, trimStartMs: 0, fit: "cover" },
+            motion: { preset: "static_clean", intensity: 0.4 },
+            transitionIn: { preset: "whip_pan", durationMs: 240 },
+            sfx: [{ preset: "ding_notif", offsetMs: 0, volume: 0.6 }],
+            overlays: [],
+          },
+        ],
+      };
+      base.voiceover.words = rebuildWordsFromScenes(base);
+      return base;
+    },
+  },
   {
     id: "sample_ad_promo",
     title: "Promo Produk Kilat",

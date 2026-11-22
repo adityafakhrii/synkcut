@@ -12,6 +12,10 @@ pub struct GenerateScriptRequest {
     pub format: String,
     pub tone: String,
     pub target_duration_sec: u32,
+    #[serde(default)]
+    pub visual_mode: Option<String>, // "motion" | "footage" | "hybrid"
+    #[serde(default)]
+    pub style_reference_summary: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +67,14 @@ pub struct AssembleProjectRequest {
     pub bgm_preset: String,
     pub auto_ducking: bool,
     pub auto_sfx: bool,
+    #[serde(default)]
+    pub visual_mode: Option<String>, // "motion" | "footage" | "hybrid"
+    #[serde(default)]
+    pub motion_theme: Option<String>, // "carbon" | "paper" | "coral" | "mint" | "blue"
+    #[serde(default)]
+    pub preferred_engines: Option<Vec<String>>,
+    #[serde(default)]
+    pub style_reference: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,7 +98,7 @@ pub fn strip_json_fences(raw: &str) -> String {
     }
 }
 
-fn resolve_active_key(app: &AppHandle) -> Result<(String, String), String> {
+pub fn resolve_active_key(app: &AppHandle) -> Result<(String, String), String> {
     let status = byok::get_byok_status(app.clone());
     if let Some(key) = byok::read_stored_key(&status.active_provider) {
         return Ok((status.active_provider, key));
@@ -100,7 +112,7 @@ fn resolve_active_key(app: &AppHandle) -> Result<(String, String), String> {
 }
 
 /// Calls Gemini / OpenAI / OpenRouter with optional base64 JPEG images and enforces JSON output
-async fn call_llm_json(
+pub async fn call_llm_json(
     provider: &str,
     api_key: &str,
     system_prompt: &str,
@@ -246,12 +258,24 @@ pub async fn ai_generate_script(
         Tulis naskah yang tajam, spoken-word (enak diucapkan voiceover), langsung stop-scroll di 3 detik pertama, tanpa basa-basi klise. \
         Balas HANYA dalam JSON valid.";
 
+    let visual_hint = match req.visual_mode.as_deref() {
+        Some("motion") => "\n- Mode Visual: AI Motion Video (tanpa footage kamera — susun segmen agar tiap scene cocok divisualisasikan dengan diagram, grafik, kartu poin, kartun stick-figure, atau 3D breakdown).",
+        Some("hybrid") => "\n- Mode Visual: Campur (gabungan footage lokal & AI Motion — buat segmen jelas mana penjelasan visual/data dan mana aksi/demo).",
+        _ => "",
+    };
+    let style_hint = req
+        .style_reference_summary
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| format!("\n- Referensi Gaya Visual & Pacing: {}", s.trim()))
+        .unwrap_or_default();
+
     let user_prompt = format!(
         "Buatkan skrip video pendek Bahasa Indonesia untuk topik/produk ini:\n\
         - Topik/Produk: \"{}\"\n\
         - Format Konten: {}\n\
         - Gaya Bahasa: {}\n\
-        - Target Durasi: {} detik (buat tepat {} segmen body)\n\n\
+        - Target Durasi: {} detik (buat tepat {} segmen body){}{}\n\n\
         Balas dalam struktur JSON persis seperti ini:\n\
         {{\n\
           \"projectTitle\": \"Judul singkat maks 5 kata\",\n\
@@ -267,7 +291,9 @@ pub async fn ai_generate_script(
         req.format,
         req.tone,
         req.target_duration_sec,
-        body_count
+        body_count,
+        visual_hint,
+        style_hint
     );
 
     let val = call_llm_json(&provider, &api_key, system_prompt, &user_prompt, &[]).await?;
@@ -385,11 +411,174 @@ fn compute_scene_timings(
     ranges
 }
 
+/// Build a clean, deterministic v1.1 `AiMotionSpec` fallback tailored to scene text, index, theme, and preferred engines.
+fn build_fallback_ai_motion(
+    role: &str,
+    scene_idx: usize,
+    text: &str,
+    project_title: &str,
+    theme: &str,
+    preferred_engines: &[String],
+) -> Value {
+    let lower = text.to_lowercase();
+    let short_title: String = text
+        .split_whitespace()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title = if short_title.is_empty() {
+        project_title.to_string()
+    } else {
+        short_title
+    };
+
+    let picked_engine = if lower.contains("3d")
+        || lower.contains("bedah")
+        || lower.contains("smartphone")
+        || lower.contains("laptop")
+        || lower.contains("komponen")
+        || lower.contains("lapisan")
+    {
+        "breakdown_3d"
+    } else if lower.contains('%')
+        || lower.contains("persen")
+        || lower.contains("angka")
+        || lower.contains("grafik")
+        || lower.contains("naik")
+        || lower.contains("turun")
+        || lower.contains("detik")
+        || lower.contains("ms")
+    {
+        "motion_chart"
+    } else if lower.contains("analogi")
+        || lower.contains("cerita")
+        || lower.contains("ibarat")
+        || lower.contains("bayangin")
+        || lower.contains("seperti")
+    {
+        "stick_figure"
+    } else if lower.contains("kode")
+        || lower.contains("terminal")
+        || lower.contains("langkah")
+        || lower.contains("tips")
+        || lower.contains("banding")
+        || role == "cta"
+    {
+        "tech_cards"
+    } else if !preferred_engines.is_empty() {
+        preferred_engines[scene_idx % preferred_engines.len()].as_str()
+    } else {
+        match scene_idx % 4 {
+            0 => "flow_diagram",
+            1 => "motion_chart",
+            2 => "tech_cards",
+            _ => "stick_figure",
+        }
+    };
+
+    match picked_engine {
+        "motion_chart" => json!({
+            "engine": "motion_chart",
+            "theme": theme,
+            "title": title,
+            "subtitle": "Perbandingan metrik utama",
+            "takeaway": "Perubahan terukur secara visual",
+            "chart": {
+                "chartType": "bar",
+                "data": [
+                    { "label": "Sebelum", "value": 32 },
+                    { "label": "Tahap 1", "value": 64 },
+                    { "label": "Optimal", "value": 96 }
+                ],
+                "prefix": "",
+                "suffix": "%",
+                "callout": "auto",
+                "goodDirection": "up",
+                "highlightIndex": 2
+            }
+        }),
+        "tech_cards" => json!({
+            "engine": "tech_cards",
+            "theme": theme,
+            "title": title,
+            "subtitle": project_title,
+            "takeaway": "Ringkas, tajam, mudah diingat",
+            "techCards": {
+                "layout": "staggered_steps",
+                "cards": [
+                    { "badge": "01", "title": "Poin Inti Pertama", "detail": "Fokus langsung ke solusi utama." },
+                    { "badge": "02", "title": "Bukti & Visual Jelas", "detail": "Gunakan analogi atau angka nyata." },
+                    { "badge": "03", "title": "Aksi Berikutnya", "detail": "Praktikkan sekarang juga." }
+                ]
+            }
+        }),
+        "stick_figure" => json!({
+            "engine": "stick_figure",
+            "theme": if theme == "carbon" { "paper" } else { theme },
+            "title": title,
+            "subtitle": "Analogi singkat biar langsung paham",
+            "stickFigure": {
+                "setting": "office",
+                "figures": [
+                    { "id": "a", "kind": "person", "x": 0.26, "label": "Kamu", "facing": "right", "color": "#38bdf8" },
+                    { "id": "b", "kind": "person", "x": 0.74, "label": "Sistem", "facing": "left", "color": "#10b981" }
+                ],
+                "props": [{ "type": "desk", "x": 0.25 }, { "type": "plant", "x": 0.88 }],
+                "beats": [
+                    { "who": "a", "action": "talk", "atSec": 0.0, "durationSec": 1.4, "say": "Gimana caranya?" },
+                    { "who": "b", "action": "idea", "atSec": 1.1, "durationSec": 1.6, "say": "Cepat & otomatis!" },
+                    { "who": "a", "action": "cheer", "atSec": 2.2, "durationSec": 1.4, "say": "Paham banget!" }
+                ],
+                "arrow": { "fromId": "a", "toId": "b", "atSec": 0.7, "label": "Alur" }
+            }
+        }),
+        "breakdown_3d" => json!({
+            "engine": "breakdown_3d",
+            "theme": theme,
+            "title": title,
+            "subtitle": "Bedah komponen 3D lapis demi lapis",
+            "takeaway": "Presisi arsitektur modern",
+            "breakdown3d": {
+                "presetId": "smartphone",
+                "axis": "y",
+                "spin": 0.72,
+                "spinSpeed": 0.14,
+                "parts": [
+                    { "name": "Cover Glass", "shape": "slab", "size": [72, 1.4, 148], "pos": [0, 8.6, 0], "radius": 10, "material": "glass", "level": 5 },
+                    { "name": "OLED Display", "shape": "slab", "size": [69, 1.8, 144], "pos": [0, 6.6, 0], "radius": 9, "material": "screen", "level": 4 },
+                    { "name": "Titanium Frame", "shape": "frame", "size": [74, 5.6, 150], "pos": [0, 1.6, 0], "radius": 11, "wall": 3.6, "material": "aluminum", "level": 3 },
+                    { "name": "Logic Board SoC", "shape": "slab", "size": [60, 1.8, 56], "pos": [0, 3.8, -36], "radius": 4, "material": "pcb", "level": 2 },
+                    { "name": "Li-ion 5000mAh", "shape": "slab", "size": [56, 4.0, 76], "pos": [0, 2.0, 22], "radius": 4, "material": "battery", "text": "5000 mAh|Li-ion", "level": 1 },
+                    { "name": "MagSafe Coil", "shape": "cylinder", "size": [50, 1.4, 50], "pos": [0, 0.2, 10], "radius": 25, "material": "coil", "level": 0 }
+                ]
+            }
+        }),
+        _ => json!({
+            "engine": "flow_diagram",
+            "theme": theme,
+            "title": title,
+            "subtitle": project_title,
+            "takeaway": "Alur sistem bekerja berurutan",
+            "flow": {
+                "pattern": "flow",
+                "steps": ["Masukan", "Proses Inti", "Validasi", "Hasil Akhir"]
+            }
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn ai_assemble_project(
     app: AppHandle,
     req: AssembleProjectRequest,
 ) -> Result<Value, String> {
+    let visual_mode = req.visual_mode.as_deref().unwrap_or("footage");
+    let motion_theme = match req.motion_theme.as_deref() {
+        Some("carbon" | "paper" | "coral" | "mint" | "blue") => req.motion_theme.as_deref().unwrap(),
+        _ => "carbon",
+    };
+    let preferred_engines = req.preferred_engines.clone().unwrap_or_default();
+
     let mut segments: Vec<(String, String)> = vec![("hook".to_string(), req.hook_text.trim().to_string())];
     for body in &req.body_segments {
         if !body.trim().is_empty() {
@@ -418,7 +607,7 @@ pub async fn ai_assemble_project(
 
     let timings = compute_scene_timings(&segments, total_duration_ms, &final_words);
 
-    // Ask Multimodal AI Director to match local footage thumbnails & polish overlays/motions
+    // Ask Multimodal AI Director to match local footage thumbnails AND/OR author native AI Motion specs
     let mut ai_scene_decisions: Vec<Value> = Vec::new();
     if let Ok((provider, api_key)) = resolve_active_key(&app) {
         let mut all_thumbs: Vec<String> = Vec::new();
@@ -434,6 +623,26 @@ pub async fn ai_assemble_project(
             ));
         }
 
+        // Attach up to 2 style reference frames if present
+        let style_dna = req
+            .style_reference
+            .as_ref()
+            .and_then(|sr| sr["styleDnaSummary"].as_str())
+            .unwrap_or("");
+        if let Some(ref_thumbs) = req
+            .style_reference
+            .as_ref()
+            .and_then(|sr| sr["thumbnails"].as_array())
+        {
+            for t in ref_thumbs.iter().take(2) {
+                if let Some(s) = t.as_str() {
+                    if all_thumbs.len() < 8 {
+                        all_thumbs.push(s.to_string());
+                    }
+                }
+            }
+        }
+
         let seg_desc: String = segments
             .iter()
             .enumerate()
@@ -444,20 +653,31 @@ pub async fn ai_assemble_project(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let system_prompt = "Kamu adalah Multimodal Video Director untuk Synkcut. \
-            Lihat thumbnail footage lokal yang dilampirkan (jika ada) dan pasangkan klip paling relevan ke setiap scene Hook/Body/CTA. \
+        let system_prompt = "Kamu adalah Multimodal Video & AI Motion Director untuk Synkcut v1.1. \
+            Untuk mode 'motion', semua scene wajib pakai visualSource='motion' dengan objek aiMotion lengkap. \
+            Untuk mode 'hybrid', campurkan visualSource='footage' (jika klip cocok) dan 'motion' (untuk visualisasi konsep/data/3D). \
+            Engine aiMotion valid: flow_diagram (flow.pattern: flow|spread|cycle|converge|compare, flow.steps[]), \
+            motion_chart (chart.chartType: bar|line|stat_counter, chart.data:[{label,value}], chart.suffix), \
+            tech_cards (techCards.layout: staggered_steps|terminal_code|comparison_split, techCards.cards:[{badge,title,detail}]), \
+            stick_figure (stickFigure.setting: office|room|street|classroom|plain, figures[], beats[]), \
+            breakdown_3d (breakdown3d.presetId: smartphone|laptop|earbuds|smartwatch, parts[]). \
+            Tema kanvas valid: carbon, paper, coral, mint, blue. \
             Balas HANYA dalam JSON valid.";
 
         let user_prompt = format!(
-            "Rakit keputusan editing untuk proyek \"{}\" (format: {}).\n\
+            "Rakit keputusan editing & AI Motion untuk proyek \"{}\" (format: {}, visualMode: {}, temaMotionDefault: {}).\n\
+            Engine prioritas: {:?}.\n\
+            Referensi Gaya (DNA): {}.\n\
             Preset default user: motion={}, transition={}, overlayMode={}, autoSfx={}.\n\n\
             Daftar Footage Lokal:\n{}\n\
             Daftar Scene (durasi sudah dikunci ke suara asli):\n{}\n\n\
             Balas JSON dengan struktur:\n\
             {{\"scenes\":[{{\
               \"sceneIndex\":0,\
-              \"footageIndex\":0,\
+              \"visualSource\":\"motion|footage\",\
+              \"footageIndex\":null,\
               \"trimStartMs\":0,\
+              \"aiMotion\":{{\"engine\":\"flow_diagram|motion_chart|tech_cards|stick_figure|breakdown_3d\",\"theme\":\"{motion_theme}\",\"title\":\"Judul singkat maks 5 kata\",\"subtitle\":\"Subjudul singkat\",\"takeaway\":\"Poin akhir opsional\",\"flow\":{{\"pattern\":\"flow\",\"steps\":[\"A\",\"B\",\"C\"]}}}},\
               \"motion\":\"zoom_punch|smooth_ken_burns|shake_impact|slide_reveal|static_clean\",\
               \"transitionIn\":\"hard_cut|whip_pan|pop_zoom|glitch_flash|smooth_crossfade\",\
               \"sfx\":\"impact_boom|whoosh_fast|whoosh_soft|pop_text|ding_notif|riser|camera_shutter|keyboard_click|cash_register|vinyl_scratch|glitch_zap|swoosh_reverse|none\",\
@@ -467,6 +687,10 @@ pub async fn ai_assemble_project(
             }}]}}",
             req.project_title,
             req.format,
+            visual_mode,
+            motion_theme,
+            preferred_engines,
+            if style_dna.is_empty() { "(Tidak ada)" } else { style_dna },
             req.motion_preset,
             req.transition_preset,
             req.overlay_mode,
@@ -488,23 +712,90 @@ pub async fn ai_assemble_project(
         }
     }
 
-    // Build deterministic valid SynkcutProject JSON combining real timings + AI Director decisions
+    // Build deterministic valid SynkcutProject v1.1 JSON combining real timings + AI Director decisions
     let mut scenes_json = Vec::with_capacity(segments.len());
+    let mut has_any_motion_scene = false;
     for (i, (role, text)) in segments.iter().enumerate() {
         let (start_ms, end_ms) = timings[i];
         let decision = ai_scene_decisions.get(i);
 
-        let footage_idx = decision
-            .and_then(|d| d["footageIndex"].as_u64())
-            .map(|n| n as usize)
-            .filter(|&idx| idx < req.footage.len())
-            .or_else(|| {
-                if req.footage.is_empty() {
-                    None
+        let scene_visual_source = match visual_mode {
+            "motion" => "motion",
+            "hybrid" => {
+                if let Some(vs) = decision.and_then(|d| d["visualSource"].as_str()) {
+                    if vs == "motion" {
+                        "motion"
+                    } else if vs == "footage" && !req.footage.is_empty() {
+                        "footage"
+                    } else if req.footage.is_empty() || i % 2 == 1 {
+                        "motion"
+                    } else {
+                        "footage"
+                    }
+                } else if req.footage.is_empty() || i % 2 == 1 {
+                    "motion"
                 } else {
-                    Some(i % req.footage.len())
+                    "footage"
                 }
-            });
+            }
+            _ => "footage",
+        };
+
+        let ai_motion_val = if scene_visual_source == "motion" {
+            has_any_motion_scene = true;
+            let raw_motion = decision
+                .and_then(|d| d.get("aiMotion"))
+                .filter(|v| v.is_object() && v["engine"].is_string());
+            if let Some(m) = raw_motion {
+                let eng = m["engine"].as_str().unwrap_or("");
+                if matches!(
+                    eng,
+                    "flow_diagram"
+                        | "motion_chart"
+                        | "tech_cards"
+                        | "stick_figure"
+                        | "breakdown_3d"
+                ) {
+                    m.clone()
+                } else {
+                    build_fallback_ai_motion(
+                        role,
+                        i,
+                        text,
+                        &req.project_title,
+                        motion_theme,
+                        &preferred_engines,
+                    )
+                }
+            } else {
+                build_fallback_ai_motion(
+                    role,
+                    i,
+                    text,
+                    &req.project_title,
+                    motion_theme,
+                    &preferred_engines,
+                )
+            }
+        } else {
+            Value::Null
+        };
+
+        let footage_idx = if scene_visual_source == "motion" {
+            None
+        } else {
+            decision
+                .and_then(|d| d["footageIndex"].as_u64())
+                .map(|n| n as usize)
+                .filter(|&idx| idx < req.footage.len())
+                .or_else(|| {
+                    if req.footage.is_empty() {
+                        None
+                    } else {
+                        Some(i % req.footage.len())
+                    }
+                })
+        };
 
         let (media_path, trim_start_ms) = match footage_idx {
             Some(idx) => {
@@ -522,19 +813,23 @@ pub async fn ai_assemble_project(
             None => (Value::Null, 0),
         };
 
-        let motion = decision
-            .and_then(|d| d["motion"].as_str())
-            .filter(|m| {
-                matches!(
-                    *m,
-                    "zoom_punch"
-                        | "smooth_ken_burns"
-                        | "shake_impact"
-                        | "slide_reveal"
-                        | "static_clean"
-                )
-            })
-            .unwrap_or(&req.motion_preset);
+        let motion = if scene_visual_source == "motion" {
+            "static_clean"
+        } else {
+            decision
+                .and_then(|d| d["motion"].as_str())
+                .filter(|m| {
+                    matches!(
+                        *m,
+                        "zoom_punch"
+                            | "smooth_ken_burns"
+                            | "shake_impact"
+                            | "slide_reveal"
+                            | "static_clean"
+                    )
+                })
+                .unwrap_or(&req.motion_preset)
+        };
 
         let transition_in = if i == 0 {
             "hard_cut"
@@ -571,8 +866,9 @@ pub async fn ai_assemble_project(
             }));
         }
 
+        // For pure AI Motion scenes, avoid stacking top overlays over the Motion Stage title unless explicitly chosen
         let mut overlays = Vec::new();
-        if req.overlay_mode != "none" {
+        if req.overlay_mode != "none" && scene_visual_source != "motion" {
             let chosen_ov = if req.overlay_mode == "auto" {
                 decision
                     .and_then(|d| d["overlayType"].as_str())
@@ -640,6 +936,8 @@ pub async fn ai_assemble_project(
             "startMs": start_ms,
             "endMs": end_ms,
             "text": text,
+            "visualSource": scene_visual_source,
+            "aiMotion": ai_motion_val,
             "media": {
                 "path": media_path,
                 "secondaryPath": secondary_path,
@@ -648,7 +946,7 @@ pub async fn ai_assemble_project(
             },
             "motion": {
                 "preset": motion,
-                "intensity": 0.78
+                "intensity": if scene_visual_source == "motion" { 0.4 } else { 0.78 }
             },
             "transitionIn": {
                 "preset": transition_in,
@@ -661,9 +959,14 @@ pub async fn ai_assemble_project(
 
     let now_ts = chrono::Utc::now().timestamp_millis();
     let now_iso = chrono::Utc::now().to_rfc3339();
+    let proj_version = if has_any_motion_scene || req.style_reference.is_some() {
+        "1.1"
+    } else {
+        "1.0"
+    };
 
     Ok(json!({
-        "version": "1.0",
+        "version": proj_version,
         "meta": {
             "id": format!("proj_{now_ts}"),
             "name": req.project_title.trim(),
@@ -673,6 +976,7 @@ pub async fn ai_assemble_project(
             "createdAt": now_iso,
             "updatedAt": now_iso
         },
+        "styleReference": req.style_reference.unwrap_or(Value::Null),
         "globalStyle": {
             "captionPreset": req.caption_preset,
             "accentColor": req.accent_color,
@@ -740,6 +1044,24 @@ fn merge_and_sanitize_copilot_patch(original: &Value, patch: &Value) -> Value {
                     .or_else(|| orig_scenes.get(idx));
 
                 if let Some(orig_s) = matched_orig {
+                    // Preserve AI Motion specs unless explicitly replaced or switched to footage
+                    if obj.get("visualSource").is_none() {
+                        if let Some(orig_vs) = orig_s.get("visualSource") {
+                            obj.insert("visualSource".to_string(), orig_vs.clone());
+                        }
+                    }
+                    let effective_vs = obj
+                        .get("visualSource")
+                        .and_then(Value::as_str)
+                        .unwrap_or("footage");
+                    if effective_vs == "motion"
+                        && obj.get("aiMotion").filter(|v| v.is_object()).is_none()
+                    {
+                        if let Some(orig_motion) = orig_s.get("aiMotion").filter(|v| v.is_object()) {
+                            obj.insert("aiMotion".to_string(), orig_motion.clone());
+                        }
+                    }
+
                     if let Some(orig_media) = orig_s.get("media").and_then(Value::as_object) {
                         let media_entry = obj
                             .entry("media".to_string())
@@ -823,8 +1145,11 @@ pub async fn ai_copilot_patch(
         vo.insert("words".to_string(), json!([]));
     }
 
-    let system_prompt = "Kamu adalah AI Video Director di aplikasi Synkcut. \
+    let system_prompt = "Kamu adalah AI Video & AI Motion Director di aplikasi Synkcut v1.1. \
         Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa merusak path media lokal user. \
+        Nilai visualSource valid: footage, motion. \
+        Jika user minta mengubah scene jadi AI Motion / diagram / grafik / kartu / stick figure / 3D breakdown, set visualSource=\"motion\" dan isi aiMotion dengan: \
+        engine (flow_diagram | motion_chart | tech_cards | stick_figure | breakdown_3d), theme (carbon | paper | coral | mint | blue), title, subtitle, takeaway, serta field engine yang cocok (flow / chart / techCards / stickFigure / breakdown3d). \
         Nilai captionPreset valid: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech. \
         Nilai motion.preset valid: zoom_punch, smooth_ken_burns, shake_impact, slide_reveal, static_clean. \
         Nilai transitionIn.preset valid: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade. \
@@ -953,5 +1278,53 @@ mod tests {
         assert_eq!(merged["scenes"][0]["endMs"], 2500);
         assert_eq!(merged["scenes"][1]["startMs"], 2500);
         assert_eq!(merged["scenes"][1]["endMs"], 5500);
+    }
+
+    #[test]
+    fn test_copilot_patch_preserves_ai_motion_and_fallback_builder() {
+        let motion_spec = build_fallback_ai_motion(
+            "body",
+            1,
+            "Latensi turun 85 persen pakai Edge CDN",
+            "Cara Kerja Internet",
+            "paper",
+            &[],
+        );
+        assert_eq!(motion_spec["engine"], "motion_chart");
+        assert_eq!(motion_spec["theme"], "paper");
+
+        let orig = json!({
+            "version": "1.1",
+            "globalStyle": { "captionPreset": "bold_pop", "accentColor": "#38E59D" },
+            "scenes": [{
+                "id": "scene_1",
+                "role": "hook",
+                "startMs": 0,
+                "endMs": 3200,
+                "text": "Hook lama",
+                "visualSource": "motion",
+                "aiMotion": motion_spec,
+                "media": { "path": null, "trimStartMs": 0, "fit": "cover" },
+                "motion": { "preset": "static_clean", "intensity": 0.4 },
+                "transitionIn": { "preset": "hard_cut", "durationMs": 0 },
+                "sfx": [],
+                "overlays": []
+            }]
+        });
+
+        let patch = json!({
+            "scenes": [{
+                "id": "scene_1",
+                "role": "hook",
+                "startMs": 0,
+                "endMs": 3200,
+                "text": "Hook diperbaiki"
+            }]
+        });
+
+        let merged = merge_and_sanitize_copilot_patch(&orig, &patch);
+        assert_eq!(merged["scenes"][0]["text"], "Hook diperbaiki");
+        assert_eq!(merged["scenes"][0]["visualSource"], "motion");
+        assert_eq!(merged["scenes"][0]["aiMotion"]["engine"], "motion_chart");
     }
 }

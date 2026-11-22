@@ -161,7 +161,7 @@ export default function ProjectsHomeView({
             Pilih sample untuk langsung membuat proyek baru lengkap dengan struktur Hook–Body–CTA, gaya caption, dan motion—tinggal ganti footage lokal & teksnya.
           </p>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {filteredSamples.map((sample) => {
               const fmtInfo = CONTENT_FORMAT_LABELS[sample.format];
               const previewProj = samplePreviewProjects[sample.id];
@@ -183,16 +183,29 @@ export default function ProjectsHomeView({
                       project={previewProj}
                       className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                     />
-                    <span
-                      className="absolute top-2.5 left-2.5 rounded px-2 py-0.5 text-[11px] font-medium"
-                      style={{
-                        backgroundColor: "rgba(13, 15, 18, 0.78)",
-                        color: "#f1f3f7",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                      }}
-                    >
-                      {fmtInfo.label}
-                    </span>
+                    <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                      <span
+                        className="rounded px-2 py-0.5 text-[11px] font-medium"
+                        style={{
+                          backgroundColor: "rgba(13, 15, 18, 0.82)",
+                          color: "#f1f3f7",
+                          border: "1px solid rgba(255,255,255,0.12)",
+                        }}
+                      >
+                        {fmtInfo.label}
+                      </span>
+                      {sample.isAiMotion && (
+                        <span
+                          className="rounded px-2 py-0.5 text-[11px] font-semibold"
+                          style={{
+                            backgroundColor: "rgba(9, 121, 84, 0.92)",
+                            color: "#ffffff",
+                          }}
+                        >
+                          AI Motion
+                        </span>
+                      )}
+                    </div>
                     <span
                       className="font-mono-num absolute right-2.5 bottom-2.5 rounded px-1.5 py-0.5 text-[11px] font-medium"
                       style={{

@@ -3,12 +3,15 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
+  AiMotionTheme,
   ByokProvider,
   ByokStatus,
   ConnectionTestResult,
+  ProjectStyleReference,
   ProjectSummary,
   SynkcutProject,
 } from "../types/scene";
+import { createDefaultAiMotion } from "../engine/aiMotionPresets";
 
 export interface SidecarStatus {
   ffmpegReady: boolean;
@@ -476,6 +479,75 @@ export interface FootageInputItem {
   thumbnails: string[];
 }
 
+export interface StyleReferenceResult {
+  sourceType: "youtube" | "images" | "local_video";
+  url?: string | null;
+  title: string;
+  thumbnails: string[];
+  styleDnaSummary: string;
+  suggestedTheme: AiMotionTheme;
+  suggestedCaption: SynkcutProject["globalStyle"]["captionPreset"];
+  suggestedAccent: string;
+  suggestedEngines: string[];
+  layerUsed: string;
+}
+
+export async function extractYoutubeStyleReference(url: string): Promise<StyleReferenceResult> {
+  if (!isTauriRuntime()) {
+    const trimmed = url.trim();
+    if (!trimmed.includes("youtube.com") && !trimmed.includes("youtu.be")) {
+      throw new Error(
+        "Link belum valid. Gunakan link YouTube atau YouTube Shorts (mis. youtube.com/watch?v=...)."
+      );
+    }
+    return {
+      sourceType: "youtube",
+      url: trimmed,
+      title: "Referensi YouTube (Preview Browser)",
+      thumbnails: [],
+      styleDnaSummary:
+        "Gaya motion modern kontras tinggi dengan diagram alur bertahap, angka KPI tegas, dan pacing cepat 9:16.",
+      suggestedTheme: "carbon",
+      suggestedCaption: "bold_pop",
+      suggestedAccent: "#38E59D",
+      suggestedEngines: ["flow_diagram", "motion_chart", "tech_cards"],
+      layerUsed: "oembed_thumbnail",
+    };
+  }
+  return invoke<StyleReferenceResult>("extract_youtube_style_reference", { url });
+}
+
+export async function analyzeStyleReference(req: {
+  sourceType: "images" | "local_video";
+  title?: string | null;
+  url?: string | null;
+  thumbnails: string[];
+}): Promise<StyleReferenceResult> {
+  if (!isTauriRuntime()) {
+    return {
+      sourceType: req.sourceType,
+      url: req.url ?? null,
+      title: req.title || "Referensi Gaya Visual",
+      thumbnails: req.thumbnails.slice(0, 4),
+      styleDnaSummary:
+        "Palet bersih kontras tinggi dengan tipografi tegas, cocok dipadukan dengan Flow & Diagram dan Tech Cards.",
+      suggestedTheme: "carbon",
+      suggestedCaption: "bold_pop",
+      suggestedAccent: "#38E59D",
+      suggestedEngines: ["flow_diagram", "tech_cards", "motion_chart"],
+      layerUsed: "local_fallback",
+    };
+  }
+  return invoke<StyleReferenceResult>("analyze_style_reference", {
+    req: {
+      sourceType: req.sourceType,
+      title: req.title ?? null,
+      url: req.url ?? null,
+      thumbnails: req.thumbnails,
+    },
+  });
+}
+
 export interface AssembleProjectRequest {
   projectTitle: string;
   format: string;
@@ -503,6 +575,10 @@ export interface AssembleProjectRequest {
   bgmPreset: string;
   autoDucking: boolean;
   autoSfx: boolean;
+  visualMode?: "motion" | "footage" | "hybrid";
+  motionTheme?: AiMotionTheme;
+  preferredEngines?: string[];
+  styleReference?: ProjectStyleReference | null;
 }
 
 export interface CopilotPatchResponse {
@@ -516,6 +592,8 @@ export async function aiGenerateScript(req: {
   format: string;
   tone: string;
   targetDurationSec: number;
+  visualMode?: "motion" | "footage" | "hybrid";
+  styleReferenceSummary?: string | null;
 }): Promise<GeneratedScriptResponse> {
   if (!isTauriRuntime()) {
     return {
@@ -583,8 +661,16 @@ export async function aiAssembleProject(req: AssembleProjectRequest): Promise<Sy
       { role: "cta" as const, text: req.ctaText },
     ];
     const perSeg = Math.round(totalMs / segments.length);
+    const vMode = req.visualMode || "footage";
+    const theme = req.motionTheme || "carbon";
+    const engines = (
+      req.preferredEngines && req.preferredEngines.length > 0
+        ? req.preferredEngines
+        : ["flow_diagram", "motion_chart", "tech_cards", "stick_figure"]
+    ) as Array<"flow_diagram" | "motion_chart" | "tech_cards" | "stick_figure" | "breakdown_3d">;
+
     return {
-      version: "1.0",
+      version: vMode === "footage" && !req.styleReference ? "1.0" : "1.1",
       meta: {
         id: `proj_${Date.now()}`,
         name: req.projectTitle || "Konten Baru",
@@ -594,6 +680,7 @@ export async function aiAssembleProject(req: AssembleProjectRequest): Promise<Sy
         createdAt: now,
         updatedAt: now,
       },
+      styleReference: req.styleReference ?? null,
       globalStyle: {
         captionPreset: req.captionPreset as SynkcutProject["globalStyle"]["captionPreset"],
         accentColor: req.accentColor,
@@ -607,18 +694,36 @@ export async function aiAssembleProject(req: AssembleProjectRequest): Promise<Sy
         trimSilence: req.trimSilence,
         words: req.words,
       },
-      scenes: segments.map((s, i) => ({
-        id: `scene_${i + 1}`,
-        role: s.role,
-        startMs: i * perSeg,
-        endMs: i === segments.length - 1 ? totalMs : (i + 1) * perSeg,
-        text: s.text,
-        media: { path: req.footage[i % Math.max(1, req.footage.length)]?.path ?? null, trimStartMs: 0, fit: "cover" },
-        motion: { preset: req.motionPreset as SynkcutProject["scenes"][number]["motion"]["preset"], intensity: 0.78 },
-        transitionIn: { preset: (i === 0 ? "hard_cut" : req.transitionPreset) as SynkcutProject["scenes"][number]["transitionIn"]["preset"], durationMs: i === 0 ? 0 : 240 },
-        sfx: req.autoSfx ? [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.65 }] : [],
-        overlays: [],
-      })),
+      scenes: segments.map((s, i) => {
+        const useMotion =
+          vMode === "motion" || (vMode === "hybrid" && (req.footage.length === 0 || i % 2 === 1));
+        return {
+          id: `scene_${i + 1}`,
+          role: s.role,
+          startMs: i * perSeg,
+          endMs: i === segments.length - 1 ? totalMs : (i + 1) * perSeg,
+          text: s.text,
+          visualSource: useMotion ? "motion" : "footage",
+          aiMotion: useMotion
+            ? createDefaultAiMotion(engines[i % engines.length], theme, s.text)
+            : null,
+          media: {
+            path: useMotion ? null : req.footage[i % Math.max(1, req.footage.length)]?.path ?? null,
+            trimStartMs: 0,
+            fit: "cover",
+          },
+          motion: {
+            preset: (useMotion ? "static_clean" : req.motionPreset) as SynkcutProject["scenes"][number]["motion"]["preset"],
+            intensity: useMotion ? 0.4 : 0.78,
+          },
+          transitionIn: {
+            preset: (i === 0 ? "hard_cut" : req.transitionPreset) as SynkcutProject["scenes"][number]["transitionIn"]["preset"],
+            durationMs: i === 0 ? 0 : 240,
+          },
+          sfx: req.autoSfx ? [{ preset: "whoosh_fast", offsetMs: 0, volume: 0.65 }] : [],
+          overlays: [],
+        };
+      }),
     };
   }
   return invoke<SynkcutProject>("ai_assemble_project", { req });

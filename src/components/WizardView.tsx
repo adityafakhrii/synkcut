@@ -4,34 +4,48 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Film,
+  Image as ImageIcon,
+  Layers,
+  Link2,
   Loader2,
   Lock,
   Mic,
   Plus,
+  Shapes,
   Sparkles,
   Square,
   Trash2,
   Upload,
   Volume2,
   Wand2,
+  X,
 } from "lucide-react";
 import {
   CONTENT_FORMAT_LABELS,
+  type AiMotionEngine,
+  type AiMotionTheme,
   type ByokStatus,
   type CaptionPreset,
   type ContentFormat,
   type MotionPreset,
+  type ProjectStyleReference,
   type SynkcutProject,
   type TransitionPreset,
 } from "../types/scene";
+import { AI_MOTION_ENGINES, AI_MOTION_THEMES } from "../engine/aiMotionPresets";
 import {
   aiAssembleProject,
   aiGenerateScript,
+  analyzeStyleReference,
   extractThumbnails,
+  extractYoutubeStyleReference,
   generateTtsAudio,
   isTauriRuntime,
   pickLocalAudio,
+  pickLocalVideo,
   pickLocalVideos,
   probeMedia,
   processUserAudio,
@@ -39,6 +53,7 @@ import {
   type FootageInputItem,
   type HookOption,
   type ProcessedAudioResult,
+  type StyleReferenceResult,
 } from "../lib/tauriBridge";
 
 interface WizardViewProps {
@@ -113,6 +128,49 @@ function formatSec(ms: number): string {
   return `${(ms / 1000).toFixed(1)} dtk`;
 }
 
+function compressImageBlobToDataUrl(blob: Blob, maxWidth = 480): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      try {
+        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          URL.revokeObjectURL(objUrl);
+          reject(new Error("Gagal memproses gambar."));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        URL.revokeObjectURL(objUrl);
+        resolve(dataUrl);
+      } catch (err) {
+        URL.revokeObjectURL(objUrl);
+        reject(err);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objUrl);
+      reject(new Error("Format gambar tidak dapat dibaca."));
+    };
+    img.src = objUrl;
+  });
+}
+
+const LAYER_LABELS: Record<string, string> = {
+  yt_dlp: "yt-dlp · 4 frame",
+  gemini_direct: "Gemini Direct",
+  oembed_thumbnail: "YouTube Thumbnail",
+  vision_ai: "Vision AI",
+  local_fallback: "Analisis Lokal",
+};
+
 export default function WizardView({
   initialFormat = "ad_promo",
   byokStatus,
@@ -123,7 +181,25 @@ export default function WizardView({
 }: WizardViewProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Step 1: Brief & Script
+  // Step 1: Visual Mode, Optional Style Reference, Brief & Script
+  const [visualMode, setVisualMode] = useState<"motion" | "footage" | "hybrid">(
+    initialFormat === "education" ? "motion" : "hybrid"
+  );
+  const [motionTheme, setMotionTheme] = useState<AiMotionTheme>("carbon");
+  const [preferredEngines, setPreferredEngines] = useState<AiMotionEngine[]>([
+    "flow_diagram",
+    "motion_chart",
+    "tech_cards",
+    "stick_figure",
+  ]);
+  const [showRefPanel, setShowRefPanel] = useState(false);
+  const [refSourceTab, setRefSourceTab] = useState<"youtube" | "images" | "local_video">("youtube");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [pastedImages, setPastedImages] = useState<string[]>([]);
+  const [isAnalyzingRef, setIsAnalyzingRef] = useState(false);
+  const [refError, setRefError] = useState<string | null>(null);
+  const [styleRefResult, setStyleRefResult] = useState<StyleReferenceResult | null>(null);
+
   const [format, setFormat] = useState<ContentFormat>(initialFormat);
   const [tone, setTone] = useState("santai");
   const [targetDuration, setTargetDuration] = useState(30);
@@ -222,6 +298,138 @@ export default function WizardView({
     };
   }, []);
 
+  // Support Ctrl+V pasting of 1-3 reference screenshots directly into Wizard Step 1
+  useEffect(() => {
+    if (step !== 1 || !showRefPanel || refSourceTab !== "images") return;
+    const onPaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageBlobs: Blob[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) imageBlobs.push(file);
+        }
+      }
+      if (imageBlobs.length === 0) return;
+      e.preventDefault();
+      setRefError(null);
+      try {
+        const compressed: string[] = [];
+        for (const blob of imageBlobs) {
+          compressed.push(await compressImageBlobToDataUrl(blob));
+        }
+        setPastedImages((prev) => [...prev, ...compressed].slice(0, 3));
+      } catch (err) {
+        setRefError(err instanceof Error ? err.message : String(err));
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [step, showRefPanel, refSourceTab]);
+
+  function applyStyleSuggestions(res: StyleReferenceResult) {
+    setStyleRefResult(res);
+    setMotionTheme(res.suggestedTheme);
+    setCaptionPreset(res.suggestedCaption);
+    setAccentColor(res.suggestedAccent);
+    const validEng = res.suggestedEngines.filter((e): e is AiMotionEngine =>
+      ["flow_diagram", "motion_chart", "tech_cards", "stick_figure", "breakdown_3d"].includes(e)
+    );
+    if (validEng.length > 0) {
+      setPreferredEngines(validEng);
+    }
+  }
+
+  async function handleAnalyzeYoutubeRef() {
+    setRefError(null);
+    if (!youtubeUrl.trim()) {
+      setRefError("Tempel link YouTube atau YouTube Shorts terlebih dahulu.");
+      return;
+    }
+    setIsAnalyzingRef(true);
+    try {
+      const res = await extractYoutubeStyleReference(youtubeUrl.trim());
+      applyStyleSuggestions(res);
+    } catch (err) {
+      setRefError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzingRef(false);
+    }
+  }
+
+  async function handlePickScreenshotFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setRefError(null);
+    try {
+      const next: string[] = [];
+      for (let i = 0; i < Math.min(3, files.length); i++) {
+        next.push(await compressImageBlobToDataUrl(files[i]));
+      }
+      setPastedImages((prev) => [...prev, ...next].slice(0, 3));
+    } catch (err) {
+      setRefError(err instanceof Error ? err.message : String(err));
+    } finally {
+      e.target.value = "";
+    }
+  }
+
+  async function handleAnalyzeImagesRef() {
+    setRefError(null);
+    if (pastedImages.length === 0) {
+      setRefError("Tempel (Ctrl+V) atau unggah 1–3 screenshot cuplikan referensi dulu.");
+      return;
+    }
+    setIsAnalyzingRef(true);
+    try {
+      const res = await analyzeStyleReference({
+        sourceType: "images",
+        title: `Screenshot Referensi (${pastedImages.length} gambar)`,
+        thumbnails: pastedImages,
+      });
+      applyStyleSuggestions(res);
+    } catch (err) {
+      setRefError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzingRef(false);
+    }
+  }
+
+  async function handleAnalyzeLocalRefClip() {
+    setRefError(null);
+    if (!isTauriRuntime()) {
+      setRefError("Pilih klip referensi lokal hanya tersedia di aplikasi desktop Synkcut.");
+      return;
+    }
+    const picked = await pickLocalVideo();
+    if (!picked) return;
+    setIsAnalyzingRef(true);
+    try {
+      const thumbs = await extractThumbnails(picked, 3);
+      const fileName = picked.split(/[\\/]/).pop() || "Klip Referensi";
+      const res = await analyzeStyleReference({
+        sourceType: "local_video",
+        title: fileName,
+        thumbnails: thumbs,
+      });
+      applyStyleSuggestions(res);
+    } catch (err) {
+      setRefError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzingRef(false);
+    }
+  }
+
+  function togglePreferredEngine(engine: AiMotionEngine) {
+    setPreferredEngines((prev) => {
+      if (prev.includes(engine)) {
+        return prev.length > 1 ? prev.filter((e) => e !== engine) : prev;
+      }
+      return [...prev, engine];
+    });
+  }
+
   async function handleGenerateScript() {
     setScriptError(null);
     if (!topic.trim()) {
@@ -236,6 +444,8 @@ export default function WizardView({
         format,
         tone,
         targetDurationSec: targetDuration,
+        visualMode,
+        styleReferenceSummary: styleRefResult?.styleDnaSummary ?? null,
       });
       setProjectTitle(res.projectTitle);
       setHooks(res.hooks);
@@ -378,6 +588,16 @@ export default function WizardView({
     setAssembleError(null);
     setIsAssembling(true);
     try {
+      const styleReference: ProjectStyleReference | null = styleRefResult
+        ? {
+            sourceType: styleRefResult.sourceType,
+            url: styleRefResult.url ?? undefined,
+            title: styleRefResult.title,
+            thumbnails: styleRefResult.thumbnails,
+            styleDnaSummary: styleRefResult.styleDnaSummary,
+          }
+        : null;
+
       const project = await aiAssembleProject({
         projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
         format,
@@ -389,7 +609,7 @@ export default function WizardView({
         trimSilence,
         durationMs: audioResult?.durationMs ?? 0,
         words: audioResult?.words ?? [],
-        footage: footageClips,
+        footage: visualMode === "motion" ? [] : footageClips,
         captionPreset,
         accentColor,
         motionPreset,
@@ -398,6 +618,10 @@ export default function WizardView({
         bgmPreset,
         autoDucking,
         autoSfx,
+        visualMode,
+        motionTheme,
+        preferredEngines,
+        styleReference,
       });
       onProjectCreated(project);
     } catch (err) {
@@ -430,7 +654,7 @@ export default function WizardView({
         <div className="hidden items-center gap-2 md:flex">
           {[
             { num: 1 as const, label: "Ide & Script" },
-            { num: 2 as const, label: "Footage & Suara" },
+            { num: 2 as const, label: "Visual & Suara" },
             { num: 3 as const, label: "Gaya & Racik" },
           ].map((s, idx) => {
             const active = step === s.num;
@@ -518,8 +742,64 @@ export default function WizardView({
                 <div>
                   <h2 className="text-sm font-bold">Brief Konten</h2>
                   <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                    Ceritakan produk atau topik yang mau dibahas, lalu biarkan AI meracik 3 opsi Hook.
+                    Pilih mode visual (AI Motion / Footage / Campur), tulis topik, dan tambahkan
+                    referensi gaya bila perlu.
                   </p>
+                </div>
+
+                {/* 3 Visual Modes Selector */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold">Mode Visual Video</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      {
+                        id: "motion" as const,
+                        label: "AI Motion",
+                        sub: "Tanpa footage",
+                        icon: Shapes,
+                      },
+                      {
+                        id: "footage" as const,
+                        label: "Footage",
+                        sub: "Klip lokal",
+                        icon: Film,
+                      },
+                      {
+                        id: "hybrid" as const,
+                        label: "Campur",
+                        sub: "Hybrid",
+                        icon: Layers,
+                      },
+                    ].map((vm) => {
+                      const Icon = vm.icon;
+                      const active = visualMode === vm.id;
+                      return (
+                        <button
+                          key={vm.id}
+                          type="button"
+                          onClick={() => setVisualMode(vm.id)}
+                          className="flex flex-col items-start gap-0.5 rounded-lg p-2.5 text-left transition-colors cursor-pointer"
+                          style={{
+                            backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                            border: active
+                              ? "1px solid var(--accent)"
+                              : "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          <span
+                            className="inline-flex items-center gap-1 text-xs font-bold"
+                            style={{ color: active ? "var(--accent)" : "var(--text-primary)" }}
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                            {vm.label}
+                          </span>
+                          <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                            {vm.sub}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 <div>
@@ -594,12 +874,271 @@ export default function WizardView({
                   </label>
                   <textarea
                     id="wizard-topic"
-                    rows={4}
+                    rows={3}
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
-                    placeholder="Contoh: Kopi susu gula aren botolan 1 liter Rp45.000, tahan 5 hari di kulkas, cocok buat pekerja WFH biar hemat ngopi..."
+                    placeholder="Contoh: Cara kerja DNS internet dalam 30 detik, atau kopi susu gula aren botolan 1 liter Rp45.000..."
                     className="ui-input w-full resize-none rounded-md p-3 text-xs leading-relaxed"
                   />
+                </div>
+
+                {/* Optional Style Reference Panel (YouTube / Ctrl+V Screenshot / Local Clip) */}
+                <div
+                  className="rounded-lg p-3 space-y-2.5"
+                  style={{
+                    backgroundColor: "var(--bg-elevated)",
+                    border: styleRefResult
+                      ? "1px solid var(--accent)"
+                      : "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setShowRefPanel((v) => !v)}
+                    className="flex w-full items-center justify-between gap-2 text-left cursor-pointer"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-bold">
+                        <Link2 className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+                        <span>Referensi Gaya Visual (Opsional)</span>
+                      </div>
+                      <p className="mt-0.5 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                        {styleRefResult
+                          ? `Aktif: ${styleRefResult.title}`
+                          : "Link YouTube/Shorts, Ctrl+V Screenshot, atau Klip Lokal"}
+                      </p>
+                    </div>
+                    {showRefPanel ? (
+                      <ChevronUp className="h-4 w-4 shrink-0" style={{ color: "var(--text-muted)" }} />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 shrink-0" style={{ color: "var(--text-muted)" }} />
+                    )}
+                  </button>
+
+                  {showRefPanel && (
+                    <div className="space-y-2.5 pt-1 border-t" style={{ borderColor: "var(--border-subtle)" }}>
+                      {/* 3 Reference Tabs — NO Instagram link */}
+                      <div
+                        className="grid grid-cols-3 gap-1 rounded-md p-0.5"
+                        style={{
+                          backgroundColor: "var(--bg-panel)",
+                          border: "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        {[
+                          { id: "youtube" as const, label: "YouTube", icon: Link2 },
+                          { id: "images" as const, label: "Screenshot", icon: ImageIcon },
+                          { id: "local_video" as const, label: "Klip Lokal", icon: Film },
+                        ].map((tab) => {
+                          const Icon = tab.icon;
+                          const active = refSourceTab === tab.id;
+                          return (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => {
+                                setRefSourceTab(tab.id);
+                                setRefError(null);
+                              }}
+                              className="inline-flex items-center justify-center gap-1 rounded py-1 text-[11px] font-semibold cursor-pointer"
+                              style={{
+                                backgroundColor: active ? "var(--bg-elevated)" : "transparent",
+                                color: active ? "var(--text-primary)" : "var(--text-secondary)",
+                              }}
+                            >
+                              <Icon className="h-3 w-3" />
+                              {tab.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {refSourceTab === "youtube" && (
+                        <div className="space-y-2">
+                          <div className="flex gap-1.5">
+                            <input
+                              type="url"
+                              value={youtubeUrl}
+                              onChange={(e) => setYoutubeUrl(e.target.value)}
+                              placeholder="https://youtube.com/shorts/... atau watch?v=..."
+                              className="ui-input min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-xs"
+                            />
+                            <button
+                              type="button"
+                              disabled={isAnalyzingRef}
+                              onClick={handleAnalyzeYoutubeRef}
+                              className="ui-btn-secondary shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
+                            >
+                              {isAnalyzingRef ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                "Analisa"
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                            Hanya mengambil sampel gaya (maks 30 dtk ≤360p via yt-dlp / Gemini /
+                            thumbnail) — bukan menyalin video asli.
+                          </p>
+                        </div>
+                      )}
+
+                      {refSourceTab === "images" && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                              Tekan <strong>Ctrl+V</strong> untuk tempel screenshot (maks 3)
+                            </span>
+                            <label className="ui-btn-secondary inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold cursor-pointer">
+                              <Upload className="h-3 w-3" />
+                              Pilih
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/webp"
+                                multiple
+                                onChange={handlePickScreenshotFiles}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+
+                          {pastedImages.length > 0 && (
+                            <div className="grid grid-cols-3 gap-1.5">
+                              {pastedImages.map((src, idx) => (
+                                <div key={idx} className="relative overflow-hidden rounded">
+                                  <img
+                                    src={src}
+                                    alt={`Referensi ${idx + 1}`}
+                                    className="h-14 w-full object-cover"
+                                    style={{ border: "1px solid var(--border-subtle)" }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPastedImages((prev) => prev.filter((_, i) => i !== idx))
+                                    }
+                                    className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/75 text-white cursor-pointer"
+                                    aria-label="Hapus gambar"
+                                  >
+                                    <X className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={isAnalyzingRef || pastedImages.length === 0}
+                            onClick={handleAnalyzeImagesRef}
+                            className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
+                          >
+                            {isAnalyzingRef ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" />
+                            )}
+                            Ekstrak DNA Gaya dari Screenshot
+                          </button>
+                        </div>
+                      )}
+
+                      {refSourceTab === "local_video" && (
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            disabled={isAnalyzingRef || !isTauriRuntime()}
+                            onClick={handleAnalyzeLocalRefClip}
+                            className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-md py-2 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                          >
+                            {isAnalyzingRef ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="h-3.5 w-3.5" />
+                            )}
+                            Pilih 1 Klip Referensi MP4/MOV
+                          </button>
+                          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                            FFmpeg mengambil 3 frame sampel untuk membaca nuansa warna & ritme motion.
+                          </p>
+                        </div>
+                      )}
+
+                      {refError && (
+                        <div
+                          className="rounded p-2 text-[11px]"
+                          style={{
+                            backgroundColor: "var(--danger-soft)",
+                            color: "var(--danger)",
+                          }}
+                        >
+                          {refError}
+                        </div>
+                      )}
+
+                      {styleRefResult && (
+                        <div
+                          className="rounded-md p-2.5 space-y-2"
+                          style={{
+                            backgroundColor: "var(--bg-panel)",
+                            border: "1px solid var(--accent)",
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-[11px] font-bold">
+                              {styleRefResult.title}
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className="rounded px-1.5 py-0.5 font-mono-num text-[11px]"
+                                style={{
+                                  backgroundColor: "var(--accent-soft)",
+                                  color: "var(--accent)",
+                                }}
+                              >
+                                {LAYER_LABELS[styleRefResult.layerUsed] || styleRefResult.layerUsed}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setStyleRefResult(null)}
+                                className="p-0.5 cursor-pointer"
+                                style={{ color: "var(--text-muted)" }}
+                                aria-label="Hapus referensi gaya"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {styleRefResult.thumbnails.length > 0 && (
+                            <div className="grid grid-cols-4 gap-1">
+                              {styleRefResult.thumbnails.slice(0, 4).map((src, i) => (
+                                <img
+                                  key={i}
+                                  src={src}
+                                  alt={`Sampel ${i + 1}`}
+                                  className="h-10 w-full rounded object-cover"
+                                  style={{ border: "1px solid var(--border-subtle)" }}
+                                />
+                              ))}
+                            </div>
+                          )}
+
+                          <textarea
+                            rows={2}
+                            value={styleRefResult.styleDnaSummary}
+                            onChange={(e) =>
+                              setStyleRefResult((prev) =>
+                                prev ? { ...prev, styleDnaSummary: e.target.value } : null
+                              )
+                            }
+                            aria-label="Ringkasan DNA Gaya Referensi"
+                            className="ui-input w-full resize-none rounded p-1.5 text-[11px] leading-relaxed"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {scriptError && (
@@ -810,7 +1349,7 @@ export default function WizardView({
                     onClick={() => setStep(2)}
                     className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold cursor-pointer"
                   >
-                    Lanjut: Footage & Suara
+                    Lanjut: Visual & Suara
                     <ArrowRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -818,117 +1357,277 @@ export default function WizardView({
             </div>
           )}
 
-          {/* ==================== STEP 2: FOOTAGE & SUARA AUTO-SYNC ==================== */}
+          {/* ==================== STEP 2: VISUAL & SUARA AUTO-SYNC ==================== */}
           {step === 2 && (
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-              {/* Left: Local Footage (Multi-Clip + Extracted Thumbnails) */}
+              {/* Left: Adaptive Visual Setup (AI Motion / Local Footage / Hybrid) */}
               <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-sm font-bold">Footage Lokal (Multi-Klip)</h2>
-                    <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                      AI Multimodal akan melihat thumbnail klip untuk memasangkannya ke scene paling pas.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isLoadingFootage || !isTauriRuntime()}
-                    onClick={handleAddFootage}
-                    className="ui-btn-primary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                  >
-                    {isLoadingFootage ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Upload className="h-3.5 w-3.5" />
-                    )}
-                    Tambah Video
-                  </button>
-                </div>
+                {visualMode === "motion" ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-bold">Pengaturan AI Motion (Tanpa Footage)</h2>
+                        <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                          AI Director otomatis membuat animasi native 2D & 3D untuk tiap scene —
+                          100% lokal tanpa video mentah.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setVisualMode("hybrid")}
+                        className="ui-btn-secondary shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
+                      >
+                        + Campur Klip
+                      </button>
+                    </div>
 
-                {footageClips.length === 0 ? (
-                  <div
-                    className="rounded-lg p-6 text-center text-xs"
-                    style={{
-                      backgroundColor: "var(--bg-elevated)",
-                      border: "1px dashed var(--border-strong)",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    <Film className="mx-auto mb-2 h-6 w-6" style={{ color: "var(--text-muted)" }} />
-                    Belum ada footage lokal ditambahkan. Kamu bisa tambah 1–5 klip MP4/MOV sekarang,
-                    atau langsung lanjut memakai backdrop studio dulu.
-                  </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold">
+                        Tema Kanvas Motion Utama
+                      </label>
+                      <div className="grid grid-cols-5 gap-1.5">
+                        {AI_MOTION_THEMES.map((th) => {
+                          const active = motionTheme === th.id;
+                          return (
+                            <button
+                              key={th.id}
+                              type="button"
+                              onClick={() => setMotionTheme(th.id)}
+                              className="flex flex-col items-center gap-1 rounded-md py-2 text-[11px] font-semibold cursor-pointer"
+                              style={{
+                                backgroundColor: active ? "var(--bg-hover)" : "var(--bg-elevated)",
+                                border: active
+                                  ? "1px solid var(--accent)"
+                                  : "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <span
+                                className="h-5 w-5 rounded-full"
+                                style={{
+                                  backgroundColor: th.bgHex,
+                                  border: `2px solid ${th.accentHex}`,
+                                }}
+                              />
+                              <span>{th.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold">
+                        Engine AI Motion yang Diprioritaskan (5 Engine)
+                      </label>
+                      <div className="space-y-1.5">
+                        {AI_MOTION_ENGINES.map((eng) => {
+                          const selected = preferredEngines.includes(eng.id);
+                          return (
+                            <button
+                              key={eng.id}
+                              type="button"
+                              onClick={() => togglePreferredEngine(eng.id)}
+                              className="ui-row flex w-full items-center justify-between rounded-lg px-3 py-2 text-left cursor-pointer"
+                              style={{
+                                backgroundColor: selected
+                                  ? "var(--accent-soft)"
+                                  : "var(--bg-elevated)",
+                                border: selected
+                                  ? "1px solid var(--accent)"
+                                  : "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <div>
+                                <div className="text-xs font-semibold">{eng.label}</div>
+                                <div
+                                  className="text-[11px]"
+                                  style={{ color: "var(--text-secondary)" }}
+                                >
+                                  {eng.shortDesc}
+                                </div>
+                              </div>
+                              <span
+                                className="flex h-4 w-4 shrink-0 items-center justify-center rounded"
+                                style={{
+                                  backgroundColor: selected ? "var(--accent)" : "var(--bg-panel)",
+                                  color: "#ffffff",
+                                  border: selected
+                                    ? "1px solid var(--accent)"
+                                    : "1px solid var(--border-strong)",
+                                }}
+                              >
+                                {selected && <Check className="h-3 w-3" />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
                 ) : (
-                  <div className="space-y-2.5">
-                    {footageClips.map((clip) => (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h2 className="text-sm font-bold">
+                          {visualMode === "hybrid"
+                            ? "Footage Lokal + AI Motion (Campur)"
+                            : "Footage Lokal (Multi-Klip)"}
+                        </h2>
+                        <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                          AI Multimodal melihat thumbnail klip untuk memasangkannya ke scene paling
+                          pas
+                          {visualMode === "hybrid"
+                            ? ", lalu melengkapi sisanya dengan AI Motion."
+                            : "."}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isLoadingFootage || !isTauriRuntime()}
+                        onClick={handleAddFootage}
+                        className="ui-btn-primary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                      >
+                        {isLoadingFootage ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="h-3.5 w-3.5" />
+                        )}
+                        Tambah Video
+                      </button>
+                    </div>
+
+                    {footageClips.length === 0 ? (
                       <div
-                        key={clip.path}
-                        className="rounded-lg p-3"
+                        className="rounded-lg p-6 text-center text-xs"
                         style={{
                           backgroundColor: "var(--bg-elevated)",
-                          border: "1px solid var(--border-subtle)",
+                          border: "1px dashed var(--border-strong)",
+                          color: "var(--text-secondary)",
                         }}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-xs font-semibold">{clip.fileName}</span>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span
-                              className="font-mono-num text-[11px]"
-                              style={{ color: "var(--text-muted)" }}
-                            >
-                              {formatSec(clip.durationMs)}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setFootageClips((prev) => prev.filter((c) => c.path !== clip.path))
-                              }
-                              className="p-1 cursor-pointer"
-                              style={{ color: "var(--danger)" }}
-                              aria-label="Hapus klip"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {clip.thumbnails.length > 0 && (
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            {clip.thumbnails.map((src, i) => (
-                              <img
-                                key={i}
-                                src={src}
-                                alt={`Thumbnail ${i + 1}`}
-                                className="h-16 w-full rounded object-cover"
-                                style={{ border: "1px solid var(--border-subtle)" }}
-                              />
-                            ))}
-                          </div>
-                        )}
+                        <Film className="mx-auto mb-2 h-6 w-6" style={{ color: "var(--text-muted)" }} />
+                        Belum ada footage lokal ditambahkan. Kamu bisa tambah 1–5 klip MP4/MOV
+                        sekarang, atau lanjut{" "}
+                        {visualMode === "hybrid"
+                          ? "agar AI mengisi scene dengan AI Motion."
+                          : "memakai backdrop studio dulu."}
                       </div>
-                    ))}
-                  </div>
-                )}
+                    ) : (
+                      <div className="space-y-2.5">
+                        {footageClips.map((clip) => (
+                          <div
+                            key={clip.path}
+                            className="rounded-lg p-3"
+                            style={{
+                              backgroundColor: "var(--bg-elevated)",
+                              border: "1px solid var(--border-subtle)",
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs font-semibold">{clip.fileName}</span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span
+                                  className="font-mono-num text-[11px]"
+                                  style={{ color: "var(--text-muted)" }}
+                                >
+                                  {formatSec(clip.durationMs)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setFootageClips((prev) =>
+                                      prev.filter((c) => c.path !== clip.path)
+                                    )
+                                  }
+                                  className="p-1 cursor-pointer"
+                                  style={{ color: "var(--danger)" }}
+                                  aria-label="Hapus klip"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
 
-                {/* Coming Soon Slot: Google Flow / Seedance */}
-                <div
-                  className="flex items-center justify-between rounded-lg px-3.5 py-2.5 text-xs opacity-65"
-                  style={{
-                    backgroundColor: "var(--bg-elevated)",
-                    border: "1px dashed var(--border-strong)",
-                  }}
-                >
-                  <span className="inline-flex items-center gap-2" style={{ color: "var(--text-secondary)" }}>
-                    <Lock className="h-3.5 w-3.5" />
-                    Generate AI Footage (Google Flow / Seedance)
-                  </span>
-                  <span
-                    className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
-                    style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-muted)" }}
-                  >
-                    Coming Soon
-                  </span>
-                </div>
+                            {clip.thumbnails.length > 0 && (
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                {clip.thumbnails.map((src, i) => (
+                                  <img
+                                    key={i}
+                                    src={src}
+                                    alt={`Thumbnail ${i + 1}`}
+                                    className="h-16 w-full rounded object-cover"
+                                    style={{ border: "1px solid var(--border-subtle)" }}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {visualMode === "hybrid" && (
+                      <div className="border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>
+                        <label className="mb-1.5 block text-xs font-semibold">
+                          Tema Kanvas untuk Scene AI Motion
+                        </label>
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {AI_MOTION_THEMES.map((th) => {
+                            const active = motionTheme === th.id;
+                            return (
+                              <button
+                                key={th.id}
+                                type="button"
+                                onClick={() => setMotionTheme(th.id)}
+                                className="flex flex-col items-center gap-1 rounded-md py-1.5 text-[11px] font-medium cursor-pointer"
+                                style={{
+                                  backgroundColor: active
+                                    ? "var(--bg-hover)"
+                                    : "var(--bg-elevated)",
+                                  border: active
+                                    ? "1px solid var(--accent)"
+                                    : "1px solid var(--border-subtle)",
+                                }}
+                              >
+                                <span
+                                  className="h-4 w-4 rounded-full"
+                                  style={{
+                                    backgroundColor: th.bgHex,
+                                    border: `2px solid ${th.accentHex}`,
+                                  }}
+                                />
+                                <span>{th.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Coming Soon Slot: Google Flow / Seedance */}
+                    <div
+                      className="flex items-center justify-between rounded-lg px-3.5 py-2.5 text-xs opacity-65"
+                      style={{
+                        backgroundColor: "var(--bg-elevated)",
+                        border: "1px dashed var(--border-strong)",
+                      }}
+                    >
+                      <span
+                        className="inline-flex items-center gap-2"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                        Generate AI Footage (Google Flow / Seedance)
+                      </span>
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
+                        style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-muted)" }}
+                      >
+                        Coming Soon
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Right: Voiceover (TTS vs Suara Sendiri Auto-Sync) */}
@@ -1356,9 +2055,17 @@ export default function WizardView({
                 <div className="space-y-0.5 text-xs">
                   <div className="font-bold">{projectTitle || "Konten Baru"}</div>
                   <div className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                    {1 + bodySegments.filter((s) => s.trim()).length + 1} scene · {footageClips.length}{" "}
-                    footage lokal ·{" "}
-                    {audioResult ? `suara tersinkron (${formatSec(audioResult.durationMs)})` : "audio demo"}
+                    Mode:{" "}
+                    {visualMode === "motion"
+                      ? `AI Motion (${motionTheme})`
+                      : visualMode === "hybrid"
+                        ? `Campur (${footageClips.length} klip + Motion)`
+                        : `Footage (${footageClips.length} klip)`}{" "}
+                    · {1 + bodySegments.filter((s) => s.trim()).length + 1} scene ·{" "}
+                    {audioResult
+                      ? `suara tersinkron (${formatSec(audioResult.durationMs)})`
+                      : "audio demo"}
+                    {styleRefResult ? " · Referensi Gaya aktif" : ""}
                   </div>
                 </div>
 

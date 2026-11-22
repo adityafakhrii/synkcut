@@ -3,6 +3,7 @@ mod audio;
 mod audio_pack;
 mod byok;
 mod projects;
+mod style_ref;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
@@ -555,6 +556,8 @@ pub fn run() {
             ai::ai_generate_script,
             ai::ai_assemble_project,
             ai::ai_copilot_patch,
+            style_ref::extract_youtube_style_reference,
+            style_ref::analyze_style_reference,
             audio::generate_tts_audio,
             audio::process_user_audio,
             audio_pack::get_audio_pack_catalog,
