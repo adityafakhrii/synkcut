@@ -98,33 +98,59 @@ pub fn strip_json_fences(raw: &str) -> String {
     }
 }
 
-pub fn resolve_active_key(app: &AppHandle) -> Result<(String, String), String> {
-    let status = byok::get_byok_status(app.clone());
-    if let Some(key) = byok::read_stored_key(&status.active_provider) {
-        return Ok((status.active_provider, key));
+/// Extract a valid JSON value even if an LLM wraps it in markdown fences or brief commentary.
+pub fn parse_llm_json(raw: &str) -> Result<Value, String> {
+    let cleaned = strip_json_fences(raw);
+    if let Ok(val) = serde_json::from_str::<Value>(&cleaned) {
+        return Ok(val);
     }
-    for fallback in ["gemini", "openai", "openrouter"] {
-        if let Some(key) = byok::read_stored_key(fallback) {
-            return Ok((fallback.to_string(), key));
+    if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
+        if end > start {
+            if let Ok(val) = serde_json::from_str::<Value>(&cleaned[start..=end]) {
+                return Ok(val);
+            }
         }
     }
-    Err("Belum ada API Key BYOK yang tersimpan. Silakan atur API Key di menu Pengaturan AI terlebih dahulu.".to_string())
+    Err(format!(
+        "Output AI bukan JSON valid. Awal respons: {}",
+        cleaned.chars().take(160).collect::<String>()
+    ))
 }
 
-/// Calls Gemini / OpenAI / OpenRouter with optional base64 JPEG images and enforces JSON output
+fn extract_openai_message_text(val: &Value) -> Option<String> {
+    let content = &val["choices"][0]["message"]["content"];
+    if let Some(s) = content.as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(arr) = content.as_array() {
+        let joined: String = arr
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !joined.trim().is_empty() {
+            return Some(joined);
+        }
+    }
+    None
+}
+
+/// Calls Gemini / OpenAI / OpenRouter / Custom OpenAI-compatible model with optional base64 JPEG
+/// images, enforces JSON output, and automatically falls back when default models are deprecated.
 pub async fn call_llm_json(
-    provider: &str,
-    api_key: &str,
+    resolved: &byok::ResolvedProvider,
     system_prompt: &str,
     user_prompt: &str,
     image_data_urls: &[String],
-) -> Result<Value, String> {
+) -> Result<(Value, String), String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(45))
+        .timeout(std::time::Duration::from_secs(55))
         .build()
         .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
 
-    let raw_text: String = match provider {
+    let (raw_text, used_model): (String, String) = match resolved.provider.as_str() {
         "gemini" => {
             let mut parts: Vec<Value> = vec![json!({ "text": user_prompt })];
             for data_url in image_data_urls.iter().take(8) {
@@ -149,92 +175,203 @@ pub async fn call_llm_json(
                 }
             });
 
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            );
-            let res = client
-                .post(url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| format!("Gagal menghubungi Gemini API: {e}"))?;
-
-            if !res.status().is_success() {
-                let status = res.status().as_u16();
-                let body_txt = res.text().await.unwrap_or_default();
-                return Err(format!(
-                    "Gemini API error (HTTP {status}): {}",
-                    body_txt.chars().take(180).collect::<String>()
-                ));
+            let mut candidates: Vec<String> = vec![resolved.model.clone()];
+            for fb in [
+                "gemini-3.8-flash",
+                "gemini-3.8-flash-lite",
+                "gemini-3.5-flash-lite",
+                "gemini-3-flash-preview",
+                "gemini-2.5-flash",
+            ] {
+                if !candidates.iter().any(|c| c == fb) {
+                    candidates.push(fb.to_string());
+                }
             }
 
-            let val: Value = res.json().await.map_err(|e| e.to_string())?;
-            val["candidates"][0]["content"]["parts"][0]["text"]
-                .as_str()
-                .ok_or_else(|| "Respons Gemini kosong.".to_string())?
-                .to_string()
+            let mut tried_discovery = false;
+            let mut idx = 0usize;
+            let mut last_err = String::from("Gagal menghubungi Gemini API.");
+
+            let mut success_result: Option<(String, String)> = None;
+            while idx < candidates.len() {
+                let candidate = candidates[idx].clone();
+                idx += 1;
+
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={}",
+                    resolved.api_key
+                );
+                let res = client
+                    .post(url)
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Gagal menghubungi Gemini API: {e}"))?;
+
+                let status = res.status().as_u16();
+                if res.status().is_success() {
+                    let val: Value = res.json().await.map_err(|e| e.to_string())?;
+                    if let Some(txt) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                        success_result = Some((txt.to_string(), candidate));
+                        break;
+                    }
+                    last_err = format!("Respons Gemini ({candidate}) kosong.");
+                    continue;
+                }
+
+                let body_txt = res.text().await.unwrap_or_default();
+                last_err = format!(
+                    "Gemini API error (HTTP {status}, model {candidate}): {}",
+                    body_txt.chars().take(220).collect::<String>()
+                );
+
+                let model_unavailable = status == 404
+                    || body_txt.contains("no longer available")
+                    || body_txt.contains("is not found");
+
+                if model_unavailable {
+                    if !tried_discovery {
+                        tried_discovery = true;
+                        if let Ok(live_models) =
+                            byok::discover_gemini_live_models(&client, &resolved.api_key).await
+                        {
+                            for m in live_models.into_iter().take(4) {
+                                if !candidates.iter().any(|c| c == &m) {
+                                    candidates.push(m);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Auth / quota / bad request errors should surface immediately
+                return Err(last_err);
+            }
+
+            success_result.ok_or(last_err)?
         }
-        "openai" | "openrouter" => {
-            let (endpoint, model) = if provider == "openai" {
-                ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini")
-            } else {
-                (
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    "google/gemini-2.5-flash",
-                )
+        "openai" | "openrouter" | "custom" => {
+            let endpoint = match resolved.provider.as_str() {
+                "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
+                "openrouter" => "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                "custom" => {
+                    let raw = resolved.base_url.as_deref().unwrap_or("").trim();
+                    if raw.is_empty() {
+                        return Err("Base URL Custom Model belum diatur. Buka Pengaturan AI terlebih dahulu.".to_string());
+                    }
+                    byok::normalize_chat_completions_url(raw)
+                }
+                _ => unreachable!(),
             };
 
-            let mut user_content: Vec<Value> = vec![json!({ "type": "text", "text": user_prompt })];
-            for data_url in image_data_urls.iter().take(6) {
-                user_content.push(json!({
-                    "type": "image_url",
-                    "image_url": { "url": data_url }
-                }));
+            let mut candidates: Vec<String> = vec![resolved.model.clone()];
+            match resolved.provider.as_str() {
+                "openai" => {
+                    for fb in ["gpt-4.1-mini", "gpt-4o-mini"] {
+                        if !candidates.iter().any(|c| c == fb) {
+                            candidates.push(fb.to_string());
+                        }
+                    }
+                }
+                "openrouter" => {
+                    for fb in ["google/gemini-3.8-flash", "openai/gpt-4.1-mini", "openrouter/free"] {
+                        if !candidates.iter().any(|c| c == fb) {
+                            candidates.push(fb.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
 
-            let payload = json!({
-                "model": model,
-                "response_format": { "type": "json_object" },
-                "temperature": 0.6,
-                "messages": [
-                    { "role": "system", "content": system_prompt },
-                    { "role": "user", "content": user_content }
-                ]
-            });
+            let mut last_err = format!("Gagal menghubungi {} API.", resolved.provider);
+            let mut success_result: Option<(String, String)> = None;
 
-            let mut req = client.post(endpoint).bearer_auth(api_key).json(&payload);
-            if provider == "openrouter" {
-                req = req
-                    .header("HTTP-Referer", "https://synkcut.app")
-                    .header("X-Title", "Synkcut Studio");
+            'model_loop: for candidate in candidates {
+                let mut use_json_mode = true;
+                let mut include_images = !image_data_urls.is_empty();
+
+                // Up to 3 adaptive attempts per model (full -> drop response_format / drop images)
+                for _attempt in 0..3 {
+                    let user_message = if include_images {
+                        let mut content: Vec<Value> = vec![json!({ "type": "text", "text": user_prompt })];
+                        for data_url in image_data_urls.iter().take(6) {
+                            content.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": data_url }
+                            }));
+                        }
+                        json!({ "role": "user", "content": content })
+                    } else {
+                        json!({ "role": "user", "content": user_prompt })
+                    };
+
+                    let mut payload = json!({
+                        "model": candidate,
+                        "temperature": 0.6,
+                        "messages": [
+                            { "role": "system", "content": system_prompt },
+                            user_message
+                        ]
+                    });
+                    if use_json_mode {
+                        payload["response_format"] = json!({ "type": "json_object" });
+                    }
+
+                    let mut req = client.post(&endpoint).json(&payload);
+                    if !resolved.api_key.trim().is_empty() {
+                        req = req.bearer_auth(&resolved.api_key);
+                    }
+                    if resolved.provider == "openrouter" {
+                        req = req
+                            .header("HTTP-Referer", "https://synkcut.app")
+                            .header("X-Title", "Synkcut Studio");
+                    }
+
+                    let res = req.send().await.map_err(|e| {
+                        format!("Gagal menghubungi {} API ({endpoint}): {e}", resolved.provider)
+                    })?;
+
+                    let status = res.status().as_u16();
+                    if res.status().is_success() {
+                        let val: Value = res.json().await.map_err(|e| e.to_string())?;
+                        let txt = extract_openai_message_text(&val)
+                            .ok_or_else(|| format!("Respons {} ({candidate}) kosong.", resolved.provider))?;
+                        success_result = Some((txt, candidate));
+                        break 'model_loop;
+                    }
+
+                    let body_txt = res.text().await.unwrap_or_default();
+                    let lower_body = body_txt.to_lowercase();
+                    last_err = format!(
+                        "{} API error (HTTP {status}, model {candidate}): {}",
+                        resolved.provider,
+                        body_txt.chars().take(220).collect::<String>()
+                    );
+
+                    // Graceful fallback if endpoint/model rejects image_url or json_object mode
+                    if (status == 400 || status == 422) && include_images && (lower_body.contains("image") || lower_body.contains("vision") || lower_body.contains("multimodal") || lower_body.contains("content")) {
+                        include_images = false;
+                        continue;
+                    }
+                    if (status == 400 || status == 422) && use_json_mode {
+                        use_json_mode = false;
+                        continue;
+                    }
+                    if status == 404 {
+                        continue 'model_loop;
+                    }
+                    return Err(last_err);
+                }
             }
 
-            let res = req
-                .send()
-                .await
-                .map_err(|e| format!("Gagal menghubungi {provider} API: {e}"))?;
-
-            if !res.status().is_success() {
-                let status = res.status().as_u16();
-                let body_txt = res.text().await.unwrap_or_default();
-                return Err(format!(
-                    "{provider} API error (HTTP {status}): {}",
-                    body_txt.chars().take(180).collect::<String>()
-                ));
-            }
-
-            let val: Value = res.json().await.map_err(|e| e.to_string())?;
-            val["choices"][0]["message"]["content"]
-                .as_str()
-                .ok_or_else(|| format!("Respons {provider} kosong."))?
-                .to_string()
+            success_result.ok_or(last_err)?
         }
-        _ => return Err(format!("Provider tidak didukung: {provider}")),
+        _ => return Err(format!("Provider tidak didukung: {}", resolved.provider)),
     };
 
-    let cleaned = strip_json_fences(&raw_text);
-    serde_json::from_str::<Value>(&cleaned)
-        .map_err(|e| format!("Output AI bukan JSON valid: {e}"))
+    let parsed = parse_llm_json(&raw_text)?;
+    Ok((parsed, format!("{} · {}", resolved.provider, used_model)))
 }
 
 #[tauri::command]
@@ -246,7 +383,7 @@ pub async fn ai_generate_script(
         return Err("Isi topik atau detail produk terlebih dahulu.".to_string());
     }
 
-    let (provider, api_key) = resolve_active_key(&app)?;
+    let resolved = byok::resolve_active_provider(&app)?;
 
     let body_count = match req.target_duration_sec {
         0..=20 => 1,
@@ -296,7 +433,7 @@ pub async fn ai_generate_script(
         style_hint
     );
 
-    let val = call_llm_json(&provider, &api_key, system_prompt, &user_prompt, &[]).await?;
+    let (val, provider_used) = call_llm_json(&resolved, system_prompt, &user_prompt, &[]).await?;
 
     let project_title = val["projectTitle"]
         .as_str()
@@ -342,7 +479,7 @@ pub async fn ai_generate_script(
         hooks,
         body_segments,
         cta,
-        provider_used: provider,
+        provider_used,
     })
 }
 
@@ -609,7 +746,7 @@ pub async fn ai_assemble_project(
 
     // Ask Multimodal AI Director to match local footage thumbnails AND/OR author native AI Motion specs
     let mut ai_scene_decisions: Vec<Value> = Vec::new();
-    if let Ok((provider, api_key)) = resolve_active_key(&app) {
+    if let Ok(resolved) = byok::resolve_active_provider(&app) {
         let mut all_thumbs: Vec<String> = Vec::new();
         let mut footage_desc = String::new();
         for (idx, clip) in req.footage.iter().enumerate() {
@@ -703,8 +840,8 @@ pub async fn ai_assemble_project(
             seg_desc
         );
 
-        if let Ok(val) =
-            call_llm_json(&provider, &api_key, system_prompt, &user_prompt, &all_thumbs).await
+        if let Ok((val, _)) =
+            call_llm_json(&resolved, system_prompt, &user_prompt, &all_thumbs).await
         {
             if let Some(arr) = val["scenes"].as_array() {
                 ai_scene_decisions = arr.clone();
@@ -1137,7 +1274,7 @@ pub async fn ai_copilot_patch(
     if instruction.trim().is_empty() {
         return Err("Instruksi revisi kosong.".to_string());
     }
-    let (provider, api_key) = resolve_active_key(&app)?;
+    let resolved = byok::resolve_active_provider(&app)?;
 
     // Send a compact summary (omit huge words[] array to save BYOK tokens!)
     let mut compact_project = project.clone();
@@ -1171,7 +1308,7 @@ pub async fn ai_copilot_patch(
         instruction.trim()
     );
 
-    let val = call_llm_json(&provider, &api_key, system_prompt, &user_prompt, &[]).await?;
+    let (val, provider_used) = call_llm_json(&resolved, system_prompt, &user_prompt, &[]).await?;
     let reply = val["reply"]
         .as_str()
         .unwrap_or("Revisi berhasil diterapkan pada proyek.")
@@ -1182,7 +1319,7 @@ pub async fn ai_copilot_patch(
     Ok(CopilotPatchResponse {
         project: updated,
         reply,
-        provider_used: provider,
+        provider_used,
     })
 }
 
@@ -1195,6 +1332,13 @@ mod tests {
         let fenced = "```json\n{\"ok\":true}\n```";
         assert_eq!(strip_json_fences(fenced), "{\"ok\":true}");
         assert_eq!(strip_json_fences("{\"ok\":true}"), "{\"ok\":true}");
+    }
+
+    #[test]
+    fn test_parse_llm_json_handles_prose_wrapper() {
+        let wrapped = "Berikut hasil JSON revisi:\n```json\n{\"reply\":\"Berhasil\",\"scenes\":[]}\n```\nSemoga membantu!";
+        let val = parse_llm_json(wrapped).expect("should parse prose-wrapped json");
+        assert_eq!(val["reply"], "Berhasil");
     }
 
     #[test]

@@ -25,7 +25,6 @@ import {
   Shapes,
   Shield,
   SlidersHorizontal,
-  Sparkles,
   Square,
   Sun,
   Trash2,
@@ -302,13 +301,20 @@ export default function StudioView({
   const hasAnyFootage = projectClipPaths.length > 0;
   const hasAnyMotion = project.scenes.some((s) => s.visualSource === "motion");
 
-  const activeByokOk = byokStatus.providers[byokStatus.activeProvider]?.configured;
-  const providerLabel =
+  const activeProviderInfo = byokStatus.providers[byokStatus.activeProvider];
+  const activeByokOk = activeProviderInfo?.configured;
+  const providerName =
     byokStatus.activeProvider === "gemini"
       ? "Gemini"
       : byokStatus.activeProvider === "openai"
         ? "OpenAI"
-        : "OpenRouter";
+        : byokStatus.activeProvider === "openrouter"
+          ? "OpenRouter"
+          : "Custom";
+  const activeModelShort = activeProviderInfo?.model
+    ? activeProviderInfo.model.split("/").pop() || activeProviderInfo.model
+    : "";
+  const providerLabel = activeModelShort ? `${providerName} · ${activeModelShort}` : providerName;
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1849,22 +1855,22 @@ export default function StudioView({
         >
           {/* Minimal AI Director Header */}
           <div
-            className="flex h-11 shrink-0 items-center justify-between border-b px-5"
+            className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-5"
             style={{ borderColor: "var(--border-subtle)" }}
           >
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4" style={{ color: "var(--accent)" }} />
-              <h1 className="text-sm font-bold tracking-tight">AI Director</h1>
-            </div>
+            <h1 className="text-sm font-bold tracking-tight">AI Director</h1>
             <span
-              className="inline-flex items-center gap-1.5 text-xs font-medium"
+              className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium"
               style={{ color: "var(--text-secondary)" }}
+              title={activeByokOk ? providerLabel : "Mode Cepat (0 Token)"}
             >
               <span
-                className="h-2 w-2 rounded-full"
+                className="h-2 w-2 shrink-0 rounded-full"
                 style={{ backgroundColor: activeByokOk ? "var(--success)" : "var(--text-muted)" }}
               />
-              {activeByokOk ? providerLabel : "Mode Cepat (0 Token)"}
+              <span className="truncate">
+                {activeByokOk ? providerLabel : "Mode Cepat (0 Token)"}
+              </span>
             </span>
           </div>
 
@@ -2937,7 +2943,7 @@ export default function StudioView({
                         {isGeneratingTts ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <Sparkles className="h-3.5 w-3.5" />
+                          <Volume2 className="h-3.5 w-3.5" />
                         )}
                         Generate TTS
                       </button>

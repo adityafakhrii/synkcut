@@ -1,6 +1,6 @@
 export type ContentFormat = "ad_promo" | "education" | "storytelling" | "review";
 
-export type ByokProvider = "gemini" | "openai" | "openrouter";
+export type ByokProvider = "gemini" | "openai" | "openrouter" | "custom";
 
 export type CaptionPreset =
   | "bold_pop"
@@ -306,6 +306,8 @@ export interface ProjectSummary {
 export interface ProviderKeyInfo {
   configured: boolean;
   maskedKey: string | null;
+  model?: string;
+  baseUrl?: string | null;
 }
 
 export interface ByokStatus {
@@ -320,6 +322,7 @@ export interface ConnectionTestResult {
   latencyMs: number;
   message: string;
   detail: string | null;
+  resolvedModel?: string | null;
 }
 
 export const CONTENT_FORMAT_LABELS: Record<

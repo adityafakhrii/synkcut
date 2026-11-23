@@ -229,15 +229,29 @@ function readBrowserByok(): ByokStatus {
     activeProvider: "gemini",
     onboardingCompleted: false,
     providers: {
-      gemini: { configured: false, maskedKey: null },
-      openai: { configured: false, maskedKey: null },
-      openrouter: { configured: false, maskedKey: null },
+      gemini: { configured: false, maskedKey: null, model: "gemini-3.8-flash", baseUrl: null },
+      openai: { configured: false, maskedKey: null, model: "gpt-4.1-mini", baseUrl: null },
+      openrouter: {
+        configured: false,
+        maskedKey: null,
+        model: "google/gemini-3.8-flash",
+        baseUrl: null,
+      },
+      custom: { configured: false, maskedKey: null, model: "", baseUrl: null },
     },
   };
   try {
     const raw = localStorage.getItem(BROWSER_BYOK_KEY);
     if (!raw) return fallback;
-    return { ...fallback, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return {
+      ...fallback,
+      ...parsed,
+      providers: {
+        ...fallback.providers,
+        ...(parsed.providers || {}),
+      },
+    };
   } catch {
     return fallback;
   }
@@ -253,26 +267,92 @@ export async function saveByokKey(
   apiKey: string,
   setActive = true
 ): Promise<ByokStatus> {
+  return saveProviderConfig({ provider, apiKey, setActive });
+}
+
+export async function saveProviderConfig(params: {
+  provider: ByokProvider;
+  apiKey?: string | null;
+  model?: string | null;
+  baseUrl?: string | null;
+  setActive?: boolean;
+}): Promise<ByokStatus> {
   if (!isTauriRuntime()) {
     const cur = readBrowserByok();
-    const trimmed = apiKey.trim();
-    const masked =
-      trimmed.length <= 8
+    const prevInfo = cur.providers[params.provider] ?? {
+      configured: false,
+      maskedKey: null,
+      model: "",
+      baseUrl: null,
+    };
+    const trimmedKey = params.apiKey?.trim() ?? "";
+    const masked = trimmedKey
+      ? trimmedKey.length <= 8
         ? "••••••••"
-        : `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
+        : `${trimmedKey.slice(0, 4)}••••${trimmedKey.slice(-4)}`
+      : prevInfo.maskedKey;
+    const nextModel =
+      params.model !== undefined ? (params.model?.trim() ?? "") : (prevInfo.model ?? "");
+    const nextBaseUrl =
+      params.baseUrl !== undefined ? (params.baseUrl?.trim() || null) : (prevInfo.baseUrl ?? null);
+    const configured =
+      params.provider === "custom"
+        ? Boolean(nextBaseUrl && nextModel)
+        : Boolean(trimmedKey || prevInfo.configured);
+
     const next: ByokStatus = {
       ...cur,
-      activeProvider: setActive ? provider : cur.activeProvider,
+      activeProvider: params.setActive === false ? cur.activeProvider : params.provider,
       onboardingCompleted: true,
       providers: {
         ...cur.providers,
-        [provider]: { configured: true, maskedKey: masked },
+        [params.provider]: {
+          configured,
+          maskedKey: masked,
+          model: nextModel,
+          baseUrl: nextBaseUrl,
+        },
       },
     };
     localStorage.setItem(BROWSER_BYOK_KEY, JSON.stringify(next));
     return next;
   }
-  return invoke<ByokStatus>("save_byok_key", { provider, apiKey, setActive });
+  return invoke<ByokStatus>("save_provider_config", {
+    provider: params.provider,
+    apiKey: params.apiKey?.trim() ? params.apiKey.trim() : null,
+    model: params.model !== undefined ? params.model : null,
+    baseUrl: params.baseUrl !== undefined ? params.baseUrl : null,
+    setActive: params.setActive ?? true,
+  });
+}
+
+export async function fetchProviderModels(params: {
+  provider: ByokProvider;
+  apiKey?: string | null;
+  baseUrl?: string | null;
+}): Promise<string[]> {
+  if (!isTauriRuntime()) {
+    if (params.provider === "gemini") {
+      return ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3-flash-preview"];
+    }
+    if (params.provider === "openai") {
+      return ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1", "gpt-5-mini"];
+    }
+    if (params.provider === "openrouter") {
+      return [
+        "google/gemini-3.8-flash",
+        "openai/gpt-4.1-mini",
+        "openrouter/free",
+        "anthropic/claude-sonnet-4",
+      ];
+    }
+    return ["deepseek-chat", "llama-3.3-70b-versatile", "qwen2.5:14b"];
+  }
+  return invoke<string[]>("fetch_provider_models", {
+    provider: params.provider,
+    apiKey: params.apiKey?.trim() ? params.apiKey.trim() : null,
+    baseUrl: params.baseUrl?.trim() ? params.baseUrl.trim() : null,
+  });
 }
 
 export async function setActiveProvider(provider: ByokProvider): Promise<ByokStatus> {
@@ -302,7 +382,12 @@ export async function deleteByokKey(provider: ByokProvider): Promise<ByokStatus>
       ...cur,
       providers: {
         ...cur.providers,
-        [provider]: { configured: false, maskedKey: null },
+        [provider]: {
+          configured: false,
+          maskedKey: null,
+          model: provider === "custom" ? "" : cur.providers[provider]?.model,
+          baseUrl: null,
+        },
       },
     };
     localStorage.setItem(BROWSER_BYOK_KEY, JSON.stringify(next));
@@ -313,23 +398,33 @@ export async function deleteByokKey(provider: ByokProvider): Promise<ByokStatus>
 
 export async function testByokConnection(
   provider: ByokProvider,
-  apiKey?: string
+  apiKey?: string,
+  model?: string,
+  baseUrl?: string
 ): Promise<ConnectionTestResult> {
   if (!isTauriRuntime()) {
+    const ok =
+      provider === "custom"
+        ? Boolean(baseUrl?.trim() && model?.trim())
+        : Boolean(apiKey && apiKey.trim().length >= 8);
     return {
-      ok: Boolean(apiKey && apiKey.trim().length >= 8),
+      ok,
       provider,
       latencyMs: 42,
-      message:
-        apiKey && apiKey.trim().length >= 8
-          ? "Mode preview browser: format API Key valid (tes koneksi penuh berjalan di desktop app)."
+      message: ok
+        ? "Mode preview browser: konfigurasi valid (tes koneksi penuh berjalan di desktop app)."
+        : provider === "custom"
+          ? "Isi Base URL dan Model ID terlebih dahulu."
           : "API Key terlalu pendek.",
       detail: "Browser preview",
+      resolvedModel: model?.trim() || null,
     };
   }
   return invoke<ConnectionTestResult>("test_byok_connection", {
     provider,
-    apiKey: apiKey ?? null,
+    apiKey: apiKey?.trim() ? apiKey.trim() : null,
+    model: model?.trim() ? model.trim() : null,
+    baseUrl: baseUrl?.trim() ? baseUrl.trim() : null,
   });
 }
 

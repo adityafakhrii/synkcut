@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::ShellExt;
 
-use crate::ai::{call_llm_json, resolve_active_key, strip_json_fences};
+use crate::ai::{call_llm_json, parse_llm_json};
 use crate::byok;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -186,7 +186,7 @@ async fn analyze_images_with_byok(
     title: &str,
     thumbnails: &[String],
 ) -> Option<Value> {
-    let (provider, api_key) = resolve_active_key(app).ok()?;
+    let resolved = byok::resolve_active_provider(app).ok()?;
 
     let system_prompt = "Kamu adalah Art Director & Motion Designer untuk Synkcut. \
         Analisa frame/screenshot referensi video yang dilampirkan untuk mengekstrak DNA gaya visual (palet warna, suasana terang/gelap, jenis animasi yang cocok, gaya tipografi, dan pacing). \
@@ -208,12 +208,13 @@ async fn analyze_images_with_byok(
         thumbnails.len()
     );
 
-    call_llm_json(&provider, &api_key, system_prompt, &user_prompt, thumbnails)
+    call_llm_json(&resolved, system_prompt, &user_prompt, thumbnails)
         .await
         .ok()
+        .map(|(val, _)| val)
 }
 
-/// Layer 2: Ask Gemini 2.5 Flash directly with YouTube URL via fileData when yt-dlp is unavailable
+/// Layer 2: Ask Gemini Flash directly with YouTube URL via fileData when yt-dlp is unavailable
 async fn analyze_youtube_via_gemini_direct(
     app: &AppHandle,
     canonical_url: &str,
@@ -261,16 +262,36 @@ async fn analyze_youtube_via_gemini_direct(
         }
     });
 
-    let endpoint = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
-    );
-    let res = client.post(endpoint).json(&payload).send().await.ok()?;
-    if !res.status().is_success() {
-        return None;
+    let mut candidates = vec![byok::get_gemini_model_for_app(app)];
+    for fb in [
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+    ] {
+        if !candidates.iter().any(|c| c == fb) {
+            candidates.push(fb.to_string());
+        }
     }
-    let val: Value = res.json().await.ok()?;
-    let raw_txt = val["candidates"][0]["content"]["parts"][0]["text"].as_str()?;
-    serde_json::from_str::<Value>(&strip_json_fences(raw_txt)).ok()
+
+    for candidate in candidates {
+        let endpoint = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={gemini_key}"
+        );
+        let Ok(res) = client.post(endpoint).json(&payload).send().await else {
+            return None;
+        };
+        if res.status().is_success() {
+            let val: Value = res.json().await.ok()?;
+            let raw_txt = val["candidates"][0]["content"]["parts"][0]["text"].as_str()?;
+            return parse_llm_json(raw_txt).ok();
+        }
+        if res.status().as_u16() != 404 {
+            return None;
+        }
+    }
+    None
 }
 
 fn find_yt_dlp_executable(app: &AppHandle) -> Option<PathBuf> {

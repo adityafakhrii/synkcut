@@ -261,9 +261,15 @@ export default function App() {
     activeProvider: "gemini",
     onboardingCompleted: false,
     providers: {
-      gemini: { configured: false, maskedKey: null },
-      openai: { configured: false, maskedKey: null },
-      openrouter: { configured: false, maskedKey: null },
+      gemini: { configured: false, maskedKey: null, model: "gemini-3.8-flash", baseUrl: null },
+      openai: { configured: false, maskedKey: null, model: "gpt-4.1-mini", baseUrl: null },
+      openrouter: {
+        configured: false,
+        maskedKey: null,
+        model: "google/gemini-3.8-flash",
+        baseUrl: null,
+      },
+      custom: { configured: false, maskedKey: null, model: "", baseUrl: null },
     },
   });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -492,7 +498,9 @@ export default function App() {
       ? "Gemini"
       : byokStatus.activeProvider === "openai"
         ? "OpenAI"
-        : "OpenRouter";
+        : byokStatus.activeProvider === "openrouter"
+          ? "OpenRouter"
+          : "Custom";
 
   /* Native Desktop Shell: Left Workspace Sidebar + Full-Bleed Right Pane */
   return (

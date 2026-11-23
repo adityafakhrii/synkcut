@@ -176,6 +176,7 @@ async fn synthesize_windows_offline_wav(text: &str, out_path: &PathBuf) -> Resul
 }
 
 async fn transcribe_with_gemini(
+    app: &AppHandle,
     api_key: &str,
     audio_bytes: &[u8],
     mime_type: &str,
@@ -215,28 +216,50 @@ async fn transcribe_with_gemini(
         }
     });
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    );
-    let res = client
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Gagal menghubungi Gemini Audio API: {e}"))?;
-
-    if !res.status().is_success() {
-        let status = res.status().as_u16();
-        return Err(format!("Gemini Audio API gagal (HTTP {status})."));
+    let mut candidates = vec![byok::get_gemini_model_for_app(app)];
+    for fb in [
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+    ] {
+        if !candidates.iter().any(|c| c == fb) {
+            candidates.push(fb.to_string());
+        }
     }
 
-    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-    let raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        .as_str()
-        .ok_or_else(|| "Respons Gemini Audio kosong.".to_string())?;
+    let mut raw_text_opt: Option<String> = None;
+    let mut last_status = 0u16;
+    for candidate in candidates {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={api_key}"
+        );
+        let res = client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Gagal menghubungi Gemini Audio API: {e}"))?;
 
-    let cleaned = crate::ai::strip_json_fences(raw_text);
-    let parsed: serde_json::Value = serde_json::from_str(&cleaned)
+        if res.status().is_success() {
+            let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+            if let Some(txt) = data["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                raw_text_opt = Some(txt.to_string());
+                break;
+            }
+            continue;
+        }
+        last_status = res.status().as_u16();
+        if last_status != 404 {
+            return Err(format!("Gemini Audio API gagal (HTTP {last_status})."));
+        }
+    }
+
+    let raw_text = raw_text_opt
+        .ok_or_else(|| format!("Gemini Audio API gagal (HTTP {last_status})."))?;
+
+    let parsed = crate::ai::parse_llm_json(&raw_text)
         .map_err(|e| format!("JSON transkrip Gemini tidak valid: {e}"))?;
 
     let transcript = parsed["transcript"]
@@ -388,32 +411,50 @@ pub async fn generate_tts_audio(
                 }
             });
 
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={key}"
-            );
-            let res = client
-                .post(url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|e| format!("Gagal menghubungi Gemini TTS API: {e}"))?;
+            let tts_models = [
+                "gemini-3.8-flash-lite-tts",
+                "gemini-3.8-flash-tts",
+                "gemini-2.5-flash-preview-tts",
+            ];
+            let mut b64_audio: Option<String> = None;
+            let mut last_err = String::from("Gemini TTS gagal.");
 
-            if !res.status().is_success() {
+            for tts_model in tts_models {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent?key={key}"
+                );
+                let res = client
+                    .post(url)
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Gagal menghubungi Gemini TTS API: {e}"))?;
+
+                if res.status().is_success() {
+                    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+                    if let Some(b64) = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"].as_str() {
+                        b64_audio = Some(b64.to_string());
+                        break;
+                    }
+                    last_err = format!("Gemini TTS ({tts_model}) tidak mengembalikan data audio.");
+                    continue;
+                }
+
                 let status = res.status().as_u16();
                 let err_body = res.text().await.unwrap_or_default();
-                return Err(format!(
+                last_err = format!(
                     "Gemini TTS gagal (HTTP {status}). Cek kuota/key Gemini lo atau coba suara Windows Offline. Detail: {}",
                     err_body.chars().take(180).collect::<String>()
-                ));
+                );
+                if status != 404 {
+                    return Err(last_err);
+                }
             }
 
-            let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-            let b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-                .as_str()
-                .ok_or_else(|| "Gemini TTS tidak mengembalikan data audio.".to_string())?;
+            let b64 = b64_audio.ok_or(last_err)?;
 
             let pcm_bytes = BASE64
-                .decode(b64)
+                .decode(&b64)
                 .map_err(|e| format!("Gagal decode audio PCM dari Gemini: {e}"))?;
             let wav_bytes = pcm24k_to_wav(&pcm_bytes);
 
@@ -482,7 +523,7 @@ pub async fn generate_tts_audio(
             if let Ok(bytes) = tokio::fs::read(&audio_path).await {
                 if bytes.len() <= 8 * 1024 * 1024 {
                     if let Ok((_, aligned)) =
-                        transcribe_with_gemini(&key, &bytes, "audio/wav", Some(trimmed), duration_ms)
+                        transcribe_with_gemini(&app, &key, &bytes, "audio/wav", Some(trimmed), duration_ms)
                             .await
                     {
                         if aligned.len() >= (trimmed.split_whitespace().count() / 2).max(1) {
@@ -599,6 +640,7 @@ pub async fn process_user_audio(
         if let Some(key) = byok::read_stored_key("gemini") {
             if wav_bytes.len() <= 10 * 1024 * 1024 {
                 if let Ok((t, w)) = transcribe_with_gemini(
+                    &app,
                     &key,
                     &wav_bytes,
                     "audio/wav",

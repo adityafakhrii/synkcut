@@ -16,7 +16,6 @@ import {
   Play,
   Search,
   Shapes,
-  Sparkles,
   Trash2,
   Upload,
   X,
@@ -650,7 +649,7 @@ export default function ProjectsHomeView({
                           color: "var(--accent)",
                         }}
                       >
-                        <Sparkles className="h-3 w-3" />
+                        <Link2 className="h-3 w-3" />
                         Ref: {styleRef.title.slice(0, 32)}
                         <button
                           type="button"
