@@ -33,6 +33,7 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "publisher": "Synkcut Studio",
+    "copyright": "Synkcut Studio - AI Video & Motion Editor",
     "category": "Video",
     "shortDescription": "AI Desktop Video Editor — Suara, footage, dan motion otomatis sinkron.",
     "longDescription": "Synkcut adalah aplikasi desktop AI Video Editor ringan untuk Content Creator dan UMKM memproduksi video pendek 9:16 secara lokal tanpa watermark dan tanpa sistem kuota kredit.",
@@ -49,7 +50,14 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "nsis/header.bmp",
+        "sidebarImage": "nsis/sidebar.bmp",
+        "languages": ["Indonesian"],
+        "displayLanguageSelector": false,
+        "customLanguageFiles": {
+          "Indonesian": "nsis/Indonesian.nsh"
+        }
       }
     }
   }
