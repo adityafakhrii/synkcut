@@ -65,13 +65,14 @@ const PROVIDER_LIST: ProviderMeta[] = [
     summary:
       "Mendukung generate script, TTS, AI Director, dan analisa visual multimodal dengan kuota gratis harian.",
     keyPlaceholder: "AIzaSy... atau AQ.A...",
-    modelPlaceholder: "gemini-3.8-flash",
-    defaultModel: "gemini-3.8-flash",
+    modelPlaceholder: "gemini-3.5-flash-lite",
+    defaultModel: "gemini-3.5-flash-lite",
     presetModels: [
-      { id: "gemini-3.8-flash", label: "gemini-3.8-flash (Disarankan)" },
-      { id: "gemini-3.8-flash-lite", label: "gemini-3.8-flash-lite (Super Cepat)" },
+      { id: "gemini-3.5-flash-lite", label: "gemini-3.5-flash-lite (Disarankan · Cepat)" },
       { id: "gemini-3-flash-preview", label: "gemini-3-flash-preview" },
-      { id: "gemini-2.5-flash", label: "gemini-2.5-flash (Akun Lama)" },
+      { id: "gemini-3.1-flash-lite", label: "gemini-3.1-flash-lite" },
+      { id: "gemini-flash-lite-latest", label: "gemini-flash-lite-latest" },
+      { id: "gemini-3.6-flash", label: "gemini-3.6-flash" },
     ],
     portalLabel: "Buka Google AI Studio",
     portalUrl: "https://aistudio.google.com/apikey",
@@ -109,10 +110,10 @@ const PROVIDER_LIST: ProviderMeta[] = [
     summary:
       "Satu API key untuk berpindah-pindah model (Gemini, Claude, GPT, atau router gratis openrouter/free).",
     keyPlaceholder: "sk-or-v1-...",
-    modelPlaceholder: "google/gemini-3.8-flash",
-    defaultModel: "google/gemini-3.8-flash",
+    modelPlaceholder: "google/gemini-3-flash-preview",
+    defaultModel: "google/gemini-3-flash-preview",
     presetModels: [
-      { id: "google/gemini-3.8-flash", label: "google/gemini-3.8-flash" },
+      { id: "google/gemini-3-flash-preview", label: "google/gemini-3-flash-preview" },
       { id: "openai/gpt-4.1-mini", label: "openai/gpt-4.1-mini" },
       { id: "openrouter/free", label: "openrouter/free (Gratis)" },
       { id: "anthropic/claude-sonnet-4", label: "anthropic/claude-sonnet-4" },
@@ -194,11 +195,11 @@ export default function OnboardingView({
         baseUrl: isCustom ? baseUrlInput.trim() || undefined : undefined,
       });
       setDiscoveredModels(list);
-      if (list.length > 0 && !modelInput.trim()) {
+      if (list.length > 0 && (!modelInput.trim() || !list.includes(modelInput.trim()))) {
         setModelInput(list[0]);
       }
       if (list.length === 0) {
-        setErrorMsg("Tidak ada model aktif ditemukan dari endpoint ini.");
+        setErrorMsg("Belum ada model yang lolos tes koneksi untuk API Key / endpoint ini.");
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -619,7 +620,7 @@ export default function OnboardingView({
                 ) : (
                   <RefreshCw className="h-3 w-3" />
                 )}
-                Cek Daftar Model Aktif
+                {isFetchingModels ? "Mengetes koneksi model..." : "Tes & Ambil Model Aktif"}
               </button>
             </div>
 
@@ -642,7 +643,7 @@ export default function OnboardingView({
               />
             </div>
 
-            {activeMeta.presetModels.length > 0 && (
+            {activeMeta.presetModels.length > 0 && discoveredModels.length === 0 && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
                 {activeMeta.presetModels.map((preset) => {
                   const active = modelInput.trim() === preset.id;
@@ -679,8 +680,10 @@ export default function OnboardingView({
                   border: "1px solid var(--border-subtle)",
                 }}
               >
-                <div className="text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-                  Model aktif terdeteksi dari akun/endpoint ({discoveredModels.length}):
+                <div className="text-[11px] font-semibold" style={{ color: "var(--success)" }}>
+                  {selected === "gemini"
+                    ? `Model lolos tes koneksi 200 OK (${discoveredModels.length}):`
+                    : `Model aktif terdeteksi (${discoveredModels.length}):`}
                 </div>
                 <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
                   {discoveredModels.map((id) => {

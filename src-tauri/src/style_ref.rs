@@ -263,13 +263,7 @@ async fn analyze_youtube_via_gemini_direct(
     });
 
     let mut candidates = vec![byok::get_gemini_model_for_app(app)];
-    for fb in [
-        "gemini-3.8-flash",
-        "gemini-3.8-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-    ] {
+    for fb in byok::GEMINI_FALLBACK_MODELS {
         if !candidates.iter().any(|c| c == fb) {
             candidates.push(fb.to_string());
         }
@@ -280,14 +274,14 @@ async fn analyze_youtube_via_gemini_direct(
             "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={gemini_key}"
         );
         let Ok(res) = client.post(endpoint).json(&payload).send().await else {
-            return None;
+            continue;
         };
         if res.status().is_success() {
             let val: Value = res.json().await.ok()?;
             let raw_txt = val["candidates"][0]["content"]["parts"][0]["text"].as_str()?;
             return parse_llm_json(raw_txt).ok();
         }
-        if res.status().as_u16() != 404 {
+        if !matches!(res.status().as_u16(), 404 | 503 | 429) {
             return None;
         }
     }

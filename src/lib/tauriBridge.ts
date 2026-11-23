@@ -229,12 +229,12 @@ function readBrowserByok(): ByokStatus {
     activeProvider: "gemini",
     onboardingCompleted: false,
     providers: {
-      gemini: { configured: false, maskedKey: null, model: "gemini-3.8-flash", baseUrl: null },
+      gemini: { configured: false, maskedKey: null, model: "gemini-3.5-flash-lite", baseUrl: null },
       openai: { configured: false, maskedKey: null, model: "gpt-4.1-mini", baseUrl: null },
       openrouter: {
         configured: false,
         maskedKey: null,
-        model: "google/gemini-3.8-flash",
+        model: "google/gemini-3-flash-preview",
         baseUrl: null,
       },
       custom: { configured: false, maskedKey: null, model: "", baseUrl: null },
@@ -333,7 +333,13 @@ export async function fetchProviderModels(params: {
 }): Promise<string[]> {
   if (!isTauriRuntime()) {
     if (params.provider === "gemini") {
-      return ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3-flash-preview"];
+      return [
+        "gemini-3.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.6-flash",
+      ];
     }
     if (params.provider === "openai") {
       return ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1", "gpt-5-mini"];

@@ -261,12 +261,12 @@ export default function App() {
     activeProvider: "gemini",
     onboardingCompleted: false,
     providers: {
-      gemini: { configured: false, maskedKey: null, model: "gemini-3.8-flash", baseUrl: null },
+      gemini: { configured: false, maskedKey: null, model: "gemini-3.5-flash-lite", baseUrl: null },
       openai: { configured: false, maskedKey: null, model: "gpt-4.1-mini", baseUrl: null },
       openrouter: {
         configured: false,
         maskedKey: null,
-        model: "google/gemini-3.8-flash",
+        model: "google/gemini-3-flash-preview",
         baseUrl: null,
       },
       custom: { configured: false, maskedKey: null, model: "", baseUrl: null },

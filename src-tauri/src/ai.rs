@@ -176,37 +176,33 @@ pub async fn call_llm_json(
             });
 
             let mut candidates: Vec<String> = vec![resolved.model.clone()];
-            for fb in [
-                "gemini-3.8-flash",
-                "gemini-3.8-flash-lite",
-                "gemini-3.5-flash-lite",
-                "gemini-3-flash-preview",
-                "gemini-2.5-flash",
-            ] {
+            for fb in byok::GEMINI_FALLBACK_MODELS {
                 if !candidates.iter().any(|c| c == fb) {
                     candidates.push(fb.to_string());
                 }
             }
 
-            let mut tried_discovery = false;
-            let mut idx = 0usize;
+            let gemini_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(28))
+                .build()
+                .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
+
             let mut last_err = String::from("Gagal menghubungi Gemini API.");
-
             let mut success_result: Option<(String, String)> = None;
-            while idx < candidates.len() {
-                let candidate = candidates[idx].clone();
-                idx += 1;
 
+            for candidate in candidates {
                 let url = format!(
                     "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={}",
                     resolved.api_key
                 );
-                let res = client
-                    .post(url)
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Gagal menghubungi Gemini API: {e}"))?;
+                let res = match gemini_client.post(url).json(&payload).send().await {
+                    Ok(r) => r,
+                    Err(e) if e.is_timeout() => {
+                        last_err = format!("Gemini model {candidate} timeout.");
+                        continue;
+                    }
+                    Err(e) => return Err(format!("Gagal menghubungi Gemini API: {e}")),
+                };
 
                 let status = res.status().as_u16();
                 if res.status().is_success() {
@@ -225,27 +221,20 @@ pub async fn call_llm_json(
                     body_txt.chars().take(220).collect::<String>()
                 );
 
-                let model_unavailable = status == 404
+                // Automatically fallback on 404 (deprecated), 503 (high demand), 429 (tier quota 0), or JSON mode unsupported
+                let retryable = status == 404
+                    || status == 503
+                    || status == 429
                     || body_txt.contains("no longer available")
-                    || body_txt.contains("is not found");
+                    || body_txt.contains("is not found")
+                    || body_txt.contains("high demand")
+                    || body_txt.contains("JSON mode");
 
-                if model_unavailable {
-                    if !tried_discovery {
-                        tried_discovery = true;
-                        if let Ok(live_models) =
-                            byok::discover_gemini_live_models(&client, &resolved.api_key).await
-                        {
-                            for m in live_models.into_iter().take(4) {
-                                if !candidates.iter().any(|c| c == &m) {
-                                    candidates.push(m);
-                                }
-                            }
-                        }
-                    }
+                if retryable {
                     continue;
                 }
 
-                // Auth / quota / bad request errors should surface immediately
+                // Invalid API key / auth errors surface immediately
                 return Err(last_err);
             }
 
@@ -275,7 +264,7 @@ pub async fn call_llm_json(
                     }
                 }
                 "openrouter" => {
-                    for fb in ["google/gemini-3.8-flash", "openai/gpt-4.1-mini", "openrouter/free"] {
+                    for fb in ["google/gemini-3-flash-preview", "openai/gpt-4.1-mini", "openrouter/free"] {
                         if !candidates.iter().any(|c| c == fb) {
                             candidates.push(fb.to_string());
                         }

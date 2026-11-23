@@ -217,13 +217,7 @@ async fn transcribe_with_gemini(
     });
 
     let mut candidates = vec![byok::get_gemini_model_for_app(app)];
-    for fb in [
-        "gemini-3.8-flash",
-        "gemini-3.8-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-    ] {
+    for fb in byok::GEMINI_FALLBACK_MODELS {
         if !candidates.iter().any(|c| c == fb) {
             candidates.push(fb.to_string());
         }
@@ -235,12 +229,14 @@ async fn transcribe_with_gemini(
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={api_key}"
         );
-        let res = client
-            .post(url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Gagal menghubungi Gemini Audio API: {e}"))?;
+        let res = match client.post(url).json(&body).send().await {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => {
+                last_status = 504;
+                continue;
+            }
+            Err(e) => return Err(format!("Gagal menghubungi Gemini Audio API: {e}")),
+        };
 
         if res.status().is_success() {
             let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
@@ -251,7 +247,7 @@ async fn transcribe_with_gemini(
             continue;
         }
         last_status = res.status().as_u16();
-        if last_status != 404 {
+        if !matches!(last_status, 404 | 503 | 429) {
             return Err(format!("Gemini Audio API gagal (HTTP {last_status})."));
         }
     }
@@ -414,6 +410,7 @@ pub async fn generate_tts_audio(
             let tts_models = [
                 "gemini-3.8-flash-lite-tts",
                 "gemini-3.8-flash-tts",
+                "gemini-3.1-flash-tts-preview",
                 "gemini-2.5-flash-preview-tts",
             ];
             let mut b64_audio: Option<String> = None;
@@ -446,7 +443,7 @@ pub async fn generate_tts_audio(
                     "Gemini TTS gagal (HTTP {status}). Cek kuota/key Gemini lo atau coba suara Windows Offline. Detail: {}",
                     err_body.chars().take(180).collect::<String>()
                 );
-                if status != 404 {
+                if !matches!(status, 404 | 503 | 429) {
                     return Err(last_err);
                 }
             }

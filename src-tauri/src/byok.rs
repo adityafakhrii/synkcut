@@ -9,13 +9,23 @@ use tauri::{AppHandle, Manager};
 const SERVICE_NAME: &str = "id.synkcut.studio.byok";
 pub const PROVIDERS: [&str; 4] = ["gemini", "openai", "openrouter", "custom"];
 
+/// Verified fast, JSON-capable Gemini models (ordered by live speed & reliability).
+pub const GEMINI_FALLBACK_MODELS: [&str; 6] = [
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+];
+
 pub fn default_model_for(provider: &str) -> &'static str {
     match provider {
-        "gemini" => "gemini-3.8-flash",
+        "gemini" => "gemini-3.5-flash-lite",
         "openai" => "gpt-4.1-mini",
-        "openrouter" => "google/gemini-3.8-flash",
+        "openrouter" => "google/gemini-3-flash-preview",
         "custom" => "deepseek-chat",
-        _ => "gemini-3.8-flash",
+        _ => "gemini-3.5-flash-lite",
     }
 }
 
@@ -245,13 +255,13 @@ pub fn get_gemini_model_for_app(app: &AppHandle) -> String {
     effective_model(&cfg, "gemini")
 }
 
-/// Query Google Gemini `/v1beta/models` and return sorted `generateContent`-capable model IDs.
+/// Query Google Gemini `/v1beta/models` and return candidate `generateContent`-capable chat model IDs.
 pub async fn discover_gemini_live_models(
     client: &reqwest::Client,
     api_key: &str,
 ) -> Result<Vec<String>, String> {
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=100"
+        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=200"
     );
     let res = client
         .get(url)
@@ -284,16 +294,21 @@ pub async fn discover_gemini_live_models(
                     let raw_name = m["name"].as_str()?;
                     let id = raw_name.strip_prefix("models/").unwrap_or(raw_name);
                     let lower = id.to_lowercase();
-                    // Keep text/multimodal chat Gemini models; exclude specialized tts/embedding/image/robotics
-                    if !lower.starts_with("gemini-")
+                    // Keep text/multimodal chat Gemini/Gemma models; exclude specialized tts/image/audio/tools
+                    if (!lower.starts_with("gemini-") && !lower.starts_with("gemma-"))
                         || lower.contains("tts")
                         || lower.contains("embedding")
+                        || lower.contains("image")
                         || lower.contains("imagen")
                         || lower.contains("veo")
                         || lower.contains("aqa")
                         || lower.contains("robotics")
                         || lower.contains("computer-use")
-                        || lower.contains("image-generation")
+                        || lower.contains("deep-research")
+                        || lower.contains("transcribe")
+                        || lower.contains("nano-banana")
+                        || lower.contains("lyria")
+                        || lower.contains("antigravity")
                     {
                         return None;
                     }
@@ -303,38 +318,82 @@ pub async fn discover_gemini_live_models(
         })
         .unwrap_or_default();
 
-    // Sort newest stable Flash / Pro models first
-    models.sort_by(|a, b| {
-        let rank = |id: &str| -> i32 {
-            let mut score = 0;
-            if id.contains("3.8") {
-                score += 600;
-            } else if id.contains("3.6") {
-                score += 520;
-            } else if id.contains("3.5") {
-                score += 480;
-            } else if id.contains("gemini-3") {
-                score += 440;
-            } else if id.contains("2.5") {
-                score += 300;
-            } else if id.contains("2.0") {
-                score += 180;
-            }
-            if id.contains("flash") {
-                score += 40;
-            }
-            if id.contains("lite") {
-                score -= 5;
-            }
-            if id.contains("preview") || id.contains("exp") {
-                score -= 12;
-            }
-            score
-        };
-        rank(b).cmp(&rank(a)).then_with(|| a.cmp(b))
-    });
+    models.sort();
     models.dedup();
     Ok(models)
+}
+
+/// Concurrently probes candidate Gemini models against `generateContent` (with JSON mode)
+/// and returns ONLY models that genuinely succeed with HTTP 200, ordered fastest-first.
+pub async fn probe_verified_gemini_models(api_key: &str) -> Result<Vec<String>, String> {
+    let list_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
+
+    let candidates = discover_gemini_live_models(&list_client, api_key).await?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let probe_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(9))
+        .build()
+        .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
+
+    let ping_payload = json!({
+        "contents": [{ "role": "user", "parts": [{ "text": "Balas JSON {\"ok\":true}" }] }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 24,
+            "temperature": 0.0
+        }
+    });
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for model_id in candidates {
+        let client = probe_client.clone();
+        let key = api_key.to_string();
+        let payload = ping_payload.clone();
+        join_set.spawn(async move {
+            let start = Instant::now();
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={key}"
+            );
+            match client.post(url).json(&payload).send().await {
+                Ok(res) if res.status().is_success() => {
+                    Some((model_id, start.elapsed().as_millis() as u64))
+                }
+                _ => None,
+            }
+        });
+    }
+
+    let mut verified: Vec<(String, u64)> = Vec::new();
+    while let Some(joined) = join_set.join_next().await {
+        if let Ok(Some(item)) = joined {
+            verified.push(item);
+        }
+    }
+
+    // Sort fastest verified Gemini Flash models first
+    verified.sort_by(|a, b| {
+        let priority = |id: &str| -> u8 {
+            if id == "gemini-3.5-flash-lite" {
+                0
+            } else if id.starts_with("gemini-") {
+                1
+            } else {
+                2
+            }
+        };
+        priority(&a.0)
+            .cmp(&priority(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    Ok(verified.into_iter().map(|(id, _)| id).collect())
 }
 
 #[tauri::command]
@@ -521,10 +580,10 @@ pub async fn fetch_provider_models(
     match valid {
         "gemini" => {
             let key = resolved_key.ok_or_else(|| {
-                "Masukkan API Key Google Gemini terlebih dahulu untuk mengambil daftar model aktif."
+                "Masukkan API Key Google Gemini terlebih dahulu untuk mengecek model yang lolos koneksi."
                     .to_string()
             })?;
-            discover_gemini_live_models(&client, &key).await
+            probe_verified_gemini_models(&key).await
         }
         "openai" => {
             let key = resolved_key.ok_or_else(|| {
@@ -707,47 +766,46 @@ pub async fn test_byok_connection(
         "gemini" => {
             let key = resolved_key.unwrap_or_default();
             let ping_payload = json!({
-                "contents": [{ "role": "user", "parts": [{ "text": "Balas singkat: OK" }] }],
-                "generationConfig": { "maxOutputTokens": 8, "temperature": 0.0 }
+                "contents": [{ "role": "user", "parts": [{ "text": "Balas JSON {\"ok\":true}" }] }],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "maxOutputTokens": 24,
+                    "temperature": 0.0
+                }
             });
 
-            // Try chosen model first, then automatic live fallback if 404/unavailable
+            // Try chosen model first, then verified fast fallback models if 404/503/429/timeout
             let mut candidates = vec![chosen_model.clone()];
-            for fb in [
-                "gemini-3.8-flash",
-                "gemini-3.8-flash-lite",
-                "gemini-3.5-flash-lite",
-                "gemini-3-flash-preview",
-                "gemini-2.5-flash",
-            ] {
+            for fb in GEMINI_FALLBACK_MODELS {
                 if !candidates.iter().any(|c| c == fb) {
                     candidates.push(fb.to_string());
                 }
             }
 
-            let mut tried_discovery = false;
-            let mut idx = 0usize;
             let mut last_status = 0u16;
             let mut last_body = String::new();
+            let mut any_quota_429 = false;
 
-            while idx < candidates.len() {
-                let candidate = candidates[idx].clone();
-                idx += 1;
+            let probe_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .map_err(|e| format!("Gagal menginisialisasi HTTP client: {e}"))?;
 
+            for candidate in candidates {
                 let url = format!(
                     "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={key}"
                 );
-                match client.post(&url).json(&ping_payload).send().await {
+                match probe_client.post(&url).json(&ping_payload).send().await {
                     Ok(res) => {
                         let status = res.status().as_u16();
                         if res.status().is_success() {
                             let latency_ms = start.elapsed().as_millis() as u64;
                             let note = if candidate != chosen_model {
                                 format!(
-                                    "Model '{chosen_model}' sudah tidak tersedia, otomatis memakai '{candidate}' yang aktif!"
+                                    "Model '{chosen_model}' tidak aktif/sibuk (HTTP {last_status}), otomatis beralih ke '{candidate}' yang lolos koneksi!"
                                 )
                             } else {
-                                format!("Model '{candidate}' merespons normal & siap dipakai AI Director.")
+                                format!("Model '{candidate}' lolos tes JSON & siap dipakai AI Director.")
                             };
                             return Ok(ConnectionTestResult {
                                 ok: true,
@@ -761,7 +819,8 @@ pub async fn test_byok_connection(
                         last_status = status;
                         last_body = res.text().await.unwrap_or_default();
 
-                        if status == 400 || status == 401 || status == 403 {
+                        // Invalid API key / forbidden -> fail immediately
+                        if status == 401 || status == 403 || (status == 400 && !last_body.contains("JSON mode")) {
                             let latency_ms = start.elapsed().as_millis() as u64;
                             return Ok(ConnectionTestResult {
                                 ok: false,
@@ -773,29 +832,16 @@ pub async fn test_byok_connection(
                             });
                         }
                         if status == 429 {
-                            let latency_ms = start.elapsed().as_millis() as u64;
-                            return Ok(ConnectionTestResult {
-                                ok: false,
-                                provider: "gemini".to_string(),
-                                latency_ms,
-                                message: "API Key valid tetapi batas kuota/rate limit tercapai. Tunggu sebentar atau ganti ke model flash-lite.".to_string(),
-                                detail: Some("HTTP 429 Rate Limited".to_string()),
-                                resolved_model: None,
-                            });
+                            any_quota_429 = true;
                         }
-                        // On 404, also dynamically fetch live models from user's account once
-                        if status == 404 && !tried_discovery {
-                            tried_discovery = true;
-                            if let Ok(live) = discover_gemini_live_models(&client, &key).await {
-                                for m in live.into_iter().take(4) {
-                                    if !candidates.iter().any(|c| c == &m) {
-                                        candidates.push(m);
-                                    }
-                                }
-                            }
-                        }
+                        // On 404, 503 (high demand), 429 (model-specific zero quota), or unsupported JSON mode -> try next verified model!
                     }
                     Err(err) => {
+                        if err.is_timeout() {
+                            last_status = 504;
+                            last_body = "Timeout".to_string();
+                            continue;
+                        }
                         let latency_ms = start.elapsed().as_millis() as u64;
                         return Ok(ConnectionTestResult {
                             ok: false,
@@ -809,12 +855,34 @@ pub async fn test_byok_connection(
                 }
             }
 
+            // Final resort: concurrently probe all models on this account and return the first live 200 model
+            if let Ok(verified) = probe_verified_gemini_models(&key).await {
+                if let Some(best) = verified.into_iter().next() {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    return Ok(ConnectionTestResult {
+                        ok: true,
+                        provider: "gemini".to_string(),
+                        latency_ms,
+                        message: format!("Koneksi berhasil ({latency_ms} ms)."),
+                        detail: Some(format!(
+                            "Model '{chosen_model}' gagal, otomatis beralih ke '{best}' yang aktif di akun lo."
+                        )),
+                        resolved_model: Some(best),
+                    });
+                }
+            }
+
             let latency_ms = start.elapsed().as_millis() as u64;
+            let err_msg = if any_quota_429 {
+                "Semua model Gemini terkena batas kuota (HTTP 429) pada API Key ini. Tunggu beberapa saat atau gunakan API Key lain.".to_string()
+            } else {
+                format!("Model '{chosen_model}' tidak merespons (HTTP {last_status}). Klik 'Tes & Ambil Model Aktif' untuk cek model yang tersedia.")
+            };
             Ok(ConnectionTestResult {
                 ok: false,
                 provider: "gemini".to_string(),
                 latency_ms,
-                message: format!("Model '{chosen_model}' tidak tersedia di akun Gemini ini (HTTP {last_status}). Klik 'Cek Daftar Model' untuk memilih model aktif."),
+                message: err_msg,
                 detail: Some(last_body.chars().take(180).collect()),
                 resolved_model: None,
             })
