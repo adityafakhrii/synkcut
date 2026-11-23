@@ -58,6 +58,7 @@ Seluruh riset kompetitor, spesifikasi teknis, kurasi preset, arah desain UI, dan
 - [x] **Milestone 6 (v1.1a):** Schema `AI Motion` (`project.synk.json` v1.1) + **4 Engine 2D Native** (`Flow & Diagram`, `Motion Chart`, `Tech & UI Cards`, `Stick-Figure Story`) + Safe-Stage Layout + Editor Parameter 0-Token di Studio
 - [x] **Milestone 7 (v1.1b):** Engine ke-5 **`3D Product Breakdown`** (`Three.js` lokal offline, 60fps preview & deterministic WebCodecs MP4 export)
 - [x] **Milestone 8 (v1.1c):** **Referensi Gaya** (Link YouTube 3-layer `yt-dlp`/Gemini/oEmbed + `Ctrl+V` Screenshot + Klip Lokal) + Wizard 3 Mode Visual (`AI Motion` / `Footage Lokal` / `Campur`) + 2 Sample Bawaan AI Motion + Build Windows Installer **v1.1.0**
+- [x] **v1.2 (Prompt-First Studio):** Rombak UI ke layout 2-kolom ala Lovable (**Kiri:** AI Director Chat Hero + lampiran langsung; **Kanan:** 9:16 Preview Bersih + Strip Scene Tunggal; **`Atur Manual` 0-token** dalam drawer tersembunyi) + Kotak **"1-Prompt to Video"** langsung di halaman Home + Windows Installer **v1.2.0**
 
 ---
 

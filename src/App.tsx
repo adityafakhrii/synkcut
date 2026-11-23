@@ -7,7 +7,6 @@ import {
   Plus,
   Settings,
   Sun,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -271,7 +270,8 @@ export default function App() {
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [activeProject, setActiveProject] = useState<SynkcutProject | null>(null);
   const [studioInitOpts, setStudioInitOpts] = useState<{
-    leftTab?: "scenes" | "footage" | "caption" | "motion" | "audio";
+    manualOpen?: boolean;
+    manualTab?: "visual" | "style" | "audio";
     timeMs?: number;
   }>({});
 
@@ -309,8 +309,10 @@ export default function App() {
       setByokStatus(status);
 
       const hash = window.location.hash.replace("#", "");
-      if (hash === "projects" || hash === "samples" || hash === "settings") {
-        setView(hash);
+      if (hash === "projects" || hash === "projects-light" || hash === "settings") {
+        if (hash === "projects-light") setTheme("light");
+        else if (hash === "projects") setTheme("dark");
+        setView(hash === "settings" ? "settings" : "projects");
         return;
       }
       if (hash === "wizard" || hash === "wizard-light") {
@@ -324,7 +326,7 @@ export default function App() {
         return;
       }
       if (hash === "studio" || hash === "studio-light") {
-        if (hash === "studio-light") setTheme("light");
+        setTheme(hash === "studio-light" ? "light" : "dark");
         setStudioInitOpts({});
         setActiveProject(createBlankProjectForFormat("ad_promo"));
         setView("studio");
@@ -333,19 +335,15 @@ export default function App() {
       if (
         hash === "studio-motion" ||
         hash === "studio-motion-light" ||
-        hash === "studio-motion-tech" ||
-        hash === "studio-motion-stick"
+        hash === "studio-manual"
       ) {
-        if (hash === "studio-motion-light") setTheme("light");
-        else setTheme("dark");
+        setTheme(hash === "studio-motion-light" ? "light" : "dark");
         const opts =
           hash === "studio-motion-light"
-            ? { leftTab: "footage" as const, timeMs: 5800 }
-            : hash === "studio-motion-tech"
-              ? { leftTab: "scenes" as const, timeMs: 9600 }
-              : hash === "studio-motion-stick"
-                ? { leftTab: "footage" as const, timeMs: 13600 }
-                : { leftTab: "footage" as const, timeMs: 2200 };
+            ? { manualOpen: false, timeMs: 5800 }
+            : hash === "studio-manual"
+              ? { manualOpen: true, manualTab: "visual" as const, timeMs: 2200 }
+              : { manualOpen: false, timeMs: 2200 };
         setStudioInitOpts(opts);
         setActiveProject(createAiMotionShowcaseProject());
         setView("studio");
@@ -354,7 +352,7 @@ export default function App() {
       if (hash === "studio-motion-3d" || hash === "studio-motion-3d-light") {
         const isLight = hash === "studio-motion-3d-light";
         setTheme(isLight ? "light" : "dark");
-        setStudioInitOpts({ leftTab: "footage", timeMs: 3600 });
+        setStudioInitOpts({ manualOpen: false, timeMs: 3600 });
         setActiveProject(createBreakdown3DShowcaseProject(isLight ? "laptop" : "smartphone"));
         setView("studio");
         return;
@@ -440,7 +438,8 @@ export default function App() {
         initialProject={activeProject}
         byokStatus={byokStatus}
         theme={theme}
-        initialLeftTab={studioInitOpts.leftTab}
+        initialManualOpen={studioInitOpts.manualOpen}
+        initialManualTab={studioInitOpts.manualTab}
         initialTimeMs={studioInitOpts.timeMs}
         onToggleTheme={toggleTheme}
         onBackHome={() => {
@@ -526,7 +525,7 @@ export default function App() {
             className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v1.1
+            v1.2
           </span>
         </div>
 
@@ -582,23 +581,6 @@ export default function App() {
               {BUILTIN_SAMPLES.length}
             </span>
           </button>
-
-          <div
-            className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-xs font-medium"
-            style={{ color: "var(--text-muted)" }}
-            title="Hadir di Phase 2 — berbagi & remix sample kreator"
-          >
-            <span className="flex items-center gap-2.5">
-              <Users className="h-4 w-4" />
-              Komunitas
-            </span>
-            <span
-              className="rounded px-1.5 py-0.5 text-[11px] font-medium"
-              style={{ backgroundColor: "var(--bg-elevated)" }}
-            >
-              Phase 2
-            </span>
-          </div>
 
           <button
             type="button"
@@ -692,9 +674,11 @@ export default function App() {
           <ProjectsHomeView
             section={view}
             projects={projects}
+            byokStatus={byokStatus}
             isLoading={isLoadingProjects}
             onNavigateSamples={() => setView("samples")}
             onOpenNewModal={() => setShowNewPicker(true)}
+            onInstantProjectCreated={handleWizardProjectCreated}
             onUseSample={handleUseSample}
             onOpenProject={handleOpenProject}
             onDuplicateProject={handleDuplicateProject}

@@ -1,32 +1,58 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRight,
+  ArrowUp,
   Check,
   Copy,
+  Film,
   FolderOpen,
+  Layers,
   LayoutGrid,
+  Link2,
   List,
+  Loader2,
+  Paperclip,
   Pencil,
   Play,
-  Plus,
   Search,
+  Shapes,
+  Sparkles,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import {
   CONTENT_FORMAT_LABELS,
+  type AiMotionTheme,
+  type ByokStatus,
   type ContentFormat,
+  type ProjectStyleReference,
   type ProjectSummary,
+  type SynkcutProject,
 } from "../types/scene";
 import { BUILTIN_SAMPLES, type SampleTemplate } from "../engine/sampleTemplates";
+import { rebuildWordsFromScenes } from "../engine/sampleProject";
+import {
+  aiAssembleProject,
+  aiGenerateScript,
+  extractThumbnails,
+  extractYoutubeStyleReference,
+  isTauriRuntime,
+  pickLocalVideos,
+  probeMedia,
+  type FootageInputItem,
+  type StyleReferenceResult,
+} from "../lib/tauriBridge";
 import ProjectPosterCanvas from "./ProjectPosterCanvas";
 
 interface ProjectsHomeViewProps {
   section: "projects" | "samples";
   projects: ProjectSummary[];
+  byokStatus: ByokStatus;
   isLoading: boolean;
   onNavigateSamples: () => void;
   onOpenNewModal: () => void;
+  onInstantProjectCreated: (project: SynkcutProject) => Promise<void>;
   onUseSample: (sample: SampleTemplate) => void;
   onOpenProject: (projectId: string) => void;
   onDuplicateProject: (projectId: string) => void;
@@ -63,12 +89,47 @@ function formatUpdatedAt(iso: string): string {
   }
 }
 
+function inferFormatFromPrompt(prompt: string): ContentFormat {
+  const lower = prompt.toLowerCase();
+  if (
+    lower.includes("promo") ||
+    lower.includes("diskon") ||
+    lower.includes("jual") ||
+    lower.includes("iklan") ||
+    lower.includes("rp")
+  ) {
+    return "ad_promo";
+  }
+  if (
+    lower.includes("review") ||
+    lower.includes("unboxing") ||
+    lower.includes("bedah") ||
+    lower.includes("3d") ||
+    lower.includes("smartphone") ||
+    lower.includes("laptop")
+  ) {
+    return "review";
+  }
+  if (lower.includes("cerita") || lower.includes("kisah") || lower.includes("opini")) {
+    return "storytelling";
+  }
+  return "education";
+}
+
+const QUICK_PROMPT_IDEAS = [
+  "Jelasin cara kerja Wi-Fi di rumah dalam 30 detik",
+  "Bedah 3D lapisan komponen di dalam smartphone",
+  "Iklan kopi susu gula aren botolan 1 liter Rp45rb",
+];
+
 export default function ProjectsHomeView({
   section,
   projects,
+  byokStatus,
   isLoading,
   onNavigateSamples,
   onOpenNewModal,
+  onInstantProjectCreated,
   onUseSample,
   onOpenProject,
   onDuplicateProject,
@@ -81,6 +142,153 @@ export default function ProjectsHomeView({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Lovable-style 1-Prompt to Video Home Composer
+  const [heroPrompt, setHeroPrompt] = useState("");
+  const [heroVisualMode, setHeroVisualMode] = useState<"motion" | "footage" | "hybrid">("motion");
+  const [showAttachPanel, setShowAttachPanel] = useState(false);
+  const [refYoutubeUrl, setRefYoutubeUrl] = useState("");
+  const [styleRef, setStyleRef] = useState<StyleReferenceResult | null>(null);
+  const [attachedClips, setAttachedClips] = useState<FootageInputItem[]>([]);
+  const [isAnalyzingRef, setIsAnalyzingRef] = useState(false);
+  const [isCreatingVideo, setIsCreatingVideo] = useState(false);
+  const [heroError, setHeroError] = useState<string | null>(null);
+
+  const hasAnyByok = Object.values(byokStatus.providers).some((p) => p.configured);
+
+  async function handleAttachClips() {
+    if (!isTauriRuntime()) return;
+    const paths = await pickLocalVideos();
+    if (paths.length === 0) return;
+    setHeroError(null);
+    setIsAnalyzingRef(true);
+    try {
+      const next: FootageInputItem[] = [];
+      for (const path of paths) {
+        if (attachedClips.some((c) => c.path === path)) continue;
+        const info = await probeMedia(path);
+        const thumbnails = await extractThumbnails(path, 2);
+        next.push({
+          path,
+          fileName: path.split(/[\\/]/).pop() || "clip.mp4",
+          durationMs: info.durationMs,
+          thumbnails,
+        });
+      }
+      setAttachedClips((prev) => [...prev, ...next]);
+      if (heroVisualMode === "motion") setHeroVisualMode("hybrid");
+    } catch (err) {
+      setHeroError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzingRef(false);
+    }
+  }
+
+  async function handleAnalyzeHeroYoutube() {
+    if (!refYoutubeUrl.trim()) return;
+    setHeroError(null);
+    setIsAnalyzingRef(true);
+    try {
+      const res = await extractYoutubeStyleReference(refYoutubeUrl.trim());
+      setStyleRef(res);
+    } catch (err) {
+      setHeroError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsAnalyzingRef(false);
+    }
+  }
+
+  async function handleInstantCreate(e?: React.FormEvent) {
+    e?.preventDefault();
+    const trimmed = heroPrompt.trim();
+    if (!trimmed || isCreatingVideo) return;
+
+    setHeroError(null);
+    setIsCreatingVideo(true);
+    try {
+      const inferredFormat = inferFormatFromPrompt(trimmed);
+      let projectTitle = trimmed.split(/\s+/).slice(0, 5).join(" ");
+      let hookText = trimmed.length <= 72 ? trimmed : `${trimmed.slice(0, 68)}...`;
+      let bodySegments = [
+        `Inti utamanya ada pada alur proses di balik ${projectTitle.toLowerCase()} yang sering terlewat.`,
+        "Dengan tampilan visual yang jelas dan ringkas, audiens langsung paham dalam hitungan detik.",
+      ];
+      let ctaText = "Simpan video ini dan tulis topik berikutnya yang ingin dibahas!";
+
+      if (isTauriRuntime() && hasAnyByok) {
+        try {
+          const generated = await aiGenerateScript({
+            topic: trimmed,
+            format: inferredFormat,
+            tone: "santai",
+            targetDurationSec: 30,
+            visualMode: heroVisualMode,
+            styleReferenceSummary: styleRef?.styleDnaSummary ?? null,
+          });
+          projectTitle = generated.projectTitle || projectTitle;
+          hookText = generated.hooks[0]?.text || hookText;
+          if (generated.bodySegments.length > 0) bodySegments = generated.bodySegments;
+          ctaText = generated.cta || ctaText;
+        } catch {
+          // Graceful fallback to local script if BYOK fails transiently
+        }
+      }
+
+      const styleReference: ProjectStyleReference | null = styleRef
+        ? {
+            sourceType: styleRef.sourceType,
+            url: styleRef.url ?? undefined,
+            title: styleRef.title,
+            thumbnails: styleRef.thumbnails,
+            styleDnaSummary: styleRef.styleDnaSummary,
+          }
+        : null;
+
+      const motionTheme: AiMotionTheme = styleRef?.suggestedTheme ?? "carbon";
+      const captionPreset = styleRef?.suggestedCaption ?? "bold_pop";
+      const accentColor = styleRef?.suggestedAccent ?? "#38E59D";
+
+      const assembled = await aiAssembleProject({
+        projectTitle,
+        format: inferredFormat,
+        hookText,
+        bodySegments,
+        ctaText,
+        audioPath: null,
+        audioSource: "demo",
+        trimSilence: true,
+        durationMs: 0,
+        words: [],
+        footage: heroVisualMode === "motion" ? [] : attachedClips,
+        captionPreset,
+        accentColor,
+        motionPreset: heroVisualMode === "motion" ? "static_clean" : "zoom_punch",
+        transitionPreset: "pop_zoom",
+        overlayMode: heroVisualMode === "motion" ? "none" : "auto",
+        bgmPreset: inferredFormat === "education" ? "lofi_education" : "tech_modern",
+        autoDucking: true,
+        autoSfx: true,
+        visualMode: heroVisualMode,
+        motionTheme,
+        preferredEngines: styleRef?.suggestedEngines,
+        styleReference,
+      });
+
+      if (!assembled.voiceover.words || assembled.voiceover.words.length === 0) {
+        assembled.voiceover.words = rebuildWordsFromScenes(assembled);
+      }
+
+      setHeroPrompt("");
+      setStyleRef(null);
+      setAttachedClips([]);
+      setShowAttachPanel(false);
+      await onInstantProjectCreated(assembled);
+    } catch (err) {
+      setHeroError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsCreatingVideo(false);
+    }
+  }
 
   const samplePreviewProjects = useMemo(
     () =>
@@ -361,9 +569,236 @@ export default function ProjectsHomeView({
       </div>
 
       {/* Scrollable Main Workspace */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-9">
+      <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-8">
+        {/* LOVABLE-STYLE 1-PROMPT TO VIDEO HERO COMPOSER */}
+        <section className="mx-auto w-full max-w-3xl pt-2">
+          <div className="mb-4 text-center">
+            <h2 className="text-2xl font-bold tracking-tight">Mau bikin video apa hari ini?</h2>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Tulis 1 ide singkat — Synkcut langsung meracik skrip, animasi 2D/3D, dan subtitle
+              9:16 untuk lo.
+            </p>
+          </div>
+
+          <form
+            onSubmit={handleInstantCreate}
+            className="rounded-2xl p-3.5 shadow-sm space-y-3"
+            style={{
+              backgroundColor: "var(--bg-panel)",
+              border: "1px solid var(--border-strong)",
+            }}
+          >
+            <textarea
+              rows={2}
+              value={heroPrompt}
+              onChange={(e) => setHeroPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleInstantCreate();
+                }
+              }}
+              placeholder="Contoh: Jelasin cara kerja internet dalam 30 detik pakai animasi diagram & grafik..."
+              className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none"
+              style={{ color: "var(--text-primary)" }}
+            />
+
+            {/* Optional Compact Attachment Strip (YouTube Ref or Local Clips) */}
+            {showAttachPanel && (
+              <div
+                className="space-y-2.5 border-t pt-3"
+                style={{ borderColor: "var(--border-subtle)" }}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex min-w-[220px] flex-1 items-center gap-1.5">
+                    <Link2 className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />
+                    <input
+                      type="url"
+                      value={refYoutubeUrl}
+                      onChange={(e) => setRefYoutubeUrl(e.target.value)}
+                      placeholder="Opsional: tempel link YouTube / Shorts sebagai referensi gaya..."
+                      className="ui-input h-8 min-w-0 flex-1 rounded-md px-2.5 text-xs"
+                    />
+                    <button
+                      type="button"
+                      disabled={isAnalyzingRef || !refYoutubeUrl.trim()}
+                      onClick={handleAnalyzeHeroYoutube}
+                      className="ui-btn-secondary h-8 shrink-0 rounded-md px-2.5 text-xs font-semibold disabled:opacity-45 cursor-pointer"
+                    >
+                      {isAnalyzingRef ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Analisa"}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isAnalyzingRef || !isTauriRuntime()}
+                    onClick={handleAttachClips}
+                    className="ui-btn-secondary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold disabled:opacity-45 cursor-pointer"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Tambah Klip Lokal
+                  </button>
+                </div>
+
+                {(styleRef || attachedClips.length > 0) && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {styleRef && (
+                      <span
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
+                        style={{
+                          backgroundColor: "var(--accent-soft)",
+                          color: "var(--accent)",
+                        }}
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        Ref: {styleRef.title.slice(0, 32)}
+                        <button
+                          type="button"
+                          onClick={() => setStyleRef(null)}
+                          className="cursor-pointer"
+                          aria-label="Hapus referensi"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                    {attachedClips.map((c) => (
+                      <span
+                        key={c.path}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        <Film className="h-3 w-3" />
+                        {c.fileName}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAttachedClips((prev) => prev.filter((x) => x.path !== c.path))
+                          }
+                          className="cursor-pointer"
+                          aria-label="Hapus klip"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {heroError && (
+              <div
+                className="rounded-md px-3 py-2 text-xs"
+                style={{
+                  backgroundColor: "var(--danger-soft)",
+                  color: "var(--danger)",
+                }}
+              >
+                {heroError}
+              </div>
+            )}
+
+            {/* Composer Bottom Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { id: "motion" as const, label: "AI Motion", icon: Shapes },
+                  { id: "footage" as const, label: "Footage", icon: Film },
+                  { id: "hybrid" as const, label: "Campur", icon: Layers },
+                ].map((m) => {
+                  const Icon = m.icon;
+                  const active = heroVisualMode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setHeroVisualMode(m.id)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+                        color: active ? "var(--accent)" : "var(--text-secondary)",
+                        border: active
+                          ? "1px solid var(--accent)"
+                          : "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {m.label}
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => setShowAttachPanel((v) => !v)}
+                  className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium cursor-pointer"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                  Ref / Klip
+                  {(styleRef ? 1 : 0) + attachedClips.length > 0 && (
+                    <span className="font-mono-num font-bold" style={{ color: "var(--accent)" }}>
+                      ({(styleRef ? 1 : 0) + attachedClips.length})
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={onOpenNewModal}
+                  className="text-xs font-medium hover:underline cursor-pointer"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Mode Terpandu
+                </button>
+                <button
+                  type="submit"
+                  disabled={!heroPrompt.trim() || isCreatingVideo}
+                  className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-xl px-4 text-xs font-semibold disabled:opacity-40 cursor-pointer"
+                >
+                  {isCreatingVideo ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Meracik...
+                    </>
+                  ) : (
+                    <>
+                      Buat Video
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </form>
+
+          {/* 1-Click Example Idea Pills */}
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            {QUICK_PROMPT_IDEAS.map((idea) => (
+              <button
+                key={idea}
+                type="button"
+                onClick={() => setHeroPrompt(idea)}
+                className="ui-btn-secondary rounded-full px-3 py-1 text-xs font-medium cursor-pointer"
+              >
+                {idea}
+              </button>
+            ))}
+          </div>
+        </section>
+
         {/* Saved Projects Area */}
         <section>
+          {projects.length > 0 && (
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold">Proyek Tersimpan ({filteredProjects.length})</h3>
+            </div>
+          )}
           {isLoading ? (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {[1, 2, 3, 4].map((n) => (
@@ -393,69 +828,31 @@ export default function ProjectsHomeView({
               ))}
             </div>
           ) : filteredProjects.length === 0 ? (
-            <div
-              className="flex flex-col items-center justify-center rounded-lg px-6 py-14 text-center"
-              style={{
-                backgroundColor: "var(--bg-panel)",
-                border: "1px dashed var(--border-strong)",
-              }}
-            >
+            projects.length === 0 ? null : (
               <div
-                className="flex h-11 w-11 items-center justify-center rounded-lg"
+                className="flex flex-col items-center justify-center rounded-lg px-6 py-10 text-center"
                 style={{
-                  backgroundColor: "var(--bg-elevated)",
-                  border: "1px solid var(--border-subtle)",
-                  color: "var(--text-secondary)",
+                  backgroundColor: "var(--bg-panel)",
+                  border: "1px dashed var(--border-strong)",
                 }}
               >
-                <FolderOpen className="h-5 w-5" />
+                <FolderOpen className="h-5 w-5" style={{ color: "var(--text-muted)" }} />
+                <h3 className="mt-3 text-sm font-bold">Tidak ada proyek yang cocok</h3>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                  Coba ubah kata kunci pencarian atau reset filter format di toolbar atas.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setFormatFilter("all");
+                  }}
+                  className="ui-btn-secondary mt-4 h-8 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
+                >
+                  Reset Filter
+                </button>
               </div>
-              <h2 className="mt-4 text-sm font-bold">
-                {projects.length === 0
-                  ? "Workspace lo masih kosong"
-                  : "Tidak ada proyek yang cocok"}
-              </h2>
-              <p
-                className="mt-1 max-w-md text-xs leading-relaxed"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                {projects.length === 0
-                  ? "Buat konten baru dari 4 format siap pakai atau pilih salah satu sample di bawah untuk langsung masuk ke Studio."
-                  : "Coba ubah kata kunci pencarian atau reset filter format di toolbar atas."}
-              </p>
-              <div className="mt-5 flex items-center gap-2.5">
-                {projects.length === 0 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onOpenNewModal}
-                      className="ui-btn-primary inline-flex h-8 items-center gap-1.5 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      Buat Konten Baru
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onNavigateSamples}
-                      className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
-                    >
-                      Lihat Sample Bawaan
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery("");
-                      setFormatFilter("all");
-                    }}
-                    className="ui-btn-secondary h-8 rounded-md px-3.5 text-xs font-semibold cursor-pointer"
-                  >
-                    Reset Filter
-                  </button>
-                )}
-              </div>
-            </div>
+            )
           ) : viewMode === "grid" ? (
             /* VISUAL 9:16 POSTER GRID (DEFAULT) */
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
