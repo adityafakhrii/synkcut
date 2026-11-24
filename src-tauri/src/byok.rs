@@ -278,7 +278,7 @@ pub async fn discover_gemini_live_models(
         ));
     }
 
-    let val: Value = res.json().await.map_err(|e| e.to_string())?;
+    let val: Value = crate::ai::decode_llm_http_body(res).await?;
     let mut models: Vec<String> = val["models"]
         .as_array()
         .map(|arr| {
@@ -601,7 +601,7 @@ pub async fn fetch_provider_models(
                     res.status().as_u16()
                 ));
             }
-            let val: Value = res.json().await.map_err(|e| e.to_string())?;
+            let val: Value = crate::ai::decode_llm_http_body(res).await?;
             let mut ids: Vec<String> = val["data"]
                 .as_array()
                 .map(|arr| {
@@ -645,7 +645,7 @@ pub async fn fetch_provider_models(
                     res.status().as_u16()
                 ));
             }
-            let val: Value = res.json().await.map_err(|e| e.to_string())?;
+            let val: Value = crate::ai::decode_llm_http_body(res).await?;
             let mut ids: Vec<String> = vec![
                 "openrouter/free".to_string(),
                 "openrouter/auto".to_string(),
@@ -699,7 +699,7 @@ pub async fn fetch_provider_models(
                     res.status().as_u16()
                 ));
             }
-            let val: Value = res.json().await.map_err(|e| e.to_string())?;
+            let val: Value = crate::ai::decode_llm_http_body(res).await?;
             let mut ids: Vec<String> = val["data"]
                 .as_array()
                 .map(|arr| {
@@ -911,12 +911,16 @@ pub async fn test_byok_connection(
 
             let payload = json!({
                 "model": chosen_model,
-                "max_tokens": 8,
+                "stream": false,
+                "max_tokens": 12,
                 "temperature": 0.0,
                 "messages": [{ "role": "user", "content": "Balas singkat: OK" }]
             });
 
-            let mut req = client.post(&endpoint).json(&payload);
+            let mut req = client
+                .post(&endpoint)
+                .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
+                .json(&payload);
             if let Some(ref key) = resolved_key {
                 if !key.trim().is_empty() {
                     req = req.bearer_auth(key);
@@ -933,14 +937,43 @@ pub async fn test_byok_connection(
                     let status = res.status().as_u16();
                     let latency_ms = start.elapsed().as_millis() as u64;
                     if res.status().is_success() {
-                        Ok(ConnectionTestResult {
-                            ok: true,
-                            provider: valid.to_string(),
-                            latency_ms,
-                            message: format!("Koneksi berhasil ({latency_ms} ms)."),
-                            detail: Some(format!("Model '{chosen_model}' aktif & siap dipakai AI Director.")),
-                            resolved_model: Some(chosen_model),
-                        })
+                        match crate::ai::decode_llm_http_body(res).await {
+                            Ok(val) => {
+                                if let Some(api_err) = crate::ai::extract_api_error_message(&val) {
+                                    return Ok(ConnectionTestResult {
+                                        ok: false,
+                                        provider: valid.to_string(),
+                                        latency_ms,
+                                        message: format!("Server mengembalikan error pada model '{chosen_model}'."),
+                                        detail: Some(api_err),
+                                        resolved_model: None,
+                                    });
+                                }
+                                let mode_note = match val["_decodedFrom"].as_str() {
+                                    Some("sse") => " (mode SSE kompatibel)",
+                                    Some("ndjson") => " (mode NDJSON kompatibel)",
+                                    _ => "",
+                                };
+                                Ok(ConnectionTestResult {
+                                    ok: true,
+                                    provider: valid.to_string(),
+                                    latency_ms,
+                                    message: format!("Koneksi berhasil ({latency_ms} ms)."),
+                                    detail: Some(format!(
+                                        "Model '{chosen_model}' aktif & siap dipakai AI Director{mode_note}."
+                                    )),
+                                    resolved_model: Some(chosen_model),
+                                })
+                            }
+                            Err(decode_err) => Ok(ConnectionTestResult {
+                                ok: false,
+                                provider: valid.to_string(),
+                                latency_ms,
+                                message: format!("Server terhubung (HTTP {status}), tetapi format respons tidak bisa dibaca."),
+                                detail: Some(decode_err),
+                                resolved_model: None,
+                            }),
+                        }
                     } else {
                         let body = res.text().await.unwrap_or_default();
                         let friendly = match status {

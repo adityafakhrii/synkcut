@@ -780,9 +780,125 @@ fn is_valid_yt_id(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+pub fn safe_utf8_prefix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+pub fn resolve_relative_url(page_url: &str, raw_target: &str) -> Option<String> {
+    let target = raw_target.trim();
+    if target.is_empty() || target.starts_with("data:") || target.starts_with("javascript:") {
+        return None;
+    }
+    if target.starts_with("http://") || target.starts_with("https://") {
+        return Some(target.to_string());
+    }
+    if target.starts_with("//") {
+        return Some(format!("https:{target}"));
+    }
+
+    let scheme_end = page_url.find("://")?;
+    let scheme = &page_url[..scheme_end];
+    let after_scheme = &page_url[scheme_end + 3..];
+    let host_end = after_scheme
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(after_scheme.len());
+    let origin = format!("{scheme}://{}", &after_scheme[..host_end]);
+
+    if target.starts_with('/') {
+        return Some(format!("{origin}{target}"));
+    }
+
+    let path_and_more = &after_scheme[host_end..];
+    let path_only = path_and_more
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("/");
+    let base_dir = match path_only.rfind('/') {
+        Some(idx) => &path_only[..=idx],
+        None => "/",
+    };
+    let clean_rel = target.trim_start_matches("./");
+    Some(format!("{origin}{base_dir}{clean_rel}"))
+}
+
+pub fn extract_html_brand_colors(html: &str) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let slice = safe_utf8_prefix(html, 120_000);
+    let bytes = slice.as_bytes();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+
+    let mut i = 0;
+    while i + 7 <= bytes.len() {
+        if bytes[i] == b'#' {
+            let prev_ok = i == 0
+                || !bytes[i - 1].is_ascii_alphanumeric()
+                    && bytes[i - 1] != b'_'
+                    && bytes[i - 1] != b'&';
+            let hex_slice = &bytes[i + 1..i + 7];
+            let next_ok = i + 7 >= bytes.len() || !bytes[i + 7].is_ascii_hexdigit();
+            if prev_ok && next_ok && hex_slice.iter().all(|b| b.is_ascii_hexdigit()) {
+                if let Ok(hex_str) = std::str::from_utf8(&bytes[i..i + 7]) {
+                    let norm = hex_str.to_ascii_uppercase();
+                    *counts.entry(norm).or_insert(0) += 1;
+                }
+                i += 7;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    let mut scored: Vec<(String, f64, i32, bool)> = counts
+        .into_iter()
+        .filter_map(|(hex, count)| {
+            let rgb = parse_hex_rgb(&hex)?;
+            let max_c = rgb.0.max(rgb.1).max(rgb.2) as i32;
+            let min_c = rgb.0.min(rgb.1).min(rgb.2) as i32;
+            let chroma = max_c - min_c;
+            let is_neutral = chroma < 24;
+            let score = (count as f64).sqrt() * (f64::from(chroma) + 18.0);
+            Some((hex, score, chroma, is_neutral))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.2.cmp(&a.2))
+    });
+
+    let mut result: Vec<String> = Vec::new();
+    // Prefer saturated brand colors first
+    for (hex, _, _, is_neutral) in &scored {
+        if !is_neutral && !result.contains(hex) {
+            result.push(hex.clone());
+            if result.len() >= 4 {
+                break;
+            }
+        }
+    }
+    // Add up to 1 non-extreme background/surface color if found
+    for (hex, _, _, is_neutral) in &scored {
+        if *is_neutral && hex != "#FFFFFF" && hex != "#000000" && !result.contains(hex) {
+            result.push(hex.clone());
+            break;
+        }
+    }
+    result
+}
+
 fn extract_html_meta_content(html: &str, key: &str) -> Option<String> {
-    let lower = html.to_lowercase();
-    let needle = key.to_lowercase();
+    // ASCII lowercasing preserves 1-to-1 byte offsets with `html` (zero UTF-8 slicing panic!)
+    let lower = html.to_ascii_lowercase();
+    let needle = key.to_ascii_lowercase();
     let mut search_from = 0;
 
     while let Some(pos) = lower[search_from..].find("<meta") {
@@ -798,7 +914,7 @@ fn extract_html_meta_content(html: &str, key: &str) -> Option<String> {
             continue;
         }
         if let Some(c_pos) = tag_lower.find("content=") {
-            let after = &tag[c_pos + 8..].trim_start();
+            let after = tag[c_pos + 8..].trim_start();
             let quote = after.chars().next()?;
             if quote == '"' || quote == '\'' {
                 let inner = &after[1..];
@@ -820,7 +936,7 @@ fn extract_html_meta_content(html: &str, key: &str) -> Option<String> {
 }
 
 fn extract_html_title(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
+    let lower = html.to_ascii_lowercase();
     let start = lower.find("<title")?;
     let after_open = lower[start..].find('>')? + start + 1;
     let end = lower[after_open..].find("</title>")? + after_open;
@@ -848,7 +964,7 @@ async fn fetch_webpage_design_context(
         .to_string();
 
     let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(14))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
     else {
@@ -862,6 +978,8 @@ async fn fetch_webpage_design_context(
     if !res.status().is_success() {
         return (fallback_title, String::new(), None, Vec::new());
     }
+
+    let final_url = res.url().as_str().to_string();
 
     // If URL points directly to an image (e.g. .png, .jpg, .webp)
     let content_type = res
@@ -888,11 +1006,7 @@ async fn fetch_webpage_design_context(
     }
 
     let html = res.text().await.unwrap_or_default();
-    let head_slice = if html.len() > 48_000 {
-        &html[..48_000]
-    } else {
-        &html
-    };
+    let head_slice = safe_utf8_prefix(&html, 48_000);
 
     let title = extract_html_meta_content(head_slice, "og:title")
         .or_else(|| extract_html_meta_content(head_slice, "twitter:title"))
@@ -906,7 +1020,15 @@ async fn fetch_webpage_design_context(
     let mut colors = Vec::new();
     if let Some(theme_col) = extract_html_meta_content(head_slice, "theme-color") {
         if parse_hex_rgb(&theme_col).is_some() {
-            colors.push(theme_col);
+            colors.push(normalize_hex(Some(&theme_col), "#0D1117"));
+        }
+    }
+    for hex in extract_html_brand_colors(&html) {
+        if !colors.contains(&hex) {
+            colors.push(hex);
+        }
+        if colors.len() >= 5 {
+            break;
         }
     }
 
@@ -915,15 +1037,7 @@ async fn fetch_webpage_design_context(
 
     let mut thumb_data_url = None;
     if let Some(raw_img) = og_img_url {
-        let resolved_img = if raw_img.starts_with("//") {
-            format!("https:{raw_img}")
-        } else if raw_img.starts_with("http://") || raw_img.starts_with("https://") {
-            raw_img
-        } else {
-            String::new()
-        };
-
-        if !resolved_img.is_empty() {
+        if let Some(resolved_img) = resolve_relative_url(&final_url, &raw_img) {
             if let Ok(img_res) = client.get(&resolved_img).send().await {
                 if img_res.status().is_success() {
                     let mime = img_res
@@ -1085,9 +1199,9 @@ async fn analyze_youtube_via_gemini_direct(
             continue;
         };
         if res.status().is_success() {
-            let val: Value = res.json().await.ok()?;
-            let raw_txt = val["candidates"][0]["content"]["parts"][0]["text"].as_str()?;
-            return parse_llm_json(raw_txt).ok();
+            let val: Value = crate::ai::decode_llm_http_body(res).await.ok()?;
+            let raw_txt = crate::ai::extract_gemini_text(&val)?;
+            return parse_llm_json(&raw_txt).ok();
         }
         if !matches!(res.status().as_u16(), 404 | 503 | 429) {
             return None;
@@ -1233,7 +1347,7 @@ async fn fetch_youtube_oembed_and_thumb(
     let mut title = format!("YouTube ({video_id})");
     if let Ok(res) = client.get(&oembed_url).send().await {
         if res.status().is_success() {
-            if let Ok(val) = res.json::<Value>().await {
+            if let Ok(val) = crate::ai::decode_llm_http_body(res).await {
                 if let Some(t) = val["title"].as_str().filter(|s| !s.trim().is_empty()) {
                     title = t.trim().to_string();
                 }
@@ -1618,5 +1732,45 @@ mod tests {
         assert_eq!(design.palette.bg_top, "#1A0F2E");
         // Most vibrant sampled color (#00E5FF, chroma 255) is selected as accentPrimary
         assert_eq!(design.palette.accent_primary, "#00E5FF");
+    }
+
+    #[test]
+    fn test_safe_utf8_prefix_never_panics_on_multibyte_boundaries() {
+        let text = "Belajar coding untuk anak — seru banget! 🚀✨";
+        for max_bytes in 0..=text.len() + 5 {
+            let sliced = safe_utf8_prefix(text, max_bytes);
+            assert!(sliced.len() <= max_bytes);
+            assert!(text.starts_with(sliced));
+        }
+    }
+
+    #[test]
+    fn test_resolve_relative_url_handles_root_and_relative_paths() {
+        assert_eq!(
+            resolve_relative_url("https://junior.codepolitan.com/", "/assets/og-banner.png").as_deref(),
+            Some("https://junior.codepolitan.com/assets/og-banner.png")
+        );
+        assert_eq!(
+            resolve_relative_url("https://junior.codepolitan.com/promo/index.html", "./hero.jpg").as_deref(),
+            Some("https://junior.codepolitan.com/promo/hero.jpg")
+        );
+        assert_eq!(
+            resolve_relative_url("https://junior.codepolitan.com/", "//cdn.codepolitan.com/og.webp").as_deref(),
+            Some("https://cdn.codepolitan.com/og.webp")
+        );
+    }
+
+    #[test]
+    fn test_extract_html_brand_colors_ranks_brand_palette() {
+        let html = r##"
+        <style>
+            :root { --primary: #00B894; --accent: #FF9F1A; --bg: #0F172A; }
+            .btn { background: #00B894; color: #FFFFFF; }
+            .badge { background: #FF9F1A; border-color: #00B894; }
+        </style>
+        "##;
+        let colors = extract_html_brand_colors(html);
+        assert!(colors.contains(&"#00B894".to_string()));
+        assert!(colors.contains(&"#FF9F1A".to_string()));
     }
 }

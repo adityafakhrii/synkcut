@@ -100,20 +100,55 @@ pub struct CopilotPatchResponse {
     pub provider_used: String,
 }
 
-pub fn strip_json_fences(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.starts_with("```") {
-        let without_open = trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```JSON")
-            .trim_start_matches("```");
-        without_open.trim_end_matches("```").trim().to_string()
-    } else {
-        trimmed.to_string()
+fn strip_thinking_blocks(raw: &str) -> String {
+    let mut out = raw.to_string();
+    loop {
+        let lower = out.to_ascii_lowercase();
+        let Some(start) = lower.find("<think>") else {
+            break;
+        };
+        if let Some(end_rel) = lower[start..].find("</think>") {
+            let end = start + end_rel + "</think>".len();
+            out.replace_range(start..end, "");
+        } else {
+            // Unclosed thinking tag before nothing useful — stop stripping
+            break;
+        }
     }
+    out
 }
 
-/// Extract a valid JSON value even if an LLM wraps it in markdown fences or brief commentary.
+pub fn strip_json_fences(raw: &str) -> String {
+    let no_think = strip_thinking_blocks(raw);
+    let trimmed = no_think.trim();
+
+    // Handle ```json ... ``` anywhere inside prose
+    if let Some(fence_pos) = trimmed.find("```") {
+        let after_open = &trimmed[fence_pos + 3..];
+        let body_start = after_open
+            .find('\n')
+            .map(|i| i + 1)
+            .unwrap_or_else(|| {
+                if after_open.to_ascii_lowercase().starts_with("json") {
+                    4
+                } else {
+                    0
+                }
+            });
+        let rest = &after_open[body_start..];
+        if let Some(close_pos) = rest.find("```") {
+            let fenced = rest[..close_pos].trim();
+            if !fenced.is_empty() {
+                return fenced.to_string();
+            }
+        }
+        return rest.trim_end_matches("```").trim().to_string();
+    }
+
+    trimmed.to_string()
+}
+
+/// Extract a valid JSON value even if an LLM wraps it in `<think>`, markdown fences, or brief commentary.
 pub fn parse_llm_json(raw: &str) -> Result<Value, String> {
     let cleaned = strip_json_fences(raw);
     if let Ok(val) = serde_json::from_str::<Value>(&cleaned) {
@@ -122,6 +157,15 @@ pub fn parse_llm_json(raw: &str) -> Result<Value, String> {
     if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
         if end > start {
             if let Ok(val) = serde_json::from_str::<Value>(&cleaned[start..=end]) {
+                return Ok(val);
+            }
+        }
+    }
+    // Fallback: try raw without thinking blocks in case a stray ``` appeared inside prose
+    let raw_no_think = strip_thinking_blocks(raw);
+    if let (Some(start), Some(end)) = (raw_no_think.find('{'), raw_no_think.rfind('}')) {
+        if end > start {
+            if let Ok(val) = serde_json::from_str::<Value>(&raw_no_think[start..=end]) {
                 return Ok(val);
             }
         }
@@ -145,28 +189,375 @@ fn parse_data_url_mime_and_b64(data_url: &str) -> (&str, &str) {
     }
 }
 
-fn extract_openai_message_text(val: &Value) -> Option<String> {
-    let content = &val["choices"][0]["message"]["content"];
-    if let Some(s) = content.as_str() {
-        if !s.trim().is_empty() {
-            return Some(s.to_string());
+fn format_reqwest_error_chain(err: &reqwest::Error) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
+    let mut depth = 0;
+    while let Some(cause) = src {
+        if depth >= 4 {
+            break;
+        }
+        let msg = cause.to_string();
+        if !parts.iter().any(|p| p == &msg) {
+            parts.push(msg);
+        }
+        src = cause.source();
+        depth += 1;
+    }
+    parts.join(" -> ")
+}
+
+fn extract_text_from_parts_array(arr: &[Value]) -> Option<String> {
+    let mut regular = Vec::new();
+    let mut fallback = Vec::new();
+    for part in arr {
+        let is_thought = part["thought"].as_bool() == Some(true)
+            || matches!(
+                part["type"].as_str(),
+                Some("thinking" | "reasoning" | "thought")
+            );
+        let txt = part["text"]
+            .as_str()
+            .or_else(|| part["content"].as_str())
+            .or_else(|| part.as_str());
+        if let Some(s) = txt {
+            if !s.is_empty() {
+                if is_thought {
+                    fallback.push(s);
+                } else {
+                    regular.push(s);
+                }
+            }
         }
     }
-    if let Some(arr) = content.as_array() {
-        let joined: String = arr
-            .iter()
-            .filter_map(|part| part["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+    if !regular.is_empty() {
+        let joined = regular.join("");
         if !joined.trim().is_empty() {
             return Some(joined);
+        }
+    }
+    if let Some(last) = fallback.last() {
+        if !last.trim().is_empty() {
+            return Some((*last).to_string());
         }
     }
     None
 }
 
+pub fn extract_gemini_text(val: &Value) -> Option<String> {
+    if let Some(parts) = val["candidates"][0]["content"]["parts"].as_array() {
+        if let Some(txt) = extract_text_from_parts_array(parts) {
+            return Some(txt);
+        }
+    }
+    val["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+pub fn extract_openai_message_text(val: &Value) -> Option<String> {
+    // 1. Standard OpenAI Chat Completions: choices[0].message.content
+    let msg_content = &val["choices"][0]["message"]["content"];
+    if let Some(s) = msg_content.as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(arr) = msg_content.as_array() {
+        if let Some(joined) = extract_text_from_parts_array(arr) {
+            return Some(joined);
+        }
+    }
+
+    // 2. Streaming delta chunk: choices[0].delta.content
+    let delta_content = &val["choices"][0]["delta"]["content"];
+    if let Some(s) = delta_content.as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(arr) = delta_content.as_array() {
+        if let Some(joined) = extract_text_from_parts_array(arr) {
+            return Some(joined);
+        }
+    }
+
+    // 3. Legacy completions: choices[0].text
+    if let Some(s) = val["choices"][0]["text"].as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+
+    // 4. OpenAI Responses API: output_text or output[].content[].text
+    if let Some(s) = val["output_text"].as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(outputs) = val["output"].as_array() {
+        let mut chunks = Vec::new();
+        for item in outputs {
+            if let Some(content_arr) = item["content"].as_array() {
+                if let Some(t) = extract_text_from_parts_array(content_arr) {
+                    chunks.push(t);
+                }
+            }
+        }
+        let joined = chunks.join("\n");
+        if !joined.trim().is_empty() {
+            return Some(joined);
+        }
+    }
+
+    // 5. Ollama native /api/chat and /api/generate
+    if let Some(s) = val["message"]["content"].as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(s) = val["response"].as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+
+    // 6. Anthropic Messages API: content[].text
+    if let Some(arr) = val["content"].as_array() {
+        if let Some(joined) = extract_text_from_parts_array(arr) {
+            return Some(joined);
+        }
+    }
+
+    // 7. Gemini format returned via proxy
+    if let Some(gem) = extract_gemini_text(val) {
+        return Some(gem);
+    }
+
+    None
+}
+
+pub fn extract_api_error_message(val: &Value) -> Option<String> {
+    let err = val.get("error")?;
+    if err.is_null() {
+        return None;
+    }
+    if let Some(s) = err.as_str() {
+        let t = s.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if let Some(msg) = err["message"].as_str() {
+        let t = msg.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    Some(err.to_string().chars().take(220).collect())
+}
+
+fn extract_stream_chunk_delta(chunk: &Value) -> Option<String> {
+    // OpenAI chat completions SSE delta
+    if let Some(s) = chunk["choices"][0]["delta"]["content"].as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(arr) = chunk["choices"][0]["delta"]["content"].as_array() {
+        if let Some(t) = extract_text_from_parts_array(arr) {
+            return Some(t);
+        }
+    }
+    if let Some(s) = chunk["choices"][0]["text"].as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    // OpenAI Responses API SSE delta
+    if chunk["type"].as_str() == Some("response.output_text.delta") {
+        if let Some(s) = chunk["delta"].as_str() {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    // Anthropic SSE content_block_delta / content_block_start
+    if chunk["delta"]["type"].as_str() != Some("thinking_delta") {
+        if let Some(s) = chunk["delta"]["text"].as_str() {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    if chunk["content_block"]["type"].as_str() == Some("text") {
+        if let Some(s) = chunk["content_block"]["text"].as_str() {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    // Gemini SSE
+    if let Some(gem) = extract_gemini_text(chunk) {
+        return Some(gem);
+    }
+    // Ollama streaming JSON lines
+    if let Some(s) = chunk["message"]["content"].as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(s) = chunk["response"].as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+/// Parses an HTTP response body from ANY OpenAI-compatible, Gemini, Anthropic, or Ollama proxy:
+/// supports standard JSON, UTF-8 BOM JSON, SSE (`text/event-stream` `data: {...}`), NDJSON,
+/// and JSON embedded inside stray wrapper text.
+pub fn parse_http_json_or_sse(raw: &str) -> Result<Value, String> {
+    let trimmed = raw.trim_start_matches('\u{feff}').trim();
+    if trimmed.is_empty() {
+        return Err("Server mengembalikan body respons kosong (0 bytes).".to_string());
+    }
+
+    // 1. Standard JSON body
+    if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(val);
+    }
+
+    // 2. Server-Sent Events (SSE): lines like `data: {"choices":[{"delta":{"content":"..."}}]}`
+    let mut sse_delta_buf = String::new();
+    let mut sse_full_msg: Option<String> = None;
+    let mut sse_error: Option<Value> = None;
+    let mut saw_sse_data = false;
+
+    for line in trimmed.lines() {
+        let clean_line = line.trim();
+        if let Some(payload_raw) = clean_line.strip_prefix("data:") {
+            saw_sse_data = true;
+            let payload = payload_raw.trim();
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
+            }
+            if let Ok(chunk) = serde_json::from_str::<Value>(payload) {
+                if sse_error.is_none() && chunk.get("error").is_some_and(|e| !e.is_null()) {
+                    sse_error = chunk.get("error").cloned();
+                }
+                if let Some(delta) = extract_stream_chunk_delta(&chunk) {
+                    sse_delta_buf.push_str(&delta);
+                } else if let Some(full) = chunk["choices"][0]["message"]["content"].as_str() {
+                    if !full.trim().is_empty() {
+                        sse_full_msg = Some(full.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if saw_sse_data {
+        let final_text = if !sse_delta_buf.trim().is_empty() {
+            Some(sse_delta_buf)
+        } else {
+            sse_full_msg
+        };
+        if let Some(text) = final_text {
+            return Ok(json!({
+                "choices": [{ "message": { "content": text } }],
+                "candidates": [{ "content": { "parts": [{ "text": text }] } }],
+                "_decodedFrom": "sse"
+            }));
+        }
+        if let Some(err_val) = sse_error {
+            return Ok(json!({ "error": err_val }));
+        }
+    }
+
+    // 3. NDJSON (multiple JSON objects separated by newlines, e.g. Ollama / custom streaming proxy)
+    let mut ndjson_buf = String::new();
+    let mut ndjson_error: Option<Value> = None;
+    let mut ndjson_objects = 0usize;
+    let mut last_ndjson_val: Option<Value> = None;
+
+    for line in trimmed.lines() {
+        let clean_line = line.trim();
+        if !clean_line.starts_with('{') {
+            continue;
+        }
+        if let Ok(chunk) = serde_json::from_str::<Value>(clean_line) {
+            ndjson_objects += 1;
+            if ndjson_error.is_none() && chunk.get("error").is_some_and(|e| !e.is_null()) {
+                ndjson_error = chunk.get("error").cloned();
+            }
+            if let Some(delta) = extract_stream_chunk_delta(&chunk) {
+                ndjson_buf.push_str(&delta);
+            }
+            last_ndjson_val = Some(chunk);
+        }
+    }
+
+    if ndjson_objects > 0 {
+        if !ndjson_buf.trim().is_empty() {
+            return Ok(json!({
+                "choices": [{ "message": { "content": ndjson_buf } }],
+                "candidates": [{ "content": { "parts": [{ "text": ndjson_buf }] } }],
+                "_decodedFrom": "ndjson"
+            }));
+        }
+        if let Some(err_val) = ndjson_error {
+            return Ok(json!({ "error": err_val }));
+        }
+        if let Some(val) = last_ndjson_val {
+            return Ok(val);
+        }
+    }
+
+    // 4. Embedded JSON object inside stray prefix/suffix
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if end > start {
+            if let Ok(val) = serde_json::from_str::<Value>(&trimmed[start..=end]) {
+                return Ok(val);
+            }
+        }
+    }
+
+    let preview: String = trimmed.chars().take(180).collect();
+    Err(format!(
+        "Respons server bukan JSON/SSE yang valid. Cuplikan body: {preview}"
+    ))
+}
+
+/// Safely reads and decodes an HTTP response body into JSON across standard JSON,
+/// gzip/brotli-compressed bodies, UTF-8 BOM, SSE streams, and NDJSON — with clear
+/// diagnostic errors instead of opaque `error decoding response body`.
+pub async fn decode_llm_http_body(res: reqwest::Response) -> Result<Value, String> {
+    let status = res.status().as_u16();
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let bytes = res.bytes().await.map_err(|e| {
+        format!(
+            "Gagal membaca body respons HTTP {status} (Content-Type: {content_type}): {}",
+            format_reqwest_error_chain(&e)
+        )
+    })?;
+
+    let raw_text = String::from_utf8_lossy(&bytes);
+    parse_http_json_or_sse(&raw_text)
+        .map_err(|e| format!("Gagal decode respons HTTP {status} ({content_type}): {e}"))
+}
+
 /// Calls Gemini / OpenAI / OpenRouter / Custom OpenAI-compatible model with optional base64
-/// images, enforces JSON output, and automatically falls back when models return 404/503/429.
+/// images, enforces JSON output, and automatically falls back when models return 404/503/429
+/// or when custom proxies stream SSE / reject `response_format` / reject vision images.
 pub async fn call_llm_json(
     resolved: &byok::ResolvedProvider,
     system_prompt: &str,
@@ -174,11 +565,12 @@ pub async fn call_llm_json(
     image_data_urls: &[String],
 ) -> Result<(Value, String), String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(55))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(110))
         .build()
         .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
 
-    let (raw_text, used_model): (String, String) = match resolved.provider.as_str() {
+    match resolved.provider.as_str() {
         "gemini" => {
             let mut parts: Vec<Value> = vec![json!({ "text": user_prompt })];
             for data_url in image_data_urls.iter().take(12) {
@@ -208,12 +600,12 @@ pub async fn call_llm_json(
             }
 
             let gemini_client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(32))
+                .connect_timeout(std::time::Duration::from_secs(12))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
 
             let mut last_err = String::from("Gagal menghubungi Gemini API.");
-            let mut success_result: Option<(String, String)> = None;
 
             for candidate in candidates {
                 let url = format!(
@@ -226,15 +618,37 @@ pub async fn call_llm_json(
                         last_err = format!("Gemini model {candidate} timeout.");
                         continue;
                     }
-                    Err(e) => return Err(format!("Gagal menghubungi Gemini API: {e}")),
+                    Err(e) => {
+                        return Err(format!(
+                            "Gagal menghubungi Gemini API: {}",
+                            format_reqwest_error_chain(&e)
+                        ))
+                    }
                 };
 
                 let status = res.status().as_u16();
                 if res.status().is_success() {
-                    let val: Value = res.json().await.map_err(|e| e.to_string())?;
-                    if let Some(txt) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        success_result = Some((txt.to_string(), candidate));
-                        break;
+                    let val = match decode_llm_http_body(res).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            last_err = format!("Gemini ({candidate}) {e}");
+                            continue;
+                        }
+                    };
+                    if let Some(api_err) = extract_api_error_message(&val) {
+                        last_err = format!("Gemini ({candidate}) error: {api_err}");
+                        continue;
+                    }
+                    if let Some(txt) = extract_gemini_text(&val) {
+                        match parse_llm_json(&txt) {
+                            Ok(parsed) => {
+                                return Ok((parsed, format!("{} · {}", resolved.provider, candidate)));
+                            }
+                            Err(e) => {
+                                last_err = format!("Gemini ({candidate}): {e}");
+                                continue;
+                            }
+                        }
                     }
                     last_err = format!("Respons Gemini ({candidate}) kosong.");
                     continue;
@@ -261,7 +675,7 @@ pub async fn call_llm_json(
                 return Err(last_err);
             }
 
-            success_result.ok_or(last_err)?
+            Err(last_err)
         }
         "openai" | "openrouter" | "custom" => {
             let endpoint = match resolved.provider.as_str() {
@@ -297,15 +711,25 @@ pub async fn call_llm_json(
             }
 
             let mut last_err = format!("Gagal menghubungi {} API.", resolved.provider);
-            let mut success_result: Option<(String, String)> = None;
 
             'model_loop: for candidate in candidates {
                 let mut use_json_mode = true;
                 let mut include_images = !image_data_urls.is_empty();
+                let mut include_temperature = true;
+                let mut reinforce_json_prompt = false;
 
-                for _attempt in 0..3 {
+                for _attempt in 0..4 {
+                    let effective_user_prompt = if reinforce_json_prompt {
+                        format!(
+                            "{user_prompt}\n\nPENTING: Balas HANYA satu objek JSON valid tanpa markdown dan tanpa teks di luar JSON."
+                        )
+                    } else {
+                        user_prompt.to_string()
+                    };
+
                     let user_message = if include_images {
-                        let mut content: Vec<Value> = vec![json!({ "type": "text", "text": user_prompt })];
+                        let mut content: Vec<Value> =
+                            vec![json!({ "type": "text", "text": effective_user_prompt })];
                         for data_url in image_data_urls.iter().take(8) {
                             content.push(json!({
                                 "type": "image_url",
@@ -314,22 +738,28 @@ pub async fn call_llm_json(
                         }
                         json!({ "role": "user", "content": content })
                     } else {
-                        json!({ "role": "user", "content": user_prompt })
+                        json!({ "role": "user", "content": effective_user_prompt })
                     };
 
                     let mut payload = json!({
                         "model": candidate,
-                        "temperature": 0.55,
+                        "stream": false,
                         "messages": [
                             { "role": "system", "content": system_prompt },
                             user_message
                         ]
                     });
+                    if include_temperature {
+                        payload["temperature"] = json!(0.55);
+                    }
                     if use_json_mode {
                         payload["response_format"] = json!({ "type": "json_object" });
                     }
 
-                    let mut req = client.post(&endpoint).json(&payload);
+                    let mut req = client
+                        .post(&endpoint)
+                        .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
+                        .json(&payload);
                     if !resolved.api_key.trim().is_empty() {
                         req = req.bearer_auth(&resolved.api_key);
                     }
@@ -339,17 +769,115 @@ pub async fn call_llm_json(
                             .header("X-Title", "Synkcut Studio");
                     }
 
-                    let res = req.send().await.map_err(|e| {
-                        format!("Gagal menghubungi {} API ({endpoint}): {e}", resolved.provider)
-                    })?;
+                    let res = match req.send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            last_err = format!(
+                                "Gagal menghubungi {} API ({endpoint}): {}",
+                                resolved.provider,
+                                format_reqwest_error_chain(&e)
+                            );
+                            if include_images {
+                                include_images = false;
+                                continue;
+                            }
+                            if use_json_mode {
+                                use_json_mode = false;
+                                reinforce_json_prompt = true;
+                                continue;
+                            }
+                            return Err(last_err);
+                        }
+                    };
 
                     let status = res.status().as_u16();
                     if res.status().is_success() {
-                        let val: Value = res.json().await.map_err(|e| e.to_string())?;
-                        let txt = extract_openai_message_text(&val)
-                            .ok_or_else(|| format!("Respons {} ({candidate}) kosong.", resolved.provider))?;
-                        success_result = Some((txt, candidate));
-                        break 'model_loop;
+                        let val = match decode_llm_http_body(res).await {
+                            Ok(v) => v,
+                            Err(decode_err) => {
+                                last_err = format!(
+                                    "{} ({candidate}): {decode_err}",
+                                    resolved.provider
+                                );
+                                if include_images {
+                                    include_images = false;
+                                    continue;
+                                }
+                                if use_json_mode {
+                                    use_json_mode = false;
+                                    reinforce_json_prompt = true;
+                                    continue;
+                                }
+                                continue 'model_loop;
+                            }
+                        };
+
+                        // Some proxies wrap provider errors inside HTTP 200 JSON!
+                        if let Some(api_err) = extract_api_error_message(&val) {
+                            let lower_err = api_err.to_lowercase();
+                            last_err = format!(
+                                "{} API error (model {candidate}): {api_err}",
+                                resolved.provider
+                            );
+                            if include_images
+                                && (lower_err.contains("image")
+                                    || lower_err.contains("vision")
+                                    || lower_err.contains("multimodal")
+                                    || lower_err.contains("content"))
+                            {
+                                include_images = false;
+                                continue;
+                            }
+                            if include_temperature && lower_err.contains("temperature") {
+                                include_temperature = false;
+                                continue;
+                            }
+                            if use_json_mode {
+                                use_json_mode = false;
+                                reinforce_json_prompt = true;
+                                continue;
+                            }
+                            continue 'model_loop;
+                        }
+
+                        if let Some(txt) = extract_openai_message_text(&val) {
+                            match parse_llm_json(&txt) {
+                                Ok(parsed) => {
+                                    return Ok((
+                                        parsed,
+                                        format!("{} · {}", resolved.provider, candidate),
+                                    ));
+                                }
+                                Err(parse_err) => {
+                                    last_err = format!(
+                                        "{} ({candidate}): {parse_err}",
+                                        resolved.provider
+                                    );
+                                    if use_json_mode {
+                                        use_json_mode = false;
+                                        reinforce_json_prompt = true;
+                                        continue;
+                                    }
+                                    if !reinforce_json_prompt {
+                                        reinforce_json_prompt = true;
+                                        continue;
+                                    }
+                                    continue 'model_loop;
+                                }
+                            }
+                        }
+
+                        last_err = format!("Respons {} ({candidate}) kosong.", resolved.provider);
+                        if include_images {
+                            include_images = false;
+                            continue;
+                        }
+                        if use_json_mode {
+                            use_json_mode = false;
+                            reinforce_json_prompt = true;
+                            continue;
+                        }
+                        continue 'model_loop;
                     }
 
                     let body_txt = res.text().await.unwrap_or_default();
@@ -360,12 +888,26 @@ pub async fn call_llm_json(
                         body_txt.chars().take(220).collect::<String>()
                     );
 
-                    if (status == 400 || status == 422) && include_images && (lower_body.contains("image") || lower_body.contains("vision") || lower_body.contains("multimodal") || lower_body.contains("content")) {
+                    if matches!(status, 400 | 422 | 500)
+                        && include_images
+                        && (lower_body.contains("image")
+                            || lower_body.contains("vision")
+                            || lower_body.contains("multimodal")
+                            || lower_body.contains("content"))
+                    {
                         include_images = false;
                         continue;
                     }
-                    if (status == 400 || status == 422) && use_json_mode {
+                    if matches!(status, 400 | 422)
+                        && include_temperature
+                        && lower_body.contains("temperature")
+                    {
+                        include_temperature = false;
+                        continue;
+                    }
+                    if matches!(status, 400 | 422 | 500 | 502) && use_json_mode {
                         use_json_mode = false;
+                        reinforce_json_prompt = true;
                         continue;
                     }
                     if status == 404 || status == 503 {
@@ -375,13 +917,10 @@ pub async fn call_llm_json(
                 }
             }
 
-            success_result.ok_or(last_err)?
+            Err(last_err)
         }
-        _ => return Err(format!("Provider tidak didukung: {}", resolved.provider)),
-    };
-
-    let parsed = parse_llm_json(&raw_text)?;
-    Ok((parsed, format!("{} · {}", resolved.provider, used_model)))
+        _ => Err(format!("Provider tidak didukung: {}", resolved.provider)),
+    }
 }
 
 #[tauri::command]
@@ -2402,5 +2941,64 @@ mod tests {
         let merged = merge_and_sanitize_copilot_patch(&orig, &patch, Some("scene_1"), "Ganti ke klip kedua");
         assert_eq!(merged["scenes"][0]["media"]["path"], "D:\\clips\\clip2.mp4");
         assert_eq!(merged["scenes"][0]["media"]["trimStartMs"], 4000);
+    }
+
+    #[test]
+    fn test_parse_http_json_or_sse_supports_bom_sse_ndjson_and_errors() {
+        // 1. UTF-8 BOM + normal JSON
+        let bom_json = "\u{feff}{\"choices\":[{\"message\":{\"content\":\"{\\\"ok\\\":true}\"}}]}";
+        let v1 = parse_http_json_or_sse(bom_json).unwrap();
+        assert_eq!(extract_openai_message_text(&v1).as_deref(), Some("{\"ok\":true}"));
+
+        // 2. OpenAI SSE stream (`text/event-stream`)
+        let sse = "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
+                   data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"{\\\"projectTitle\\\":\\\"Promo \"}}]}\n\n\
+                   data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Codepolitan\\\"}\"}}]}\n\n\
+                   data: [DONE]\n";
+        let v2 = parse_http_json_or_sse(sse).unwrap();
+        assert_eq!(v2["_decodedFrom"], "sse");
+        let txt2 = extract_openai_message_text(&v2).unwrap();
+        let parsed2 = parse_llm_json(&txt2).unwrap();
+        assert_eq!(parsed2["projectTitle"], "Promo Codepolitan");
+
+        // 3. Ollama NDJSON streaming
+        let ndjson = "{\"message\":{\"content\":\"{\\\"hooks\\\":\"}}\n{\"message\":{\"content\":\"[]}\"}}\n";
+        let v3 = parse_http_json_or_sse(ndjson).unwrap();
+        assert_eq!(v3["_decodedFrom"], "ndjson");
+        assert_eq!(extract_openai_message_text(&v3).as_deref(), Some("{\"hooks\":[]}"));
+
+        // 4. HTTP 200 SSE embedded error
+        let sse_err = "data: {\"error\":{\"message\":\"response_format json_object unsupported\"}}\n\ndata: [DONE]\n";
+        let v4 = parse_http_json_or_sse(sse_err).unwrap();
+        assert_eq!(
+            extract_api_error_message(&v4).as_deref(),
+            Some("response_format json_object unsupported")
+        );
+    }
+
+    #[test]
+    fn test_parse_llm_json_strips_thinking_blocks_and_prose_fences() {
+        let thinking_out = "<think>Saya perlu memikirkan struktur {hook} dulu.</think>\nBerikut hasilnya:\n```json\n{\"projectTitle\":\"Codepolitan Junior\",\"cta\":\"Klik sekarang\"}\n```";
+        let val = parse_llm_json(thinking_out).unwrap();
+        assert_eq!(val["projectTitle"], "Codepolitan Junior");
+        assert_eq!(val["cta"], "Klik sekarang");
+    }
+
+    #[test]
+    fn test_extract_gemini_text_skips_thought_parts() {
+        let resp = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "thought": true, "text": "Internal reasoning {not json}" },
+                        { "text": "{\"projectTitle\":\"Final\"}" }
+                    ]
+                }
+            }]
+        });
+        assert_eq!(
+            extract_gemini_text(&resp).as_deref(),
+            Some("{\"projectTitle\":\"Final\"}")
+        );
     }
 }

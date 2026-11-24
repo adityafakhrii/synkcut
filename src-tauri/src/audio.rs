@@ -239,9 +239,9 @@ async fn transcribe_with_gemini(
         };
 
         if res.status().is_success() {
-            let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-            if let Some(txt) = data["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                raw_text_opt = Some(txt.to_string());
+            let data: serde_json::Value = crate::ai::decode_llm_http_body(res).await?;
+            if let Some(txt) = crate::ai::extract_gemini_text(&data) {
+                raw_text_opt = Some(txt);
                 break;
             }
             continue;
@@ -324,7 +324,7 @@ async fn transcribe_with_openai_whisper(
         return Err(format!("OpenAI Whisper gagal (HTTP {status})."));
     }
 
-    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let data: serde_json::Value = crate::ai::decode_llm_http_body(res).await?;
     let transcript = data["text"].as_str().unwrap_or("").trim().to_string();
 
     let mut words = Vec::new();
@@ -513,7 +513,7 @@ async fn generate_tts_single_engine(
                 };
 
                 if res.status().is_success() {
-                    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+                    let data: serde_json::Value = crate::ai::decode_llm_http_body(res).await?;
                     if let Some(b64) = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"].as_str() {
                         b64_audio = Some(b64.to_string());
                         break;
