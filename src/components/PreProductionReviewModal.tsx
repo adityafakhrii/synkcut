@@ -27,6 +27,7 @@ import {
   aiPlanStoryboard,
   generateTtsAudio,
   isTauriRuntime,
+  listenGenerationProgress,
   pickLocalAudio,
   processUserAudio,
   resolveAutoRenderMedium,
@@ -37,6 +38,11 @@ import {
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
 import { verifyAndRepairProjectBeats } from "../engine/freeformPipeline";
+import {
+  formatStopwatch,
+  toFriendlyAiError,
+  type FriendlyErrorInfo,
+} from "../lib/friendlyError";
 
 export interface PreProductionDraft {
   projectTitle: string;
@@ -61,7 +67,7 @@ interface PreProductionReviewModalProps {
   draft: PreProductionDraft;
   byokStatus: ByokStatus;
   onClose: () => void;
-  onProjectReady: (project: SynkcutProject) => Promise<void>;
+  onProjectReady: (project: SynkcutProject, generationDurationMs?: number) => Promise<void>;
 }
 
 const GEMINI_VOICES = [
@@ -128,7 +134,30 @@ export default function PreProductionReviewModal({
   // Final Video Generation State
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [progressText, setProgressText] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [friendlyError, setFriendlyError] = useState<FriendlyErrorInfo | null>(null);
+  const [failedOn3d, setFailedOn3d] = useState(false);
+
+  useEffect(() => {
+    if (!isGeneratingVideo) return;
+    const started = Date.now();
+    setElapsedMs(0);
+    const id = window.setInterval(() => {
+      setElapsedMs(Date.now() - started);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [isGeneratingVideo]);
+
+  useEffect(() => {
+    if (!isGeneratingVideo) return;
+    let unlisten: (() => void) | null = null;
+    listenGenerationProgress((msg) => setProgressText(msg)).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isGeneratingVideo]);
 
   const isFootageOnly = draft.visualMode === "footage";
   const audioSrcUrl = audioResult?.audioPath ? toAssetUrl(audioResult.audioPath) : null;
@@ -170,7 +199,7 @@ export default function PreProductionReviewModal({
 
   async function handleRegenerateAudio(alsoReplanBeats = true) {
     if (!fullScript.trim() || isGeneratingAudio) return;
-    setError(null);
+    setFriendlyError(null);
     setIsGeneratingAudio(true);
     setIsPlayingAudio(false);
     try {
@@ -187,7 +216,7 @@ export default function PreProductionReviewModal({
         await handleReplanStoryboard(res.durationMs, res.words);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFriendlyError(toFriendlyAiError(err));
     } finally {
       setIsGeneratingAudio(false);
     }
@@ -197,7 +226,7 @@ export default function PreProductionReviewModal({
     if (!isTauriRuntime()) return;
     const picked = await pickLocalAudio();
     if (!picked) return;
-    setError(null);
+    setFriendlyError(null);
     setIsGeneratingAudio(true);
     setIsPlayingAudio(false);
     try {
@@ -212,7 +241,7 @@ export default function PreProductionReviewModal({
         await handleReplanStoryboard(res.durationMs, res.words);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFriendlyError(toFriendlyAiError(err));
     } finally {
       setIsGeneratingAudio(false);
     }
@@ -223,7 +252,7 @@ export default function PreProductionReviewModal({
     overrideWords?: ProcessedAudioResult["words"]
   ) {
     if (!fullScript.trim() || isPlanningBeats) return;
-    setError(null);
+    setFriendlyError(null);
     setIsPlanningBeats(true);
     try {
       const styleReference: ProjectStyleReference | null = draft.styleRef
@@ -254,7 +283,7 @@ export default function PreProductionReviewModal({
       if (planned.mediumReason) setAiMediumReason(planned.mediumReason);
       if (planned.autoDesign) setAutoDesign(planned.autoDesign);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFriendlyError(toFriendlyAiError(err));
     } finally {
       setIsPlanningBeats(false);
     }
@@ -266,10 +295,13 @@ export default function PreProductionReviewModal({
     );
   }
 
-  async function handleConfirmGenerateVideo() {
+  async function handleConfirmGenerateVideo(overrideMedium?: "2d_freeform" | "3d_diorama") {
     if (isGeneratingVideo || !fullScript.trim()) return;
-    setError(null);
+    setFriendlyError(null);
+    setFailedOn3d(false);
+    const startMs = Date.now();
     setIsGeneratingVideo(true);
+    let attempted3d = false;
 
     try {
       // 1. Ensure dubbing audio is fresh & matches current edited script!
@@ -337,11 +369,11 @@ export default function PreProductionReviewModal({
           customDesign,
           autoGenerateVoiceover: false,
         });
-        await onProjectReady(project);
+        await onProjectReady(project, Date.now() - startMs);
         return;
       }
 
-      // 2B. AI 3D Diorama (100% By-Code Three.js PBR) OR 2D Freeform Motion!
+      // 2B. AI 3D Scene (2-Stage Checkpointed Three.js PBR) OR 2D Freeform Motion!
       let activeBeats = beats;
       if (activeBeats.length === 0) {
         setProgressText("Merancang micro-beat storyboard (2.5–4.5 detik per beat)...");
@@ -359,14 +391,14 @@ export default function PreProductionReviewModal({
       }
 
       const targetBgm = customDesign?.recommendedBgm || bgmPreset;
+      const targetMedium = overrideMedium ?? resolvedMedium;
 
       let rawProject: SynkcutProject;
-      if (resolvedMedium === "3d_diorama" && draft.visualMode !== "hybrid") {
-        setProgressText(
-          `Membangun dunia 3D Diorama & karakter (by-code Three.js) untuk ${activeBeats.length} beat...`
-        );
+      if (targetMedium === "3d_diorama" && draft.visualMode !== "hybrid") {
+        attempted3d = true;
+        setProgressText("Tahap 1/2: Membangun objek, pencahayaan & dunia 3D...");
         rawProject = await aiGenerate3dDiorama({
-          projectTitle: projectTitle.trim() || "3D Diorama",
+          projectTitle: projectTitle.trim() || "3D Scene",
           format: draft.format,
           beats: activeBeats,
           words: activeAudio.words,
@@ -383,7 +415,7 @@ export default function PreProductionReviewModal({
         });
       } else {
         setProgressText(
-          `Menulis kode motion baru dari nol untuk ${activeBeats.length} beat secara paralel (tanpa template)...`
+          `Menulis kode motion 2D baru dari nol untuk ${activeBeats.length} beat secara paralel...`
         );
         rawProject = await aiGenerateBeatCodes({
           projectTitle: projectTitle.trim() || "Video AI Motion",
@@ -410,9 +442,10 @@ export default function PreProductionReviewModal({
         setProgressText(msg)
       );
 
-      await onProjectReady(verified.project);
+      await onProjectReady(verified.project, Date.now() - startMs);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFailedOn3d(attempted3d);
+      setFriendlyError(toFriendlyAiError(err));
     } finally {
       setIsGeneratingVideo(false);
       setProgressText("");
@@ -876,16 +909,58 @@ export default function PreProductionReviewModal({
             </div>
           )}
 
-          {error && (
+          {friendlyError && (
             <div
-              className="rounded-lg p-3 text-xs"
+              className="rounded-xl p-3.5 text-xs space-y-2"
               style={{
                 backgroundColor: "var(--danger-soft)",
-                color: "var(--danger)",
                 border: "1px solid var(--danger)",
               }}
             >
-              {error}
+              <div className="font-bold" style={{ color: "var(--danger)" }}>
+                {friendlyError.title}
+              </div>
+              <p style={{ color: "var(--text-primary)" }}>{friendlyError.message}</p>
+              <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                {friendlyError.hint}
+              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  disabled={isGeneratingVideo}
+                  onClick={() => handleConfirmGenerateVideo()}
+                  className="ui-btn-primary inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold cursor-pointer"
+                >
+                  Coba Lagi (Lanjutkan)
+                </button>
+                {failedOn3d && (
+                  <button
+                    type="button"
+                    disabled={isGeneratingVideo}
+                    onClick={() => {
+                      setMediumChoice("2d_freeform");
+                      handleConfirmGenerateVideo("2d_freeform");
+                    }}
+                    className="ui-btn-secondary inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold cursor-pointer"
+                  >
+                    Buat Versi 2D Lebih Cepat
+                  </button>
+                )}
+              </div>
+              <details>
+                <summary
+                  className="cursor-pointer text-[10px] font-medium select-none"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Lihat detail teknis
+                </summary>
+                <pre
+                  className="mt-1 overflow-x-auto rounded p-2 font-mono-num text-[10px] whitespace-pre-wrap"
+                  style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-secondary)" }}
+                >
+                  {friendlyError.rawDetail}
+                </pre>
+              </details>
             </div>
           )}
         </div>
@@ -903,6 +978,15 @@ export default function PreProductionReviewModal({
               <>
                 <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--accent)" }} />
                 <span>{progressText || "Meracik video..."}</span>
+                <span
+                  className="rounded px-1.5 py-0.5 font-mono-num text-[11px] font-bold"
+                  style={{
+                    backgroundColor: "var(--accent-soft)",
+                    color: "var(--accent)",
+                  }}
+                >
+                  {formatStopwatch(elapsedMs)}
+                </span>
               </>
             ) : (
               <>
@@ -928,7 +1012,7 @@ export default function PreProductionReviewModal({
             <button
               type="button"
               disabled={isGeneratingVideo || isGeneratingAudio || !fullScript.trim()}
-              onClick={handleConfirmGenerateVideo}
+              onClick={() => handleConfirmGenerateVideo()}
               className="ui-btn-primary inline-flex items-center gap-2 rounded-lg px-5 py-2 text-xs font-bold cursor-pointer disabled:opacity-45"
             >
               {isGeneratingVideo ? (

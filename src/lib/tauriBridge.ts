@@ -240,6 +240,17 @@ export async function listenExportProgress(
   return listen<ExportProgressEvent>("export-progress", (ev) => cb(ev.payload));
 }
 
+export async function listenGenerationProgress(
+  cb: (message: string) => void
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) return null;
+  return listen<string>("generation-progress", (ev) => {
+    if (typeof ev.payload === "string" && ev.payload.trim()) {
+      cb(ev.payload);
+    }
+  });
+}
+
 /* ---------------- BYOK Keyring ---------------- */
 
 function readBrowserByok(): ByokStatus {

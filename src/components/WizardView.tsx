@@ -41,6 +41,7 @@ import {
   extractFootageFrames,
   generateTtsAudio,
   isTauriRuntime,
+  listenGenerationProgress,
   pickLocalAudio,
   pickLocalVideos,
   probeMedia,
@@ -49,10 +50,16 @@ import {
   toAssetUrl,
   type FootageInputItem,
   type HookOption,
+  type PlanStoryboardResponse,
   type ProcessedAudioResult,
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
 import { verifyAndRepairProjectBeats } from "../engine/freeformPipeline";
+import {
+  formatStopwatch,
+  toFriendlyAiError,
+  type FriendlyErrorInfo,
+} from "../lib/friendlyError";
 import DesignReferencePanel from "./DesignReferencePanel";
 
 interface WizardViewProps {
@@ -61,7 +68,7 @@ interface WizardViewProps {
   onCancel: () => void;
   onOpenSettings: () => void;
   onSkipToBlank: (format: ContentFormat) => void;
-  onProjectCreated: (project: SynkcutProject) => void;
+  onProjectCreated: (project: SynkcutProject, generationDurationMs?: number) => void;
 }
 
 const FORMAT_LIST: ContentFormat[] = ["ad_promo", "education", "storytelling", "review"];
@@ -218,7 +225,36 @@ export default function WizardView({
   const [autoSfx, setAutoSfx] = useState(true);
   const [isAssembling, setIsAssembling] = useState(false);
   const [assembleStatus, setAssembleStatus] = useState("");
-  const [assembleError, setAssembleError] = useState<string | null>(null);
+  const [assembleElapsedMs, setAssembleElapsedMs] = useState(0);
+  const [assembleError, setAssembleError] = useState<FriendlyErrorInfo | null>(null);
+  const [failedOn3d, setFailedOn3d] = useState(false);
+
+  // Checkpoint cache so retrying NEVER repeats already-completed Storyboard planning!
+  const storyboardCheckpointRef = useRef<{
+    key: string;
+    planned: PlanStoryboardResponse;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isAssembling) return;
+    const startedAt = Date.now();
+    setAssembleElapsedMs(0);
+    const id = window.setInterval(() => {
+      setAssembleElapsedMs(Date.now() - startedAt);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [isAssembling]);
+
+  useEffect(() => {
+    if (!isAssembling) return;
+    let unlisten: (() => void) | null = null;
+    listenGenerationProgress((msg) => setAssembleStatus(msg)).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isAssembling]);
 
   const selectedHookText =
     hooks.find((h) => h.id === selectedHookId)?.text || hooks[0]?.text || "";
@@ -429,17 +465,24 @@ export default function WizardView({
     }
   }
 
-  async function handleAssembleProject() {
+  async function handleAssembleProject(overrideMedium?: "2d_freeform" | "3d_diorama") {
     setAssembleError(null);
+    setFailedOn3d(false);
     if (isScriptMandatoryMissing) {
-      setAssembleError("Script video wajib diisi di Langkah 1 sebelum meracik video.");
+      setAssembleError(
+        toFriendlyAiError("Script video wajib diisi di Langkah 1 sebelum meracik video.")
+      );
       return;
     }
     if (isFootageMandatoryMissing) {
-      setAssembleError("Mode Footage wajib melampirkan minimal 1 video footage di Langkah 2.");
+      setAssembleError(
+        toFriendlyAiError("Mode Footage wajib melampirkan minimal 1 video footage di Langkah 2.")
+      );
       return;
     }
+    const startMs = Date.now();
     setIsAssembling(true);
+    let attempted3d = false;
     try {
       const styleReference: ProjectStyleReference | null = styleRefResult
         ? {
@@ -452,10 +495,10 @@ export default function WizardView({
           }
         : null;
 
-      // Always guarantee dubbing voiceover exists (for Motion, Hybrid, AND Footage modes!)
+      // 1. Always guarantee dubbing voiceover exists (reuses existing audioResult checkpoint!)
       let finalAudio = audioResult;
       if (!finalAudio && fullScriptText.trim()) {
-        setAssembleStatus("1/3 Membuat suara dubbing (voiceover) & word timestamps...");
+        setAssembleStatus("1/3 Membuat suara dubbing & sinkronisasi kata...");
         try {
           finalAudio = await generateTtsAudio({
             text: fullScriptText.trim(),
@@ -475,27 +518,37 @@ export default function WizardView({
             (format === "education" ? "lofi_education" : "upbeat_promo")
           : bgmPreset;
 
-      // v2.1 Sat-Set AI Auto-Director: 3D Diorama (By-Code Three.js) OR 2D Freeform Motion!
+      // v2.1.2 Sat-Set AI Auto-Director with Checkpointing (NEVER restarts finished stages!)
       if ((visualMode === "motion" || visualMode === "hybrid") && isTauriRuntime() && hasAnyByok) {
-        setAssembleStatus("2/3 Merancang micro-beat storyboard (2.5–4.5 detik per beat)...");
-        const planned = await aiPlanStoryboard({
-          projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
-          format,
-          fullScript: fullScriptText.trim(),
-          durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
-          words: finalAudio?.words ?? [],
-          customDesign: styleRefResult?.customDesign ?? null,
-          styleReference,
-        });
+        const checkpointKey = `${projectTitle.trim()}::${format}::${fullScriptText.trim()}::${finalAudio?.durationMs ?? 0}::${styleRefResult?.customDesign?.name ?? ""}`;
+        let planned: PlanStoryboardResponse;
+        if (storyboardCheckpointRef.current?.key === checkpointKey) {
+          planned = storyboardCheckpointRef.current.planned;
+          setAssembleStatus("Melanjutkan dari checkpoint storyboard...");
+        } else {
+          setAssembleStatus("2/3 Merancang storyboard micro-beat...");
+          planned = await aiPlanStoryboard({
+            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+            format,
+            fullScript: fullScriptText.trim(),
+            durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
+            words: finalAudio?.words ?? [],
+            customDesign: styleRefResult?.customDesign ?? null,
+            styleReference,
+          });
+          storyboardCheckpointRef.current = { key: checkpointKey, planned };
+        }
 
         const effectiveCustomDesign =
           styleRefResult?.customDesign ?? planned.autoDesign ?? null;
-        const effectiveMedium = resolveAutoRenderMedium({
-          preference: mediumChoice,
-          styleRef: styleRefResult,
-          aiRecommendedMedium: planned.recommendedMedium ?? null,
-          topicOrScript: `${topic} ${projectTitle} ${fullScriptText}`,
-        });
+        const effectiveMedium = overrideMedium
+          ? overrideMedium
+          : resolveAutoRenderMedium({
+              preference: mediumChoice,
+              styleRef: styleRefResult,
+              aiRecommendedMedium: planned.recommendedMedium ?? null,
+              topicOrScript: `${topic} ${projectTitle} ${fullScriptText}`,
+            });
         const effectiveAccent =
           effectiveCustomDesign?.palette.accentPrimary || accentColor;
         const effectiveBgm =
@@ -505,9 +558,8 @@ export default function WizardView({
 
         let rawProj: SynkcutProject;
         if (effectiveMedium === "3d_diorama" && (visualMode === "motion" || footageClips.length === 0)) {
-          setAssembleStatus(
-            `3/3 Membangun dunia 3D (Three.js by-code) untuk ${planned.beats.length} beat...`
-          );
+          attempted3d = true;
+          setAssembleStatus("Tahap 1/2: Membangun objek, pencahayaan & dunia 3D...");
           rawProj = await aiGenerate3dDiorama({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Scene",
             format,
@@ -526,7 +578,7 @@ export default function WizardView({
           });
         } else {
           setAssembleStatus(
-            `3/3 Menulis kode motion baru dari nol untuk ${planned.beats.length} beat secara paralel...`
+            `3/3 Menulis kode motion 2D untuk ${planned.beats.length} beat secara paralel...`
           );
           rawProj = await aiGenerateBeatCodes({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
@@ -551,7 +603,8 @@ export default function WizardView({
         const verified = await verifyAndRepairProjectBeats(rawProj, (msg) =>
           setAssembleStatus(msg)
         );
-        onProjectCreated(verified.project);
+        storyboardCheckpointRef.current = null;
+        onProjectCreated(verified.project, Date.now() - startMs);
         return;
       }
 
@@ -587,9 +640,10 @@ export default function WizardView({
         ttsVoice,
         ttsTone: tone,
       });
-      onProjectCreated(project);
+      onProjectCreated(project, Date.now() - startMs);
     } catch (err) {
-      setAssembleError(err instanceof Error ? err.message : String(err));
+      setFailedOn3d(attempted3d);
+      setAssembleError(toFriendlyAiError(err));
     } finally {
       setIsAssembling(false);
       setAssembleStatus("");
@@ -1706,14 +1760,70 @@ export default function WizardView({
 
               {assembleError && (
                 <div
-                  className="rounded-lg p-3.5 text-xs"
+                  className="rounded-xl p-4 text-xs space-y-2.5"
                   style={{
                     backgroundColor: "var(--danger-soft)",
                     border: "1px solid var(--danger)",
-                    color: "var(--danger)",
                   }}
                 >
-                  {assembleError}
+                  <div className="font-bold" style={{ color: "var(--danger)" }}>
+                    {assembleError.title}
+                  </div>
+                  <p className="leading-relaxed" style={{ color: "var(--text-primary)" }}>
+                    {assembleError.message}
+                  </p>
+                  <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                    {assembleError.hint}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isAssembling}
+                      onClick={() => handleAssembleProject()}
+                      className="ui-btn-primary inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold cursor-pointer"
+                    >
+                      <Wand2 className="h-3.5 w-3.5" />
+                      Coba Lagi (Lanjutkan)
+                    </button>
+                    {failedOn3d && (
+                      <button
+                        type="button"
+                        disabled={isAssembling}
+                        onClick={() => {
+                          setMediumChoice("2d_freeform");
+                          handleAssembleProject("2d_freeform");
+                        }}
+                        className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold cursor-pointer"
+                      >
+                        <Shapes className="h-3.5 w-3.5" />
+                        Buat Versi 2D Lebih Cepat
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onOpenSettings}
+                      className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium cursor-pointer"
+                    >
+                      Ganti Model AI
+                    </button>
+                  </div>
+                  <details className="pt-1">
+                    <summary
+                      className="cursor-pointer text-[10px] font-medium select-none"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      Lihat detail teknis
+                    </summary>
+                    <pre
+                      className="mt-1.5 overflow-x-auto rounded p-2 font-mono-num text-[10px] whitespace-pre-wrap"
+                      style={{
+                        backgroundColor: "var(--bg-panel)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {assembleError.rawDetail}
+                    </pre>
+                  </details>
                 </div>
               )}
 
@@ -1725,7 +1835,7 @@ export default function WizardView({
                     {visualMode === "footage"
                       ? `Footage (${footageClips.length} klip)`
                       : resolvedMedium === "3d_diorama"
-                        ? "3D Diorama (By-Code)"
+                        ? "3D Scene (By-Code)"
                         : "2D Motion Bebas AI"}
                     {" · "}
                     {audioResult
@@ -1748,13 +1858,19 @@ export default function WizardView({
                   <button
                     type="button"
                     disabled={isAssembling || isFootageMandatoryMissing}
-                    onClick={handleAssembleProject}
+                    onClick={() => handleAssembleProject()}
                     className="ui-btn-primary inline-flex h-10 items-center gap-2 rounded-md px-5 text-xs font-bold disabled:opacity-50 cursor-pointer"
                   >
                     {isAssembling ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        {assembleStatus || "AI Director Sedang Meracik Video..."}
+                        <span>{assembleStatus || "AI Director sedang meracik video..."}</span>
+                        <span
+                          className="rounded px-1.5 py-0.5 font-mono-num text-[11px] font-bold"
+                          style={{ backgroundColor: "rgba(0,0,0,0.22)" }}
+                        >
+                          {formatStopwatch(assembleElapsedMs)}
+                        </span>
                       </>
                     ) : isFootageMandatoryMissing ? (
                       <>
@@ -1764,7 +1880,7 @@ export default function WizardView({
                     ) : (
                       <>
                         <Wand2 className="h-4 w-4" />
-                        Buat Video Sekarang
+                        {storyboardCheckpointRef.current ? "Lanjutkan Buat Video" : "Buat Video Sekarang"}
                       </>
                     )}
                   </button>

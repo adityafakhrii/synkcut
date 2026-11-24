@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use tauri::{AppHandle, Emitter};
 
 use crate::audio::{align_words_proportionally, synthesize_tts_with_fallback, WordTimestamp};
 use crate::byok;
@@ -566,8 +568,8 @@ pub async fn call_llm_json(
     image_data_urls: &[String],
 ) -> Result<(Value, String), String> {
     let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(110))
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(240))
         .build()
         .map_err(|e| format!("Gagal membuat HTTP client: {e}"))?;
 
@@ -3894,6 +3896,23 @@ pub struct Repair3DDioramaResponse {
     pub provider_used: String,
 }
 
+#[derive(Clone)]
+struct Cached3DSetup {
+    setup_code: String,
+    world_preset: String,
+    world_summary: String,
+    object_names: Vec<String>,
+    character_names: Vec<String>,
+    recommended_caption_look: Option<String>,
+    recommended_bgm: Option<String>,
+}
+
+static DIORAMA_3D_SETUP_CACHE: OnceLock<Mutex<HashMap<String, Cached3DSetup>>> = OnceLock::new();
+
+fn diorama_setup_cache() -> &'static Mutex<HashMap<String, Cached3DSetup>> {
+    DIORAMA_3D_SETUP_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 #[tauri::command]
 pub async fn ai_generate_3d_diorama(
     app: AppHandle,
@@ -3956,92 +3975,203 @@ pub async fn ai_generate_3d_diorama(
         .enumerate()
         .map(|(i, b)| {
             format!(
-                "- Beat #{i} ({}, {:.1}s–{:.1}s): title=\"{}\" | narasi=\"{}\" | konsep=\"{}\"",
+                "- Beat #{i} ({}, {:.1}s–{:.1}s): title=\"{}\" | konsep=\"{}\"",
                 b.role,
                 (b.start_ms as f64) / 1000.0,
                 (b.end_ms as f64) / 1000.0,
                 b.title,
-                b.text,
                 b.visual_concept
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
-    let system_prompt = format!(
-        "Kamu adalah Technical 3D Animator & Director (Three.js WebGL PBR) di Synkcut.\n\
-        Tugasmu merancang SATU DUNIA / SCENE 3D UTUH (100% by-code, nol aset contoh) yang sepenuhnya mengikuti PROMPT, TOPIK, & REFERENSI USER.\n\
-        ATURAN WAJIB:\n\
-        1. `setupCode`: Atur suasana & pencahayaan 100% sesuai mood prompt/referensi user memakai `D3.setupAtmosphere` (siang cerah, malam gelap, neon futuristik, luar angkasa berbintang, hangat indoor, atau studio bersih — JANGAN memaksa langit siang hari kalau prompt-nya bukan siang!). Helper cutaway (`buildOceanCutaway`, `buildGroundCutaway`, `buildRoomCutaway`, `buildStudioStage`) dan `D3.createCharacter` bersifat OPSIONAL: gunakan HANYA bila benar-benar cocok dengan topik user; selain itu bangun objek & lingkungan 3D sendiri dari nol pakai `D3.THREE` + primitif 3D! DILARANG membuat objek yang tidak nyambung dengan topik.\n\
-        2. `animateCode`: \n\
-           - Hitung `const tSec = state.globalTimeMs / 1000;`.\n\
-           - Gunakan `D3.lerpCamera(world, [...minimal 4-5 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak sinematik kontinu mengikuti cerita dari Beat 0 sampai beat terakhir.\n\
-           - Animasikan objek 3D & karakter (jika ada) sesuai `state.beatIndex` dan `state.beatProgress`.\n\
-           - Gunakan HUD (`D3.drawPopupTitle`, `D3.drawBadgeAt3D`, `D3.drawCalloutAt3D`, `D3.drawRuler`) HANYA jika memang relevan dengan topik.\n\
-        3. Pastikan koordinat kamera SELALU menghadap objek utama 3D dengan pencahayaan & kontras yang jelas (tidak gelap/kosong).\n\
-        4. Kembalikan HANYA JSON valid:\n\
-        {{\n\
-          \"worldPreset\": \"custom|ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
-          \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia tentang dunia 3D yang dibangun\",\n\
-          \"recommendedCaptionLook\": \"outline_bold|black_pill|clean_shadow|bold_outline|custom_pill|editorial_bar|minimal_clean\",\n\
-          \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
-          \"setupCode\": \"...pure JS body of setupWorld(world, D3)...\",\n\
-          \"animateCode\": \"...pure JS body of animateFrame(world, state, D3)...\",\n\
-          \"beatNotes\": [\"catatan kamera/aksi beat 0\", \"catatan kamera/aksi beat 1\", \"...\"]\n\
-        }}\n\n\
-        {DIORAMA_3D_SDK_REFERENCE}\n\n\
-        {skills_rules}"
+    let cache_key = format!(
+        "{}::{}::{}",
+        req.project_title.trim(),
+        req.beats.len(),
+        req.beats
+            .first()
+            .map(|b| b.text.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(64)
+            .collect::<String>()
     );
 
-    let user_prompt = format!(
-        "Proyek: \"{}\" (format: {})\n\
-        Arahan Referensi / Art Direction: {} — {}\n\
-        Palet Warna: bgTop={}, bgBottom={}, accentPrimary={}, isLight={}\n\
-        Gaya Subtitle: {} (posisi: {})\n\n\
-        Daftar Beat & Narasi Dubbing ({} beat):\n{}\n\n\
-        Bangun dunia 3D + kamera sinematik yang 100% otentik mengikuti topik, mood, & referensi di atas, kaya detail, dan bebas error!",
+    // STAGE 1: Build compact 3D world (`setupCode`) — automatically resumed from checkpoint if already built!
+    let cached_stage1 = diorama_setup_cache()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&cache_key).cloned());
+
+    let stage1: Cached3DSetup = if let Some(hit) = cached_stage1 {
+        let _ = app.emit(
+            "generation-progress",
+            "Melanjutkan dari checkpoint: Dunia 3D siap, menyusun animasi kamera (Tahap 2/2)...",
+        );
+        hit
+    } else {
+        let _ = app.emit(
+            "generation-progress",
+            "Tahap 1/2: Membangun objek, pencahayaan & dunia 3D...",
+        );
+
+        let setup_system = format!(
+            "Kamu adalah Technical 3D Artist (Three.js PBR) di Synkcut.\n\
+            Tugasmu HANYA menulis `setupCode` (body fungsi `setupWorld(world, D3)`) yang RINGKAS, PADAT (target 30–55 baris), CERAH/JERNIH, dan 100% sesuai topik & referensi user.\n\
+            ATURAN:\n\
+            1. Atur suasana & pencahayaan 100% sesuai mood prompt/referensi dengan `D3.setupAtmosphere` (atau helper cutaway OPSIONAL hanya jika benar-benar cocok dengan topik).\n\
+            2. Bangun objek utama topik dari primitif `D3` (beri `name` unik agar bisa dianimasikan di tahap 2) + 1–2 karakter (`D3.createCharacter`) HANYA jika relevan.\n\
+            3. DILARANG menulis komentar panjang atau boilerplate berlebih — jaga tetap ringkas agar cepat selesai!\n\
+            4. Balas HANYA JSON valid:\n\
+            {{\n\
+              \"worldPreset\": \"custom|ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
+              \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia\",\n\
+              \"objectNames\": [\"namaObjek1\", \"namaObjek2\"],\n\
+              \"characterNames\": [\"namaKarakter1\"],\n\
+              \"recommendedCaptionLook\": \"outline_bold|black_pill|clean_shadow|bold_outline|custom_pill\",\n\
+              \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
+              \"setupCode\": \"...pure JS body of setupWorld(world, D3), ringkas 30-55 baris...\"\n\
+            }}\n\n\
+            {DIORAMA_3D_SDK_REFERENCE}\n\n\
+            {skills_rules}"
+        );
+
+        let setup_user = format!(
+            "Proyek: \"{}\" (format: {})\n\
+            Arahan Referensi: {} — {}\n\
+            Palet: bgTop={}, bgBottom={}, accent={}, isLight={}\n\n\
+            Ringkasan Beat ({} beat):\n{}\n\n\
+            Tulis `setupCode` ringkas & kaya visual sesuai topik di atas dalam JSON!",
+            req.project_title.trim(),
+            req.format,
+            sanitized_custom.name,
+            sanitized_custom.art_direction_notes,
+            sanitized_custom.palette.bg_top,
+            sanitized_custom.palette.bg_bottom,
+            sanitized_custom.palette.accent_primary,
+            sanitized_custom.is_light,
+            req.beats.len(),
+            beat_lines
+        );
+
+        let (val1, _) = call_llm_json(&resolved, &setup_system, &setup_user, &[]).await?;
+        let setup_code = clean_js_code_output(val1["setupCode"].as_str().unwrap_or(""));
+        if setup_code.len() < 30 {
+            return Err("Tahap 1/2 (Bangun Dunia 3D) mengembalikan kode terlalu pendek.".to_string());
+        }
+        let world_preset = val1["worldPreset"]
+            .as_str()
+            .filter(|s| {
+                matches!(
+                    *s,
+                    "custom"
+                        | "ocean_cross_section"
+                        | "ground_cutaway"
+                        | "desert_cutaway"
+                        | "room_cutaway"
+                        | "outdoor_farm"
+                        | "studio_stage"
+                )
+            })
+            .unwrap_or(&sanitized_custom.world_preset)
+            .to_string();
+        let world_summary = val1["worldSummary"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| format!("Dunia 3D untuk {}", req.project_title.trim()));
+        let object_names: Vec<String> = val1["objectNames"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let character_names: Vec<String> = val1["characterNames"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let built = Cached3DSetup {
+            setup_code,
+            world_preset,
+            world_summary,
+            object_names,
+            character_names,
+            recommended_caption_look: val1["recommendedCaptionLook"]
+                .as_str()
+                .map(ToString::to_string),
+            recommended_bgm: val1["recommendedBgm"].as_str().map(ToString::to_string),
+        };
+
+        // Save Stage 1 checkpoint so any Stage 2 retry resumes instantaneously!
+        if let Ok(mut map) = diorama_setup_cache().lock() {
+            if map.len() > 8 {
+                map.clear();
+            }
+            map.insert(cache_key.clone(), built.clone());
+        }
+        built
+    };
+
+    // STAGE 2: Build compact continuous 3D camera + character/object animation (`animateCode`)!
+    let _ = app.emit(
+        "generation-progress",
+        "Tahap 2/2: Mengatur kamera 3D kontinu, aksi objek & HUD...",
+    );
+
+    let anim_system = format!(
+        "Kamu adalah 3D Camera & Motion Choreographer (Three.js) di Synkcut.\n\
+        Dunia 3D sudah dibangun di Tahap 1. Tugasmu HANYA menulis `animateCode` (body fungsi `animateFrame(world, state, D3)`) yang RINGKAS, PADAT (target 25–50 baris), dan 100% bebas error.\n\
+        ATURAN:\n\
+        1. Hitung `const tSec = state.globalTimeMs / 1000;`. Panggil `D3.animateClouds(world, tSec)` / `D3.animateOcean(world, tSec)` jika relevan.\n\
+        2. Gunakan `D3.lerpCamera(world, [...4-6 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak mulus lintas seluruh beat dan SELALU menghadap objek utama.\n\
+        3. Cek eksistensi `if (world.objects.nama)` atau `if (world.characters.nama)` sebelum memodifikasi properti agar tidak pernah null error!\n\
+        4. Gerakkan objek/karakter sesuai `state.beatIndex` & `state.beatProgress`, plus `D3.drawPopupTitle` di Beat 0 dan `D3.drawBadgeAt3D`/`D3.drawCalloutAt3D` bila relevan.\n\
+        5. Balas HANYA JSON valid: {{\"animateCode\": \"...pure JS body, ringkas 25-50 baris...\", \"beatNotes\": [\"arah kamera beat 0\", \"...\"]}}\n\n\
+        {DIORAMA_3D_SDK_REFERENCE}"
+    );
+
+    let anim_user = format!(
+        "Proyek: \"{}\" | Dunia 3D: {}\n\
+        `world.objects` tersedia: {:?}\n\
+        `world.characters` tersedia: {:?}\n\n\
+        Daftar Beat ({} beat):\n{}\n\n\
+        Tulis `animateCode` ringkas & sinematik dalam JSON!",
         req.project_title.trim(),
-        req.format,
-        sanitized_custom.name,
-        sanitized_custom.art_direction_notes,
-        sanitized_custom.palette.bg_top,
-        sanitized_custom.palette.bg_bottom,
-        sanitized_custom.palette.accent_primary,
-        sanitized_custom.is_light,
-        sanitized_custom.visual_style.caption_look,
-        sanitized_custom.caption_placement,
+        stage1.world_summary,
+        stage1.object_names,
+        stage1.character_names,
         req.beats.len(),
         beat_lines
     );
 
-    let (val, _provider) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+    let (val2, _provider) = call_llm_json(&resolved, &anim_system, &anim_user, &[]).await?;
+    let animate_code = clean_js_code_output(val2["animateCode"].as_str().unwrap_or(""));
+    if animate_code.len() < 30 {
+        return Err("Tahap 2/2 (Animasi Kamera 3D) mengembalikan kode terlalu pendek.".to_string());
+    }
 
-    let setup_code = clean_js_code_output(val["setupCode"].as_str().unwrap_or(""));
-    let animate_code = clean_js_code_output(val["animateCode"].as_str().unwrap_or(""));
-    let world_preset = val["worldPreset"]
-        .as_str()
-        .filter(|s| {
-            matches!(
-                *s,
-                "custom"
-                    | "ocean_cross_section"
-                    | "ground_cutaway"
-                    | "desert_cutaway"
-                    | "room_cutaway"
-                    | "outdoor_farm"
-                    | "studio_stage"
-            )
-        })
-        .unwrap_or(&sanitized_custom.world_preset)
-        .to_string();
-    let world_summary = val["worldSummary"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| format!("Dunia 3D untuk {}", req.project_title.trim()));
+    // Both stages succeeded — clear Stage 1 checkpoint cleanly
+    if let Ok(mut map) = diorama_setup_cache().lock() {
+        map.remove(&cache_key);
+    }
+
+    let setup_code = stage1.setup_code;
+    let world_preset = stage1.world_preset;
+    let world_summary = stage1.world_summary;
 
     if !had_user_custom_design {
-        if let Some(rec_look) = val["recommendedCaptionLook"].as_str() {
+        if let Some(rec_look) = stage1.recommended_caption_look.as_deref() {
             if matches!(
                 rec_look,
                 "black_pill"
@@ -4057,8 +4187,9 @@ pub async fn ai_generate_3d_diorama(
         }
     }
     let effective_bgm = if req.bgm_preset == "auto" || req.bgm_preset.trim().is_empty() {
-        val["recommendedBgm"]
-            .as_str()
+        stage1
+            .recommended_bgm
+            .as_deref()
             .filter(|s| matches!(*s, "upbeat_promo" | "lofi_chill" | "cinematic_pulse" | "minimal_tech"))
             .unwrap_or(&sanitized_custom.recommended_bgm)
             .to_string()
@@ -4068,7 +4199,7 @@ pub async fn ai_generate_3d_diorama(
     sanitized_custom.world_preset = world_preset.clone();
     sanitized_custom.recommended_bgm = effective_bgm.clone();
 
-    let beat_notes: Vec<String> = val["beatNotes"]
+    let beat_notes: Vec<String> = val2["beatNotes"]
         .as_array()
         .map(|arr| {
             arr.iter()

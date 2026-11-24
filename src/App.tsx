@@ -284,6 +284,7 @@ export default function App() {
     manualOpen?: boolean;
     manualTab?: "visual" | "style" | "audio";
     timeMs?: number;
+    generationDurationMs?: number;
   }>({});
 
   useEffect(() => {
@@ -411,12 +412,16 @@ export default function App() {
     setView("studio");
   }
 
-  async function handleWizardProjectCreated(project: SynkcutProject) {
+  async function handleWizardProjectCreated(
+    project: SynkcutProject,
+    generationDurationMs?: number
+  ) {
     const safeProject = normalizeProject(project);
     setHasActiveWizardDraft(false);
     setReturnViewFromSettings(null);
     await saveProject(safeProject);
     await refreshProjects();
+    setStudioInitOpts(generationDurationMs ? { generationDurationMs } : {});
     setActiveProject(safeProject);
     setView("studio");
   }
@@ -475,6 +480,7 @@ export default function App() {
           initialManualOpen={studioInitOpts.manualOpen}
           initialManualTab={studioInitOpts.manualTab}
           initialTimeMs={studioInitOpts.timeMs}
+          generationDurationMs={studioInitOpts.generationDurationMs}
           onToggleTheme={toggleTheme}
           onBackHome={() => {
             setStudioInitOpts({});

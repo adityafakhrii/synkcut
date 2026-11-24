@@ -99,6 +99,7 @@ import {
 } from "../lib/tauriBridge";
 import AiMotionEditor from "./AiMotionEditor";
 import DesignReferencePanel from "./DesignReferencePanel";
+import { formatGenerationDuration } from "../lib/friendlyError";
 
 export type ManualDrawerTab = "visual" | "style" | "audio";
 
@@ -112,6 +113,7 @@ interface StudioViewProps {
   initialManualOpen?: boolean;
   initialManualTab?: ManualDrawerTab;
   initialTimeMs?: number;
+  generationDurationMs?: number;
 }
 
 interface DirectorLogItem {
@@ -201,7 +203,11 @@ export default function StudioView({
   initialManualOpen = false,
   initialManualTab = "visual",
   initialTimeMs = 0,
+  generationDurationMs,
 }: StudioViewProps) {
+  const [showGenBadge, setShowGenBadge] = useState(
+    Boolean(generationDurationMs && generationDurationMs > 0)
+  );
   const [project, setProject] = useState<SynkcutProject>(() => normalizeProject(initialProject));
   const [pastHistory, setPastHistory] = useState<SynkcutProject[]>([]);
   const [futureHistory, setFutureHistory] = useState<SynkcutProject[]>([]);
@@ -1945,6 +1951,23 @@ export default function StudioView({
                 ? "Mengubah..."
                 : "Tersimpan"}
           </span>
+
+          {showGenBadge && generationDurationMs && (
+            <button
+              type="button"
+              onClick={() => setShowGenBadge(false)}
+              className="hidden shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold lg:inline-flex cursor-pointer"
+              style={{
+                backgroundColor: "var(--accent-soft)",
+                color: "var(--accent)",
+                border: "1px solid var(--accent)",
+              }}
+              title="Klik untuk menutup info waktu generate"
+            >
+              <Check className="h-3 w-3" />
+              Selesai dalam {formatGenerationDuration(generationDurationMs)}
+            </button>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">

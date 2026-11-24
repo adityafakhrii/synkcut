@@ -56,7 +56,10 @@ interface ProjectsHomeViewProps {
   isLoading: boolean;
   onNavigateSamples: () => void;
   onOpenNewModal: () => void;
-  onInstantProjectCreated: (project: SynkcutProject) => Promise<void>;
+  onInstantProjectCreated: (
+    project: SynkcutProject,
+    generationDurationMs?: number
+  ) => Promise<void>;
   onUseSample: (sample: SampleTemplate) => void;
   onOpenProject: (projectId: string) => void;
   onDuplicateProject: (projectId: string) => void;
@@ -1509,13 +1512,13 @@ export default function ProjectsHomeView({
           draft={reviewDraft}
           byokStatus={byokStatus}
           onClose={() => setReviewDraft(null)}
-          onProjectReady={async (project) => {
+          onProjectReady={async (project, generationDurationMs) => {
             setReviewDraft(null);
             setHeroPrompt("");
             setStyleRef(null);
             setAttachedClips([]);
             setShowDesignPanel(false);
-            await onInstantProjectCreated(project);
+            await onInstantProjectCreated(project, generationDurationMs);
           }}
         />
       )}
