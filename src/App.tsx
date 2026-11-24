@@ -258,6 +258,9 @@ export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(loadInitialTheme);
   const [view, setView] = useState<AppView>("loading");
   const [wizardFormat, setWizardFormat] = useState<ContentFormat>("ad_promo");
+  const [wizardSessionKey, setWizardSessionKey] = useState(0);
+  const [hasActiveWizardDraft, setHasActiveWizardDraft] = useState(false);
+  const [returnViewFromSettings, setReturnViewFromSettings] = useState<AppView | null>(null);
   const [showNewPicker, setShowNewPicker] = useState(false);
   const [byokStatus, setByokStatus] = useState<ByokStatus>({
     activeProvider: "gemini",
@@ -325,6 +328,7 @@ export default function App() {
       }
       if (hash === "wizard" || hash === "wizard-light") {
         setTheme(hash === "wizard-light" ? "light" : "dark");
+        setHasActiveWizardDraft(true);
         setView("wizard");
         return;
       }
@@ -386,11 +390,20 @@ export default function App() {
   async function handleStartWizard(format: ContentFormat) {
     setShowNewPicker(false);
     setWizardFormat(format);
+    setWizardSessionKey((k) => k + 1);
+    setHasActiveWizardDraft(true);
+    setReturnViewFromSettings(null);
     setView("wizard");
+  }
+
+  function handleOpenSettingsFrom(fromView: AppView) {
+    setReturnViewFromSettings(fromView);
+    setView("settings");
   }
 
   async function handleCreateBlankFormat(format: ContentFormat) {
     setShowNewPicker(false);
+    setHasActiveWizardDraft(false);
     const fresh = createBlankProjectForFormat(format);
     await saveProject(fresh);
     await refreshProjects();
@@ -400,6 +413,8 @@ export default function App() {
 
   async function handleWizardProjectCreated(project: SynkcutProject) {
     const safeProject = normalizeProject(project);
+    setHasActiveWizardDraft(false);
+    setReturnViewFromSettings(null);
     await saveProject(safeProject);
     await refreshProjects();
     setActiveProject(safeProject);
@@ -547,7 +562,7 @@ export default function App() {
             className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v1.3
+            v2.0
           </span>
         </div>
 
@@ -604,9 +619,25 @@ export default function App() {
             </span>
           </button>
 
+          {hasActiveWizardDraft && (
+            <button
+              type="button"
+              onClick={() => setView("wizard")}
+              className="ui-row flex w-full items-center justify-between rounded-md px-2.5 py-2 text-xs font-semibold cursor-pointer"
+              style={{
+                backgroundColor: view === "wizard" ? "var(--accent-soft)" : "var(--bg-elevated)",
+                color: "var(--accent)",
+                border: "1px solid var(--accent)",
+              }}
+            >
+              <span className="truncate">Lanjutkan Wizard</span>
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
+            </button>
+          )}
+
           <button
             type="button"
-            onClick={() => setView("settings")}
+            onClick={() => handleOpenSettingsFrom(view)}
             className="ui-row flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium cursor-pointer"
             style={{
               backgroundColor: view === "settings" ? "var(--bg-elevated)" : "transparent",
@@ -625,7 +656,7 @@ export default function App() {
         >
           <button
             type="button"
-            onClick={() => setView("settings")}
+            onClick={() => handleOpenSettingsFrom(view)}
             className="ui-btn-secondary flex w-full items-center justify-between rounded-md px-2.5 py-2 text-xs cursor-pointer"
           >
             <span className="flex items-center gap-2 min-w-0">
@@ -709,15 +740,23 @@ export default function App() {
           />
         )}
 
-        {view === "wizard" && (
-          <WizardView
-            initialFormat={wizardFormat}
-            byokStatus={byokStatus}
-            onCancel={() => setView("projects")}
-            onOpenSettings={() => setView("settings")}
-            onSkipToBlank={handleCreateBlankFormat}
-            onProjectCreated={handleWizardProjectCreated}
-          />
+        {/* Keep Wizard mounted while draft is active so switching to Settings to change AI model NEVER wipes generated script/audio! */}
+        {hasActiveWizardDraft && (
+          <div className={view === "wizard" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
+            <WizardView
+              key={wizardSessionKey}
+              initialFormat={wizardFormat}
+              byokStatus={byokStatus}
+              onCancel={() => {
+                setHasActiveWizardDraft(false);
+                setReturnViewFromSettings(null);
+                setView("projects");
+              }}
+              onOpenSettings={() => handleOpenSettingsFrom("wizard")}
+              onSkipToBlank={handleCreateBlankFormat}
+              onProjectCreated={handleWizardProjectCreated}
+            />
+          </div>
         )}
 
         {view === "settings" && (
@@ -725,7 +764,19 @@ export default function App() {
             mode="settings"
             byokStatus={byokStatus}
             onStatusChange={setByokStatus}
-            onDone={() => setView("projects")}
+            returnLabel={
+              returnViewFromSettings === "wizard" || hasActiveWizardDraft
+                ? "Kembali ke Wizard"
+                : undefined
+            }
+            onDone={() => {
+              const target =
+                returnViewFromSettings === "wizard" || hasActiveWizardDraft
+                  ? "wizard"
+                  : "projects";
+              setReturnViewFromSettings(null);
+              setView(target);
+            }}
           />
         )}
       </div>

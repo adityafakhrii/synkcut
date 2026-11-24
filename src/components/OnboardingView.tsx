@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ArrowLeft,
   ArrowRight,
   CheckCircle2,
   Cpu,
@@ -29,6 +30,7 @@ interface OnboardingViewProps {
   mode: "onboarding" | "settings";
   byokStatus: ByokStatus;
   onStatusChange: (status: ByokStatus) => void;
+  returnLabel?: string;
   onDone: () => void;
 }
 
@@ -144,6 +146,7 @@ export default function OnboardingView({
   mode,
   byokStatus,
   onStatusChange,
+  returnLabel,
   onDone,
 }: OnboardingViewProps) {
   const initialProvider: ByokProvider = byokStatus.activeProvider || "gemini";
@@ -822,6 +825,17 @@ export default function OnboardingView({
         style={{ backgroundColor: "var(--bg-panel)", borderColor: "var(--border-subtle)" }}
       >
         <div className="flex items-center gap-2.5">
+          {returnLabel && (
+            <button
+              type="button"
+              onClick={onDone}
+              className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold cursor-pointer"
+              style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              {returnLabel}
+            </button>
+          )}
           <h1 className="text-base font-bold tracking-tight">Pengaturan AI &amp; Motion Skills</h1>
           <span className="hidden text-xs sm:inline" style={{ color: "var(--text-muted)" }}>
             · Penyimpanan terenkripsi lokal

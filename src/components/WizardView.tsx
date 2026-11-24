@@ -641,14 +641,29 @@ export default function WizardView({
           })}
         </div>
 
-        <button
-          type="button"
-          onClick={() => onSkipToBlank(format)}
-          className="text-xs font-medium hover:underline cursor-pointer"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          Lewati ke Studio
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-semibold cursor-pointer"
+            title="Ganti provider atau model AI tanpa mereset script & progress Wizard"
+          >
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: hasAnyByok ? "var(--success)" : "var(--warning)" }}
+            />
+            {byokStatus.providers[byokStatus.activeProvider]?.model || byokStatus.activeProvider}
+            <span style={{ color: "var(--accent)" }}>· Ganti</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onSkipToBlank(format)}
+            className="text-xs font-medium hover:underline cursor-pointer"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            Lewati ke Studio
+          </button>
+        </div>
       </header>
 
       {/* Main Wizard Content */}
