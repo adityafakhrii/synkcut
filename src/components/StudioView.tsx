@@ -15,6 +15,7 @@ import {
   Minus,
   Moon,
   Music,
+  Palette,
   Paperclip,
   Pause,
   Pencil,
@@ -56,6 +57,7 @@ import {
   addSceneAfter,
   deleteScene,
   duplicateScene,
+  normalizeProject,
   reorderScenes,
   summarizeProjectDiff,
   updateSceneDuration,
@@ -88,8 +90,10 @@ import {
   type ExportResult,
   type MediaProbeInfo,
   type SidecarStatus,
+  type StyleReferenceResult,
 } from "../lib/tauriBridge";
 import AiMotionEditor from "./AiMotionEditor";
+import DesignReferencePanel from "./DesignReferencePanel";
 
 export type ManualDrawerTab = "visual" | "style" | "audio";
 
@@ -112,6 +116,7 @@ interface DirectorLogItem {
   changes?: string[];
   snapshotBefore?: SynkcutProject;
   reverted?: boolean;
+  needsVoiceSync?: boolean;
 }
 
 const CAPTION_PRESETS: Array<{ id: CaptionPreset; label: string; sample: string }> = [
@@ -192,7 +197,7 @@ export default function StudioView({
   initialManualTab = "visual",
   initialTimeMs = 0,
 }: StudioViewProps) {
-  const [project, setProject] = useState<SynkcutProject>(initialProject);
+  const [project, setProject] = useState<SynkcutProject>(() => normalizeProject(initialProject));
   const [pastHistory, setPastHistory] = useState<SynkcutProject[]>([]);
   const [futureHistory, setFutureHistory] = useState<SynkcutProject[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
@@ -200,6 +205,8 @@ export default function StudioView({
   // Clean 2-Column Lovable Workspace State
   const [showManualDrawer, setShowManualDrawer] = useState(initialManualOpen);
   const [manualTab, setManualTab] = useState<ManualDrawerTab>(initialManualTab);
+  const [studioStyleRef, setStudioStyleRef] = useState<StyleReferenceResult | null>(null);
+  const [showStudioDesignEditor, setShowStudioDesignEditor] = useState(false);
   const [selectedSceneId, setSelectedSceneId] = useState<string>(() => {
     const matched = initialProject.scenes.find(
       (s) => initialTimeMs >= s.startMs && initialTimeMs < s.endMs
@@ -262,8 +269,8 @@ export default function StudioView({
   const exportAbortRef = useRef<AbortController | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const secondaryVideoRef = useRef<HTMLVideoElement | null>(null);
+  const videoPoolRef = useRef<Record<string, HTMLVideoElement | null>>({});
+  const lastPlaySceneIdRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
   const auditionAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -282,6 +289,21 @@ export default function StudioView({
     return byId ?? project.scenes[0] ?? null;
   }, [project.scenes, selectedSceneId]);
 
+  // Keep selectedSceneId & audioPath synced cleanly whenever project structure updates
+  useEffect(() => {
+    if (project.scenes.length > 0 && !project.scenes.some((s) => s.id === selectedSceneId)) {
+      setSelectedSceneId(project.scenes[0].id);
+    }
+  }, [project.scenes, selectedSceneId]);
+
+  useEffect(() => {
+    const nextAudio = project.voiceover?.audioPath ?? null;
+    if (nextAudio !== audioPath) {
+      setAudioPath(nextAudio);
+      if (nextAudio) setGenerateDemoAudio(false);
+    }
+  }, [project.voiceover?.audioPath, audioPath]);
+
   const activeSceneIndex = useMemo(() => {
     if (!activeScene) return 0;
     const idx = project.scenes.findIndex((s) => s.id === activeScene.id);
@@ -290,13 +312,16 @@ export default function StudioView({
 
   const projectClipPaths = useMemo(() => {
     const set = new Set<string>();
+    for (const lib of project.footageLibrary ?? []) {
+      if (lib.path) set.add(lib.path);
+    }
     for (const s of project.scenes) {
-      if (s.media.path) set.add(s.media.path);
-      if (s.media.secondaryPath) set.add(s.media.secondaryPath);
+      if (s.media?.path) set.add(s.media.path);
+      if (s.media?.secondaryPath) set.add(s.media.secondaryPath);
     }
     if (footagePath) set.add(footagePath);
     return Array.from(set);
-  }, [project.scenes, footagePath]);
+  }, [project.scenes, project.footageLibrary, footagePath]);
 
   const hasAnyFootage = projectClipPaths.length > 0;
   const hasAnyMotion = project.scenes.some((s) => s.visualSource === "motion");
@@ -325,7 +350,8 @@ export default function StudioView({
     recordHistory = true
   ) {
     setProject((prev) => {
-      const next = updater(prev);
+      const rawNext = updater(prev);
+      const next = normalizeProject(rawNext, prev);
       if (recordHistory) {
         setPastHistory((h) => [...h.slice(-24), prev]);
         setFutureHistory([]);
@@ -482,55 +508,85 @@ export default function StudioView({
     );
   }, [project.scenes, currentTimeMs]);
 
-  const activeMediaPath = currentPlayScene?.media.path || footagePath;
-  const activeSecondaryPath = currentPlayScene?.media.secondaryPath || null;
+  const activeMediaPath =
+    currentPlayScene?.visualSource === "motion"
+      ? null
+      : currentPlayScene?.media?.path || footagePath;
+  const activeSecondaryPath = currentPlayScene?.media?.secondaryPath || null;
 
-  // Render 9:16 preview frame
+  // Seamless Multi-Clip Pool Sync + Render 9:16 preview frame
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const videoEl = videoRef.current;
-    if (
-      videoEl &&
-      activeMediaPath &&
-      !isPlaying &&
-      videoEl.readyState >= 2 &&
-      videoEl.duration > 0
-    ) {
-      const localSec =
-        Math.max(
-          0,
-          currentTimeMs -
-            (currentPlayScene?.startMs ?? 0) +
-            (currentPlayScene?.media.trimStartMs ?? 0)
-        ) / 1000;
-      const targetSec = localSec % videoEl.duration;
-      if (Math.abs(videoEl.currentTime - targetSec) > 0.04) {
-        videoEl.currentTime = targetSec;
-      }
-    }
+    const videoEl = activeMediaPath ? (videoPoolRef.current[activeMediaPath] ?? null) : null;
+    const secVideoEl = activeSecondaryPath
+      ? (videoPoolRef.current[activeSecondaryPath] ?? null)
+      : null;
 
-    const secVideoEl = secondaryVideoRef.current;
-    if (
-      secVideoEl &&
-      activeSecondaryPath &&
-      !isPlaying &&
-      secVideoEl.readyState >= 2 &&
-      secVideoEl.duration > 0
-    ) {
-      const localSec = Math.max(0, currentTimeMs - (currentPlayScene?.startMs ?? 0)) / 1000;
-      const targetSec = localSec % secVideoEl.duration;
-      if (Math.abs(secVideoEl.currentTime - targetSec) > 0.04) {
-        secVideoEl.currentTime = targetSec;
+    const sceneChanged = currentPlayScene?.id !== lastPlaySceneIdRef.current;
+
+    if (isPlaying && sceneChanged) {
+      lastPlaySceneIdRef.current = currentPlayScene?.id ?? null;
+
+      // Pause any inactive pool videos so audio/decoder resources stay clean
+      for (const [p, el] of Object.entries(videoPoolRef.current)) {
+        if (!el) continue;
+        if (p !== activeMediaPath && p !== activeSecondaryPath) {
+          if (!el.paused) el.pause();
+        }
+      }
+
+      if (videoEl && currentPlayScene && videoEl.readyState >= 1 && videoEl.duration > 0) {
+        const localSec =
+          Math.max(
+            0,
+            currentTimeMs - currentPlayScene.startMs + (currentPlayScene.media?.trimStartMs ?? 0)
+          ) / 1000;
+        const targetSec = localSec % videoEl.duration;
+        if (Math.abs(videoEl.currentTime - targetSec) > 0.08) {
+          videoEl.currentTime = targetSec;
+        }
+        videoEl.play().catch(() => {});
+      }
+
+      if (secVideoEl && currentPlayScene && secVideoEl.readyState >= 1 && secVideoEl.duration > 0) {
+        const localSec = Math.max(0, currentTimeMs - currentPlayScene.startMs) / 1000;
+        const targetSec = localSec % secVideoEl.duration;
+        if (Math.abs(secVideoEl.currentTime - targetSec) > 0.08) {
+          secVideoEl.currentTime = targetSec;
+        }
+        secVideoEl.play().catch(() => {});
+      }
+    } else if (!isPlaying) {
+      lastPlaySceneIdRef.current = null;
+      if (videoEl && activeMediaPath && videoEl.readyState >= 2 && videoEl.duration > 0) {
+        const localSec =
+          Math.max(
+            0,
+            currentTimeMs -
+              (currentPlayScene?.startMs ?? 0) +
+              (currentPlayScene?.media?.trimStartMs ?? 0)
+          ) / 1000;
+        const targetSec = localSec % videoEl.duration;
+        if (Math.abs(videoEl.currentTime - targetSec) > 0.04) {
+          videoEl.currentTime = targetSec;
+        }
+      }
+      if (secVideoEl && activeSecondaryPath && secVideoEl.readyState >= 2 && secVideoEl.duration > 0) {
+        const localSec = Math.max(0, currentTimeMs - (currentPlayScene?.startMs ?? 0)) / 1000;
+        const targetSec = localSec % secVideoEl.duration;
+        if (Math.abs(secVideoEl.currentTime - targetSec) > 0.04) {
+          secVideoEl.currentTime = targetSec;
+        }
       }
     }
 
     renderProjectFrame(ctx, project, currentTimeMs, {
-      videoElement: activeMediaPath ? videoEl : null,
-      secondaryVideoElement: activeSecondaryPath ? secVideoEl : null,
+      videoElement: videoEl,
+      secondaryVideoElement: secVideoEl,
       showSafeZone,
       isPreviewPaused: !isPlaying,
     });
@@ -544,17 +600,19 @@ export default function StudioView({
     currentPlayScene,
   ]);
 
-  // Playback loop + synced audio
+  // Playback loop + synced audio across multi-clip pool
   useEffect(() => {
     const audioEl = audioRef.current;
     const bgmEl = bgmAudioRef.current;
     if (!isPlaying) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      videoRef.current?.pause();
-      secondaryVideoRef.current?.pause();
+      for (const el of Object.values(videoPoolRef.current)) {
+        el?.pause();
+      }
       audioEl?.pause();
       bgmEl?.pause();
       lastTriggeredSceneIdRef.current = null;
+      lastPlaySceneIdRef.current = null;
       return;
     }
 
@@ -564,9 +622,25 @@ export default function StudioView({
       setIsAuditioningBgm(false);
     }
 
-    if (videoRef.current && activeMediaPath) videoRef.current.play().catch(() => {});
-    if (secondaryVideoRef.current && activeSecondaryPath) {
-      secondaryVideoRef.current.play().catch(() => {});
+    const activeVideoEl = activeMediaPath ? (videoPoolRef.current[activeMediaPath] ?? null) : null;
+    const secVideoEl = activeSecondaryPath
+      ? (videoPoolRef.current[activeSecondaryPath] ?? null)
+      : null;
+
+    if (activeVideoEl && currentPlayScene) {
+      if (activeVideoEl.duration > 0) {
+        const localSec =
+          Math.max(
+            0,
+            currentTimeMs - currentPlayScene.startMs + (currentPlayScene.media?.trimStartMs ?? 0)
+          ) / 1000;
+        activeVideoEl.currentTime = localSec % activeVideoEl.duration;
+      }
+      activeVideoEl.play().catch(() => {});
+      lastPlaySceneIdRef.current = currentPlayScene.id;
+    }
+    if (secVideoEl) {
+      secVideoEl.play().catch(() => {});
     }
     if (audioEl && audioPath) {
       const targetAudioSec = currentTimeMs / 1000;
@@ -590,11 +664,13 @@ export default function StudioView({
       setCurrentTimeMs((prev) => {
         const next = prev + delta;
         if (next >= totalDurationMs) {
-          if (videoRef.current) videoRef.current.currentTime = 0;
-          if (secondaryVideoRef.current) secondaryVideoRef.current.currentTime = 0;
+          for (const el of Object.values(videoPoolRef.current)) {
+            if (el) el.currentTime = 0;
+          }
           if (audioEl) audioEl.currentTime = 0;
           if (bgmEl) bgmEl.currentTime = 0;
           lastTriggeredSceneIdRef.current = null;
+          lastPlaySceneIdRef.current = null;
           return 0;
         }
         return next;
@@ -606,7 +682,7 @@ export default function StudioView({
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isPlaying, totalDurationMs, activeMediaPath, activeSecondaryPath, audioPath, bgmAssetUrl]);
+  }, [isPlaying, totalDurationMs, audioPath, bgmAssetUrl]);
 
   // Timed SFX trigger during live preview
   useEffect(() => {
@@ -709,6 +785,24 @@ export default function StudioView({
         setClipProbes((prev) => ({ ...prev, [picked]: info }));
         const thumbs = await extractThumbnails(picked, 2);
         setFootageThumbs(thumbs);
+        const clipName = picked.split(/[\\/]/).pop() || "clip.mp4";
+        commitProjectChange((prev) => {
+          const existing = prev.footageLibrary ?? [];
+          if (existing.some((c) => c.path === picked)) return prev;
+          return {
+            ...prev,
+            footageLibrary: [
+              ...existing,
+              {
+                path: picked,
+                fileName: clipName,
+                durationMs: info.durationMs,
+                width: info.width,
+                height: info.height,
+              },
+            ],
+          };
+        }, false);
       } catch (err) {
         console.error(err);
       }
@@ -930,12 +1024,13 @@ export default function StudioView({
     }
   }
 
-  async function handleQuickGenerateTts(logToChat = false) {
+  async function handleQuickGenerateTts(logToChat = false, overrideProject?: SynkcutProject) {
     if (!isTauriRuntime() || isGeneratingTts) return;
-    const fullText = project.scenes.map((s) => s.text.trim()).filter(Boolean).join(" ");
+    const baseProj = overrideProject ?? project;
+    const fullText = baseProj.scenes.map((s) => (s.text || "").trim()).filter(Boolean).join(" ");
     if (!fullText) return;
     setIsGeneratingTts(true);
-    const before = project;
+    const before = baseProj;
     try {
       const engine = byokStatus.providers.gemini?.configured
         ? "gemini"
@@ -951,8 +1046,28 @@ export default function StudioView({
       });
       setAudioPath(res.audioPath);
       setGenerateDemoAudio(false);
+
+      // Lock every scene's startMs/endMs proportionally to the real newly generated audio duration
+      const safeTotal = Math.max(2000, res.durationMs || 4000);
+      const wordCounts = before.scenes.map((s) =>
+        Math.max(1, (s.text || "").trim().split(/\s+/).filter(Boolean).length)
+      );
+      const sumWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
+      let cursor = 0;
+      const syncedScenes = before.scenes.map((sc, idx) => {
+        const span = Math.max(800, Math.round((wordCounts[idx] / sumWords) * safeTotal));
+        const startMs = cursor;
+        const endMs =
+          idx === before.scenes.length - 1
+            ? Math.max(startMs + 800, safeTotal)
+            : Math.min(safeTotal - 400, startMs + span);
+        cursor = endMs;
+        return { ...sc, startMs, endMs };
+      });
+
       const next: SynkcutProject = {
         ...before,
+        scenes: syncedScenes,
         voiceover: {
           ...before.voiceover,
           source: "tts",
@@ -964,9 +1079,9 @@ export default function StudioView({
       if (logToChat) {
         pushDirectorMessage(
           "assistant",
-          `Voiceover TTS selesai dibuat (${res.providerUsed}, ${(res.durationMs / 1000).toFixed(1)} dtk) dan disinkronkan ke subtitle.`,
+          `Voiceover TTS selesai dibuat (${res.providerUsed}, ${(res.durationMs / 1000).toFixed(1)} dtk) dan seluruh durasi cut + subtitle sudah disinkronkan.`,
           {
-            changes: [`Voiceover TTS (${res.providerUsed})`],
+            changes: [`Voiceover TTS (${res.providerUsed})`, `Durasi → ${(res.durationMs / 1000).toFixed(1)}s`],
             snapshotBefore: before,
           }
         );
@@ -1185,7 +1300,7 @@ export default function StudioView({
   function pushDirectorMessage(
     role: "user" | "assistant",
     text: string,
-    extra?: { changes?: string[]; snapshotBefore?: SynkcutProject }
+    extra?: { changes?: string[]; snapshotBefore?: SynkcutProject; needsVoiceSync?: boolean }
   ) {
     setDirectorLog((prev) => [
       ...prev.slice(-16),
@@ -1195,6 +1310,7 @@ export default function StudioView({
         text,
         changes: extra?.changes,
         snapshotBefore: extra?.snapshotBefore,
+        needsVoiceSync: extra?.needsVoiceSync,
       },
     ]);
   }
@@ -1241,18 +1357,33 @@ export default function StudioView({
       try {
         const focusId = targetAllScenes ? null : (activeScene?.id ?? null);
         const res = await aiCopilotPatch(before, raw, focusId);
+        const safePatched = normalizeProject(res.project, before);
         const patched: SynkcutProject = {
-          ...res.project,
+          ...safePatched,
           voiceover: {
-            ...res.project.voiceover,
-            words: rebuildWordsFromScenes(res.project),
+            ...safePatched.voiceover,
+            words: rebuildWordsFromScenes(safePatched),
           },
         };
+        const beforeScript = before.scenes.map((s) => s.text.trim()).join(" ");
+        const afterScript = patched.scenes.map((s) => s.text.trim()).join(" ");
+        const scriptChanged = beforeScript !== afterScript;
+        const wantsVoiceRegen =
+          lower.includes("suara") ||
+          lower.includes("voiceover") ||
+          lower.includes("tts") ||
+          lower.includes("dubbing");
+
         commitProjectChange(() => patched);
         pushDirectorMessage("assistant", `${res.reply} (${res.providerUsed})`, {
           changes: summarizeProjectDiff(before, patched),
           snapshotBefore: before,
+          needsVoiceSync: scriptChanged && !wantsVoiceRegen,
         });
+
+        if (scriptChanged && wantsVoiceRegen) {
+          await handleQuickGenerateTts(true, patched);
+        }
       } catch (err) {
         pushDirectorMessage(
           "assistant",
@@ -1626,7 +1757,7 @@ export default function StudioView({
         audioPath,
         generateDemoAudio,
         outputPath: savePath,
-        videoElement: footagePath ? videoRef.current : null,
+        videoElement: activeMediaPath ? (videoPoolRef.current[activeMediaPath] ?? null) : null,
         signal: controller.signal,
         onProgress: (upd) => {
           setExportPct(upd.percent);
@@ -1707,11 +1838,14 @@ export default function StudioView({
       className="flex h-screen flex-col overflow-hidden"
       style={{ backgroundColor: "var(--bg-app)", color: "var(--text-primary)" }}
     >
-      {/* Hidden Media Elements */}
-      {activeMediaPath && (
+      {/* Hidden Multi-Clip Media Pool (Seamless Zero-Flash Multi-Footage Playback) */}
+      {projectClipPaths.map((clipPath) => (
         <video
-          ref={videoRef}
-          src={toAssetUrl(activeMediaPath)}
+          key={clipPath}
+          ref={(el) => {
+            videoPoolRef.current[clipPath] = el;
+          }}
+          src={toAssetUrl(clipPath)}
           muted
           playsInline
           preload="auto"
@@ -1719,19 +1853,7 @@ export default function StudioView({
           className="hidden"
           onLoadedData={() => setCurrentTimeMs((t) => t)}
         />
-      )}
-      {activeSecondaryPath && (
-        <video
-          ref={secondaryVideoRef}
-          src={toAssetUrl(activeSecondaryPath)}
-          muted
-          playsInline
-          preload="auto"
-          crossOrigin="anonymous"
-          className="hidden"
-          onLoadedData={() => setCurrentTimeMs((t) => t)}
-        />
-      )}
+      ))}
       {audioPath && (
         <audio ref={audioRef} src={toAssetUrl(audioPath)} preload="auto" className="hidden" />
       )}
@@ -1948,6 +2070,25 @@ export default function StudioView({
                               {chg}
                             </span>
                           ))}
+                        </div>
+                      )}
+
+                      {msg.role === "assistant" && msg.needsVoiceSync && isTauriRuntime() && (
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            disabled={isGeneratingTts}
+                            onClick={() => handleQuickGenerateTts(true)}
+                            className="ui-btn-secondary inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold disabled:opacity-45 cursor-pointer"
+                            style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+                          >
+                            {isGeneratingTts ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Volume2 className="h-3 w-3" />
+                            )}
+                            Sinkronkan Ulang Suara TTS ke Script Baru
+                          </button>
                         </div>
                       )}
 
@@ -2753,6 +2894,106 @@ export default function StudioView({
                       onChange={(e) => handleSceneTextChange(activeScene.id, e.target.value)}
                       className="ui-input w-full resize-none rounded-md p-2.5 text-xs leading-relaxed"
                     />
+                  </div>
+
+                  {/* Custom Design Direction inside Studio */}
+                  <div className="space-y-2 border-t pt-3.5" style={{ borderColor: "var(--border-subtle)" }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
+                        <Palette className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+                        Arahan Desain Custom
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowStudioDesignEditor((v) => !v)}
+                        className="text-xs font-medium hover:underline cursor-pointer"
+                        style={{ color: "var(--accent)" }}
+                      >
+                        {showStudioDesignEditor
+                          ? "Tutup"
+                          : project.globalStyle.customDesign
+                            ? "Ganti Referensi"
+                            : "+ Dari Referensi"}
+                      </button>
+                    </div>
+
+                    {project.globalStyle.customDesign && !showStudioDesignEditor && (
+                      <div
+                        className="rounded-lg p-2.5 space-y-1.5"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          border: "1px solid var(--accent)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-bold">
+                            {project.globalStyle.customDesign.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              commitProjectChange((prev) => ({
+                                ...prev,
+                                globalStyle: { ...prev.globalStyle, customDesign: null },
+                              }))
+                            }
+                            className="text-[11px] hover:underline cursor-pointer"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {[
+                            project.globalStyle.customDesign.palette.bgTop,
+                            project.globalStyle.customDesign.palette.bgBottom,
+                            project.globalStyle.customDesign.palette.textPrimary,
+                            project.globalStyle.customDesign.palette.accentPrimary,
+                            project.globalStyle.customDesign.palette.accentSecondary,
+                          ].map((hex, i) => (
+                            <span
+                              key={i}
+                              className="h-3.5 w-3.5 rounded-sm"
+                              style={{
+                                backgroundColor: hex,
+                                border: "1px solid rgba(128,128,128,0.35)",
+                              }}
+                              title={hex}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {showStudioDesignEditor && (
+                      <DesignReferencePanel
+                        value={studioStyleRef}
+                        compact
+                        onChange={(res) => {
+                          setStudioStyleRef(res);
+                          if (res?.customDesign) {
+                            commitProjectChange((prev) => ({
+                              ...prev,
+                              version: "1.1",
+                              styleReference: {
+                                sourceType: res.sourceType,
+                                url: res.url ?? undefined,
+                                title: res.title,
+                                thumbnails: res.thumbnails,
+                                styleDnaSummary: res.styleDnaSummary,
+                                customDesign: res.customDesign,
+                              },
+                              globalStyle: {
+                                ...prev.globalStyle,
+                                accentColor: res.customDesign.palette.accentPrimary,
+                                customDesign: res.customDesign,
+                              },
+                            }));
+                            setShowStudioDesignEditor(false);
+                          }
+                        }}
+                      />
+                    )}
                   </div>
 
                   {/* Caption Style & Accent Color */}

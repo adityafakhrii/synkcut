@@ -7,11 +7,13 @@ import type {
   ByokProvider,
   ByokStatus,
   ConnectionTestResult,
+  CustomDesignDirection,
   ProjectStyleReference,
   ProjectSummary,
   SynkcutProject,
 } from "../types/scene";
 import { createDefaultAiMotion } from "../engine/aiMotionPresets";
+import { normalizeProject } from "../engine/sceneOps";
 
 export interface SidecarStatus {
   ffmpegReady: boolean;
@@ -121,12 +123,25 @@ export async function pickExportSavePath(defaultName: string): Promise<string | 
   return selected ?? null;
 }
 
+export interface FootageFrameSample {
+  timestampMs: number;
+  dataUrl: string;
+}
+
 export async function probeMedia(path: string): Promise<MediaProbeInfo> {
   return invoke<MediaProbeInfo>("probe_media", { path });
 }
 
 export async function extractThumbnails(path: string, count = 2): Promise<string[]> {
   return invoke<string[]>("extract_thumbnails", { path, count });
+}
+
+export async function extractFootageFrames(
+  path: string,
+  count = 4
+): Promise<FootageFrameSample[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<FootageFrameSample[]>("extract_footage_frames", { path, count });
 }
 
 export interface AudioPresetMeta {
@@ -578,10 +593,11 @@ export interface FootageInputItem {
   fileName: string;
   durationMs: number;
   thumbnails: string[];
+  frameTimestampsMs?: number[];
 }
 
 export interface StyleReferenceResult {
-  sourceType: "youtube" | "images" | "local_video";
+  sourceType: "youtube" | "images" | "local_video" | "url" | "prompt";
   url?: string | null;
   title: string;
   thumbnails: string[];
@@ -591,31 +607,95 @@ export interface StyleReferenceResult {
   suggestedAccent: string;
   suggestedEngines: string[];
   layerUsed: string;
+  customDesign: CustomDesignDirection;
+}
+
+function makeBrowserFallbackCustomDesign(
+  title: string,
+  sampledColors?: string[]
+): CustomDesignDirection {
+  const bgTop = sampledColors?.[0] || "#0C1018";
+  const accentPrimary = sampledColors?.[1] || "#38E59D";
+  const accentSecondary = sampledColors?.[2] || "#F59E0B";
+  return {
+    name: title.slice(0, 28) || "Custom Studio Design",
+    summary:
+      "Arahan desain kustom dengan palet kontras tinggi, kartu kaca bersih, dan ritme 9:16 dinamis.",
+    artDirectionNotes: "Gunakan palet kustom dari referensi dengan tipografi tajam & pacing cepat.",
+    isLight: false,
+    palette: {
+      bgTop,
+      bgBottom: "#161E2E",
+      surfaceBg: "rgba(20,25,36,0.88)",
+      surfaceBorder: "rgba(255,255,255,0.16)",
+      textPrimary: "#F5F7FA",
+      textSecondary: "#9BA6BA",
+      accentPrimary,
+      accentSecondary,
+      accentInk: "#07140E",
+    },
+    typography: {
+      headingFont: "sans",
+      bodyFont: "sans",
+      captionFont: "sans",
+      captionUppercase: true,
+    },
+    visualStyle: {
+      backgroundPattern: "aurora",
+      cardStyle: "glass",
+      cornerStyle: "rounded",
+      captionLook: "bold_outline",
+    },
+    pacing: "balanced",
+    preferredMotion: "zoom_punch",
+    preferredTransition: "pop_zoom",
+    preferredEngines: ["flow_diagram", "tech_cards", "motion_chart"],
+  };
+}
+
+export async function analyzeDesignReference(req: {
+  sourceType: "images" | "url" | "youtube" | "local_video" | "prompt";
+  title?: string | null;
+  url?: string | null;
+  designPrompt?: string | null;
+  thumbnails: string[];
+  sampledColors?: string[];
+}): Promise<StyleReferenceResult> {
+  if (!isTauriRuntime()) {
+    const title = req.title || req.url || req.designPrompt?.slice(0, 32) || "Desain Custom";
+    const customDesign = makeBrowserFallbackCustomDesign(title, req.sampledColors);
+    return {
+      sourceType: req.sourceType,
+      url: req.url ?? null,
+      title,
+      thumbnails: req.thumbnails.slice(0, 4),
+      styleDnaSummary: customDesign.summary,
+      suggestedTheme: customDesign.isLight ? "paper" : "carbon",
+      suggestedCaption: "bold_pop",
+      suggestedAccent: customDesign.palette.accentPrimary,
+      suggestedEngines: customDesign.preferredEngines,
+      layerUsed: "custom_ai",
+      customDesign,
+    };
+  }
+  return invoke<StyleReferenceResult>("analyze_design_reference", {
+    req: {
+      sourceType: req.sourceType,
+      title: req.title ?? null,
+      url: req.url ?? null,
+      designPrompt: req.designPrompt ?? null,
+      thumbnails: req.thumbnails,
+      sampledColors: req.sampledColors ?? [],
+    },
+  });
 }
 
 export async function extractYoutubeStyleReference(url: string): Promise<StyleReferenceResult> {
-  if (!isTauriRuntime()) {
-    const trimmed = url.trim();
-    if (!trimmed.includes("youtube.com") && !trimmed.includes("youtu.be")) {
-      throw new Error(
-        "Link belum valid. Gunakan link YouTube atau YouTube Shorts (mis. youtube.com/watch?v=...)."
-      );
-    }
-    return {
-      sourceType: "youtube",
-      url: trimmed,
-      title: "Referensi YouTube (Preview Browser)",
-      thumbnails: [],
-      styleDnaSummary:
-        "Gaya motion modern kontras tinggi dengan diagram alur bertahap, angka KPI tegas, dan pacing cepat 9:16.",
-      suggestedTheme: "carbon",
-      suggestedCaption: "bold_pop",
-      suggestedAccent: "#38E59D",
-      suggestedEngines: ["flow_diagram", "motion_chart", "tech_cards"],
-      layerUsed: "oembed_thumbnail",
-    };
-  }
-  return invoke<StyleReferenceResult>("extract_youtube_style_reference", { url });
+  return analyzeDesignReference({
+    sourceType: "url",
+    url,
+    thumbnails: [],
+  });
 }
 
 export async function analyzeStyleReference(req: {
@@ -624,28 +704,11 @@ export async function analyzeStyleReference(req: {
   url?: string | null;
   thumbnails: string[];
 }): Promise<StyleReferenceResult> {
-  if (!isTauriRuntime()) {
-    return {
-      sourceType: req.sourceType,
-      url: req.url ?? null,
-      title: req.title || "Referensi Gaya Visual",
-      thumbnails: req.thumbnails.slice(0, 4),
-      styleDnaSummary:
-        "Palet bersih kontras tinggi dengan tipografi tegas, cocok dipadukan dengan Flow & Diagram dan Tech Cards.",
-      suggestedTheme: "carbon",
-      suggestedCaption: "bold_pop",
-      suggestedAccent: "#38E59D",
-      suggestedEngines: ["flow_diagram", "tech_cards", "motion_chart"],
-      layerUsed: "local_fallback",
-    };
-  }
-  return invoke<StyleReferenceResult>("analyze_style_reference", {
-    req: {
-      sourceType: req.sourceType,
-      title: req.title ?? null,
-      url: req.url ?? null,
-      thumbnails: req.thumbnails,
-    },
+  return analyzeDesignReference({
+    sourceType: req.sourceType,
+    title: req.title ?? null,
+    url: req.url ?? null,
+    thumbnails: req.thumbnails,
   });
 }
 
@@ -655,6 +718,7 @@ export interface AssembleProjectRequest {
   hookText: string;
   bodySegments: string[];
   ctaText: string;
+  rawScript?: string | null;
   audioPath: string | null;
   audioSource: "tts" | "recorded" | "demo";
   trimSilence: boolean;
@@ -680,6 +744,11 @@ export interface AssembleProjectRequest {
   motionTheme?: AiMotionTheme;
   preferredEngines?: string[];
   styleReference?: ProjectStyleReference | null;
+  customDesign?: CustomDesignDirection | null;
+  autoGenerateVoiceover?: boolean;
+  ttsEngine?: "gemini" | "openai" | "windows_offline" | "auto";
+  ttsVoice?: string;
+  ttsTone?: string;
 }
 
 export interface CopilotPatchResponse {
@@ -827,7 +896,8 @@ export async function aiAssembleProject(req: AssembleProjectRequest): Promise<Sy
       }),
     };
   }
-  return invoke<SynkcutProject>("ai_assemble_project", { req });
+  const raw = await invoke<SynkcutProject>("ai_assemble_project", { req });
+  return normalizeProject(raw);
 }
 
 export async function aiCopilotPatch(
@@ -835,9 +905,13 @@ export async function aiCopilotPatch(
   instruction: string,
   selectedSceneId?: string | null
 ): Promise<CopilotPatchResponse> {
-  return invoke<CopilotPatchResponse>("ai_copilot_patch", {
+  const res = await invoke<CopilotPatchResponse>("ai_copilot_patch", {
     project,
     instruction,
     selectedSceneId: selectedSceneId ?? null,
   });
+  return {
+    ...res,
+    project: normalizeProject(res.project, project),
+  };
 }

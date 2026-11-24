@@ -350,6 +350,85 @@ async fn transcribe_with_openai_whisper(
     Ok((transcript, words))
 }
 
+/// Synthesize TTS with resilient fallback chain:
+/// preferred engine -> secondary configured cloud TTS -> guaranteed Windows Offline TTS.
+pub async fn synthesize_tts_with_fallback(
+    app: &AppHandle,
+    text: &str,
+    voice_name: &str,
+    tone: &str,
+    preferred_engine: &str,
+    allow_offline_fallback: bool,
+) -> Result<ProcessedAudioResult, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("Teks voiceover kosong. Isi script terlebih dahulu.".to_string());
+    }
+
+    let mut engines_to_try: Vec<&str> = Vec::new();
+    match preferred_engine {
+        "gemini" => {
+            engines_to_try.push("gemini");
+            if allow_offline_fallback {
+                if byok::read_stored_key("openai").is_some() {
+                    engines_to_try.push("openai");
+                }
+                engines_to_try.push("windows_offline");
+            }
+        }
+        "openai" => {
+            engines_to_try.push("openai");
+            if allow_offline_fallback {
+                if byok::read_stored_key("gemini").is_some() {
+                    engines_to_try.push("gemini");
+                }
+                engines_to_try.push("windows_offline");
+            }
+        }
+        "auto" => {
+            if byok::read_stored_key("gemini").is_some() {
+                engines_to_try.push("gemini");
+            }
+            if byok::read_stored_key("openai").is_some() {
+                engines_to_try.push("openai");
+            }
+            engines_to_try.push("windows_offline");
+        }
+        _ => {
+            engines_to_try.push("windows_offline");
+        }
+    }
+
+    let mut last_err = String::from("Gagal membuat suara TTS.");
+    for eng in engines_to_try {
+        let voice_for_eng = if eng == "openai"
+            && !matches!(
+                voice_name,
+                "nova" | "alloy" | "onyx" | "shimmer" | "echo" | "fable" | "ash" | "coral" | "sage"
+            ) {
+            "nova"
+        } else if eng == "gemini" && voice_name.trim().is_empty() {
+            "Kore"
+        } else {
+            voice_name
+        };
+
+        match generate_tts_single_engine(app, trimmed, voice_for_eng, tone, eng).await {
+            Ok(mut res) => {
+                if eng == "windows_offline" && preferred_engine != "windows_offline" && preferred_engine != "auto" {
+                    res.provider_used = format!("{} (fallback otomatis)", res.provider_used);
+                }
+                return Ok(res);
+            }
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+
+    Err(last_err)
+}
+
 #[tauri::command]
 pub async fn generate_tts_audio(
     app: AppHandle,
@@ -358,26 +437,31 @@ pub async fn generate_tts_audio(
     tone: String,
     engine: String,
 ) -> Result<ProcessedAudioResult, String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Err("Teks voiceover kosong. Isi script terlebih dahulu.".to_string());
-    }
+    synthesize_tts_with_fallback(&app, &text, &voice_name, &tone, &engine, true).await
+}
 
-    let cache_dir = audio_cache_dir(&app)?;
+async fn generate_tts_single_engine(
+    app: &AppHandle,
+    trimmed: &str,
+    voice_name: &str,
+    tone: &str,
+    engine: &str,
+) -> Result<ProcessedAudioResult, String> {
+    let cache_dir = audio_cache_dir(app)?;
     let stamp = now_millis();
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(45))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let (audio_path, provider_used): (PathBuf, String) = match engine.as_str() {
+    let (audio_path, provider_used): (PathBuf, String) = match engine {
         "gemini" => {
             let key = byok::read_stored_key("gemini").ok_or_else(|| {
                 "API Key Google Gemini belum diatur. Buka Pengaturan AI (BYOK) terlebih dahulu."
                     .to_string()
             })?;
 
-            let tone_prompt = match tone.as_str() {
+            let tone_prompt = match tone {
                 "profesional" => "Bacakan secara profesional, jelas, dan meyakinkan dalam Bahasa Indonesia:",
                 "persuasif" => "Bacakan secara energik, persuasif seperti iklan video pendek dalam Bahasa Indonesia:",
                 "lucu" => "Bacakan secara ekspresif, santai, dan menghibur dalam Bahasa Indonesia:",
@@ -408,10 +492,10 @@ pub async fn generate_tts_audio(
             });
 
             let tts_models = [
+                "gemini-2.5-flash-preview-tts",
                 "gemini-3.8-flash-lite-tts",
                 "gemini-3.8-flash-tts",
                 "gemini-3.1-flash-tts-preview",
-                "gemini-2.5-flash-preview-tts",
             ];
             let mut b64_audio: Option<String> = None;
             let mut last_err = String::from("Gemini TTS gagal.");
@@ -420,12 +504,13 @@ pub async fn generate_tts_audio(
                 let url = format!(
                     "https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent?key={key}"
                 );
-                let res = client
-                    .post(url)
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Gagal menghubungi Gemini TTS API: {e}"))?;
+                let res = match client.post(url).json(&payload).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = format!("Gagal menghubungi Gemini TTS API: {e}");
+                        continue;
+                    }
+                };
 
                 if res.status().is_success() {
                     let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
@@ -440,10 +525,10 @@ pub async fn generate_tts_audio(
                 let status = res.status().as_u16();
                 let err_body = res.text().await.unwrap_or_default();
                 last_err = format!(
-                    "Gemini TTS gagal (HTTP {status}). Cek kuota/key Gemini lo atau coba suara Windows Offline. Detail: {}",
+                    "Gemini TTS gagal (HTTP {status}). Detail: {}",
                     err_body.chars().take(180).collect::<String>()
                 );
-                if !matches!(status, 404 | 503 | 429) {
+                if !matches!(status, 404 | 503 | 429 | 400) {
                     return Err(last_err);
                 }
             }
@@ -508,19 +593,17 @@ pub async fn generate_tts_audio(
     };
 
     let path_str = audio_path.to_string_lossy().to_string();
-    let duration_ms = probe_audio_duration_ms(&app, &path_str)
+    let duration_ms = probe_audio_duration_ms(app, &path_str)
         .await
         .unwrap_or_else(|_| ((trimmed.split_whitespace().count() as u64) * 420).max(3000));
 
-    // Align known TTS script accurately to actual measured audio duration
-    // Try Gemini multimodal audio alignment if Gemini key exists for tight word timing
     let mut words = align_words_proportionally(trimmed, duration_ms);
     if engine == "gemini" {
         if let Some(key) = byok::read_stored_key("gemini") {
             if let Ok(bytes) = tokio::fs::read(&audio_path).await {
                 if bytes.len() <= 8 * 1024 * 1024 {
                     if let Ok((_, aligned)) =
-                        transcribe_with_gemini(&app, &key, &bytes, "audio/wav", Some(trimmed), duration_ms)
+                        transcribe_with_gemini(app, &key, &bytes, "audio/wav", Some(trimmed), duration_ms)
                             .await
                     {
                         if aligned.len() >= (trimmed.split_whitespace().count() / 2).max(1) {

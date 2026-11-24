@@ -5,18 +5,19 @@ function buildWordTimestamps(
 ): WordTimestamp[] {
   const words: WordTimestamp[] = [];
   for (const seg of segments) {
-    const tokens = seg.text
+    const safeText = typeof seg?.text === "string" ? seg.text : "";
+    const tokens = safeText
       .trim()
       .split(/\s+/)
       .filter(Boolean);
     if (tokens.length === 0) continue;
-    const totalDuration = seg.endMs - seg.startMs;
+    const totalDuration = Math.max(100, (seg.endMs || 0) - (seg.startMs || 0));
     const step = totalDuration / tokens.length;
     tokens.forEach((word, idx) => {
       words.push({
         word,
-        startMs: Math.round(seg.startMs + idx * step),
-        endMs: Math.round(seg.startMs + (idx + 1) * step),
+        startMs: Math.round((seg.startMs || 0) + idx * step),
+        endMs: Math.round((seg.startMs || 0) + (idx + 1) * step),
       });
     });
   }
@@ -119,11 +120,16 @@ export function createSampleProject(): SynkcutProject {
 
 export function rebuildWordsFromScenes(project: SynkcutProject): WordTimestamp[] {
   return buildWordTimestamps(
-    project.scenes.map((s) => ({ text: s.text, startMs: s.startMs, endMs: s.endMs }))
+    (project?.scenes ?? []).map((s) => ({
+      text: typeof s?.text === "string" ? s.text : "",
+      startMs: Number.isFinite(s?.startMs) ? s.startMs : 0,
+      endMs: Number.isFinite(s?.endMs) ? s.endMs : 2500,
+    }))
   );
 }
 
 export function getProjectDurationMs(project: SynkcutProject): number {
-  if (project.scenes.length === 0) return 0;
-  return Math.max(...project.scenes.map((s) => s.endMs));
+  const scenes = project?.scenes ?? [];
+  if (scenes.length === 0) return 0;
+  return Math.max(0, ...scenes.map((s) => (Number.isFinite(s?.endMs) ? s.endMs : 0)));
 }

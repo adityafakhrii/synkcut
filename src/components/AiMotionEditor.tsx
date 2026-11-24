@@ -20,6 +20,7 @@ import {
   createBreakdown3DPreset,
   createDefaultAiMotion,
 } from "../engine/aiMotionPresets";
+import { sanitizeAiMotionSpec } from "../engine/sceneOps";
 
 interface AiMotionEditorProps {
   spec: AiMotionSpec;
@@ -41,7 +42,8 @@ const STICK_ACTIONS: Array<{ id: StickFigureAction; label: string }> = [
   { id: "sad", label: "Sedih" },
 ];
 
-export default function AiMotionEditor({ spec, sceneText, onChange }: AiMotionEditorProps) {
+export default function AiMotionEditor({ spec: rawSpec, sceneText, onChange }: AiMotionEditorProps) {
+  const spec = sanitizeAiMotionSpec(rawSpec, sceneText || "AI Motion");
   function handleEngineChange(engine: AiMotionEngine) {
     const fresh = createDefaultAiMotion(engine, spec.theme, spec.title || sceneText);
     onChange(

@@ -3,21 +3,23 @@ import {
   ArrowRight,
   ArrowUp,
   Check,
+  CheckCircle2,
   Copy,
   Film,
   FolderOpen,
   Layers,
   LayoutGrid,
-  Link2,
   List,
   Loader2,
-  Paperclip,
+  Palette,
   Pencil,
   Play,
   Search,
   Shapes,
+  Sparkles,
   Trash2,
   Upload,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -34,14 +36,14 @@ import { rebuildWordsFromScenes } from "../engine/sampleProject";
 import {
   aiAssembleProject,
   aiGenerateScript,
-  extractThumbnails,
-  extractYoutubeStyleReference,
+  extractFootageFrames,
   isTauriRuntime,
   pickLocalVideos,
   probeMedia,
   type FootageInputItem,
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
+import DesignReferencePanel from "./DesignReferencePanel";
 import ProjectPosterCanvas from "./ProjectPosterCanvas";
 
 interface ProjectsHomeViewProps {
@@ -142,58 +144,92 @@ export default function ProjectsHomeView({
   const [renameValue, setRenameValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Lovable-style 1-Prompt to Video Home Composer
+  // Lovable-style 1-Prompt / Footage Auto-Cut Home Composer
   const [heroPrompt, setHeroPrompt] = useState("");
   const [heroVisualMode, setHeroVisualMode] = useState<"motion" | "footage" | "hybrid">("motion");
-  const [showAttachPanel, setShowAttachPanel] = useState(false);
-  const [refYoutubeUrl, setRefYoutubeUrl] = useState("");
+  const [showDesignPanel, setShowDesignPanel] = useState(false);
   const [styleRef, setStyleRef] = useState<StyleReferenceResult | null>(null);
   const [attachedClips, setAttachedClips] = useState<FootageInputItem[]>([]);
-  const [isAnalyzingRef, setIsAnalyzingRef] = useState(false);
+  const [heroTtsEngine, setHeroTtsEngine] = useState<"auto" | "gemini" | "openai" | "windows_offline">(
+    byokStatus.providers.gemini?.configured
+      ? "gemini"
+      : byokStatus.providers.openai?.configured
+        ? "openai"
+        : "windows_offline"
+  );
+  const [isLoadingClips, setIsLoadingClips] = useState(false);
+  const [isHelpingScript, setIsHelpingScript] = useState(false);
   const [isCreatingVideo, setIsCreatingVideo] = useState(false);
+  const [createStatusText, setCreateStatusText] = useState("");
   const [heroError, setHeroError] = useState<string | null>(null);
 
   const hasAnyByok = Object.values(byokStatus.providers).some((p) => p.configured);
+  const isFootageMode = heroVisualMode === "footage";
+  const totalAttachedDurationMs = attachedClips.reduce((acc, c) => acc + (c.durationMs || 0), 0);
+  const canSubmitHero =
+    heroPrompt.trim().length > 0 &&
+    !isCreatingVideo &&
+    (!isFootageMode || attachedClips.length > 0);
 
   async function handleAttachClips() {
-    if (!isTauriRuntime()) return;
+    if (!isTauriRuntime()) {
+      setHeroError("Pemilihan footage lokal hanya tersedia di aplikasi desktop Synkcut.");
+      return;
+    }
     const paths = await pickLocalVideos();
     if (paths.length === 0) return;
     setHeroError(null);
-    setIsAnalyzingRef(true);
+    setIsLoadingClips(true);
     try {
       const next: FootageInputItem[] = [];
       for (const path of paths) {
         if (attachedClips.some((c) => c.path === path)) continue;
         const info = await probeMedia(path);
-        const thumbnails = await extractThumbnails(path, 2);
+        const frames = await extractFootageFrames(path, 4);
         next.push({
           path,
           fileName: path.split(/[\\/]/).pop() || "clip.mp4",
           durationMs: info.durationMs,
-          thumbnails,
+          thumbnails: frames.map((f) => f.dataUrl),
+          frameTimestampsMs: frames.map((f) => f.timestampMs),
         });
       }
       setAttachedClips((prev) => [...prev, ...next]);
-      if (heroVisualMode === "motion") setHeroVisualMode("hybrid");
+      if (heroVisualMode === "motion") setHeroVisualMode("footage");
     } catch (err) {
       setHeroError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsAnalyzingRef(false);
+      setIsLoadingClips(false);
     }
   }
 
-  async function handleAnalyzeHeroYoutube() {
-    if (!refYoutubeUrl.trim()) return;
+  async function handleHelpWriteFootageScript() {
+    const seed = heroPrompt.trim();
+    if (!seed || isHelpingScript) return;
     setHeroError(null);
-    setIsAnalyzingRef(true);
+    setIsHelpingScript(true);
     try {
-      const res = await extractYoutubeStyleReference(refYoutubeUrl.trim());
-      setStyleRef(res);
+      const inferredFormat = inferFormatFromPrompt(seed);
+      const generated = await aiGenerateScript({
+        topic: seed,
+        format: inferredFormat,
+        tone: "santai",
+        targetDurationSec: 30,
+        visualMode: "footage",
+        styleReferenceSummary: styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,
+      });
+      const full = [
+        generated.hooks[0]?.text || "",
+        ...generated.bodySegments,
+        generated.cta,
+      ]
+        .filter((s) => s.trim())
+        .join("\n");
+      setHeroPrompt(full);
     } catch (err) {
       setHeroError(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsAnalyzingRef(false);
+      setIsHelpingScript(false);
     }
   }
 
@@ -202,8 +238,18 @@ export default function ProjectsHomeView({
     const trimmed = heroPrompt.trim();
     if (!trimmed || isCreatingVideo) return;
 
+    if (isFootageMode && attachedClips.length === 0) {
+      setHeroError("Mode Footage wajib melampirkan minimal 1 video footage lokal (bisa lebih dari 1).");
+      return;
+    }
+
     setHeroError(null);
     setIsCreatingVideo(true);
+    setCreateStatusText(
+      isFootageMode
+        ? "Membuat voiceover & memotong otomatis semua footage sesuai script..."
+        : "Meracik skrip & visual..."
+    );
     try {
       const inferredFormat = inferFormatFromPrompt(trimmed);
       let projectTitle = trimmed.split(/\s+/).slice(0, 5).join(" ");
@@ -213,8 +259,19 @@ export default function ProjectsHomeView({
         "Dengan tampilan visual yang jelas dan ringkas, audiens langsung paham dalam hitungan detik.",
       ];
       let ctaText = "Simpan video ini dan tulis topik berikutnya yang ingin dibahas!";
+      let rawScriptForAssemble: string | null = null;
 
-      if (isTauriRuntime() && hasAnyByok) {
+      if (isFootageMode) {
+        // Mode Footage: gunakan 100% script yang dilampirkan user untuk cut otomatis & voiceover!
+        rawScriptForAssemble = trimmed;
+        projectTitle =
+          trimmed
+            .split(/[.!?\n]/)[0]
+            ?.trim()
+            .split(/\s+/)
+            .slice(0, 5)
+            .join(" ") || "Video Footage Auto-Cut";
+      } else if (isTauriRuntime() && hasAnyByok) {
         try {
           const generated = await aiGenerateScript({
             topic: trimmed,
@@ -222,7 +279,8 @@ export default function ProjectsHomeView({
             tone: "santai",
             targetDurationSec: 30,
             visualMode: heroVisualMode,
-            styleReferenceSummary: styleRef?.styleDnaSummary ?? null,
+            styleReferenceSummary:
+              styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,
           });
           projectTitle = generated.projectTitle || projectTitle;
           hookText = generated.hooks[0]?.text || hookText;
@@ -240,12 +298,14 @@ export default function ProjectsHomeView({
             title: styleRef.title,
             thumbnails: styleRef.thumbnails,
             styleDnaSummary: styleRef.styleDnaSummary,
+            customDesign: styleRef.customDesign,
           }
         : null;
 
-      const motionTheme: AiMotionTheme = styleRef?.suggestedTheme ?? "carbon";
+      const customDesign = styleRef?.customDesign ?? null;
+      const motionTheme: AiMotionTheme = styleRef?.suggestedTheme ?? (customDesign?.isLight ? "paper" : "carbon");
       const captionPreset = styleRef?.suggestedCaption ?? "bold_pop";
-      const accentColor = styleRef?.suggestedAccent ?? "#38E59D";
+      const accentColor = customDesign?.palette.accentPrimary ?? styleRef?.suggestedAccent ?? "#38E59D";
 
       const assembled = await aiAssembleProject({
         projectTitle,
@@ -253,24 +313,32 @@ export default function ProjectsHomeView({
         hookText,
         bodySegments,
         ctaText,
+        rawScript: rawScriptForAssemble,
         audioPath: null,
-        audioSource: "demo",
+        audioSource: isFootageMode ? "tts" : "demo",
         trimSilence: true,
         durationMs: 0,
         words: [],
         footage: heroVisualMode === "motion" ? [] : attachedClips,
         captionPreset,
         accentColor,
-        motionPreset: heroVisualMode === "motion" ? "static_clean" : "zoom_punch",
-        transitionPreset: "pop_zoom",
+        motionPreset:
+          customDesign?.preferredMotion ??
+          (heroVisualMode === "motion" ? "static_clean" : "zoom_punch"),
+        transitionPreset: customDesign?.preferredTransition ?? "pop_zoom",
         overlayMode: heroVisualMode === "motion" ? "none" : "auto",
         bgmPreset: inferredFormat === "education" ? "lofi_education" : "tech_modern",
         autoDucking: true,
         autoSfx: true,
         visualMode: heroVisualMode,
         motionTheme,
-        preferredEngines: styleRef?.suggestedEngines,
+        preferredEngines: customDesign?.preferredEngines ?? styleRef?.suggestedEngines,
         styleReference,
+        customDesign,
+        autoGenerateVoiceover: isFootageMode || attachedClips.length > 0,
+        ttsEngine: heroTtsEngine,
+        ttsVoice: heroTtsEngine === "openai" ? "nova" : "Kore",
+        ttsTone: "santai",
       });
 
       if (!assembled.voiceover.words || assembled.voiceover.words.length === 0) {
@@ -280,12 +348,13 @@ export default function ProjectsHomeView({
       setHeroPrompt("");
       setStyleRef(null);
       setAttachedClips([]);
-      setShowAttachPanel(false);
+      setShowDesignPanel(false);
       await onInstantProjectCreated(assembled);
     } catch (err) {
       setHeroError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsCreatingVideo(false);
+      setCreateStatusText("");
     }
   }
 
@@ -587,97 +656,153 @@ export default function ProjectsHomeView({
               border: "1px solid var(--border-strong)",
             }}
           >
-            <textarea
-              rows={2}
-              value={heroPrompt}
-              onChange={(e) => setHeroPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleInstantCreate();
-                }
-              }}
-              placeholder="Contoh: Jelasin cara kerja internet dalam 30 detik pakai animasi diagram & grafik..."
-              className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none"
-              style={{ color: "var(--text-primary)" }}
-            />
+            {/* Mode-Specific Prompt / Mandatory Footage Script Box */}
+            <div className="space-y-2">
+              {isFootageMode && (
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <span className="text-xs font-bold">
+                    1. Script Video <span style={{ color: "var(--danger)" }}>*Wajib</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!heroPrompt.trim() || isHelpingScript || !hasAnyByok}
+                    onClick={handleHelpWriteFootageScript}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold hover:underline disabled:opacity-45 cursor-pointer"
+                    style={{ color: "var(--accent)" }}
+                    title="Tulis topik singkat lalu klik ini agar AI kembangkan jadi script utuh"
+                  >
+                    {isHelpingScript ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3 w-3" />
+                    )}
+                    {isHelpingScript ? "Menyusun script..." : "Kembangkan ide jadi script AI"}
+                  </button>
+                </div>
+              )}
 
-            {/* Optional Compact Attachment Strip (YouTube Ref or Local Clips) */}
-            {showAttachPanel && (
+              <textarea
+                rows={isFootageMode ? 4 : 2}
+                value={heroPrompt}
+                onChange={(e) => setHeroPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (!isFootageMode && e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleInstantCreate();
+                  }
+                }}
+                placeholder={
+                  isFootageMode
+                    ? "Tempel atau tulis script lengkap video lo di sini (mis. 3–8 kalimat). AI akan men-generate suara voiceover & memotong otomatis semua footage menjadi 1 video utuh sesuai durasi script..."
+                    : "Contoh: Jelasin cara kerja internet dalam 30 detik pakai animasi diagram & grafik..."
+                }
+                className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none"
+                style={{ color: "var(--text-primary)" }}
+              />
+            </div>
+
+            {/* MANDATORY MULTI-FOOTAGE & AUTO-VOICEOVER STRIP (Always Visible in Footage Mode, Optional in Hybrid) */}
+            {(isFootageMode || heroVisualMode === "hybrid" || attachedClips.length > 0) && (
               <div
                 className="space-y-2.5 border-t pt-3"
                 style={{ borderColor: "var(--border-subtle)" }}
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex min-w-[220px] flex-1 items-center gap-1.5">
-                    <Link2 className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />
-                    <input
-                      type="url"
-                      value={refYoutubeUrl}
-                      onChange={(e) => setRefYoutubeUrl(e.target.value)}
-                      placeholder="Opsional: tempel link YouTube / Shorts sebagai referensi gaya..."
-                      className="ui-input h-8 min-w-0 flex-1 rounded-md px-2.5 text-xs"
-                    />
-                    <button
-                      type="button"
-                      disabled={isAnalyzingRef || !refYoutubeUrl.trim()}
-                      onClick={handleAnalyzeHeroYoutube}
-                      className="ui-btn-secondary h-8 shrink-0 rounded-md px-2.5 text-xs font-semibold disabled:opacity-45 cursor-pointer"
-                    >
-                      {isAnalyzingRef ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Analisa"}
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={isAnalyzingRef || !isTauriRuntime()}
-                    onClick={handleAttachClips}
-                    className="ui-btn-secondary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold disabled:opacity-45 cursor-pointer"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    Tambah Klip Lokal
-                  </button>
-                </div>
-
-                {(styleRef || attachedClips.length > 0) && (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {styleRef && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold">
+                      {isFootageMode ? "2. Footage Video (Multi-Klip)" : "Klip Footage Lokal"}
+                      {isFootageMode && (
+                        <span className="ml-1" style={{ color: "var(--danger)" }}>
+                          *Wajib
+                        </span>
+                      )}
+                    </span>
+                    {attachedClips.length > 0 && (
                       <span
-                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
-                        style={{
-                          backgroundColor: "var(--accent-soft)",
-                          color: "var(--accent)",
-                        }}
+                        className="font-mono-num text-[11px]"
+                        style={{ color: "var(--text-muted)" }}
                       >
-                        <Link2 className="h-3 w-3" />
-                        Ref: {styleRef.title.slice(0, 32)}
-                        <button
-                          type="button"
-                          onClick={() => setStyleRef(null)}
-                          className="cursor-pointer"
-                          aria-label="Hapus referensi"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+                        {attachedClips.length} klip · total {formatDuration(totalAttachedDurationMs)}
                       </span>
                     )}
-                    {attachedClips.map((c) => (
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isFootageMode && (
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+                        <select
+                          value={heroTtsEngine}
+                          onChange={(e) =>
+                            setHeroTtsEngine(
+                              e.target.value as "auto" | "gemini" | "openai" | "windows_offline"
+                            )
+                          }
+                          aria-label="Mesin Suara Voiceover Otomatis"
+                          className="ui-input h-8 rounded-md px-2 text-xs font-medium"
+                        >
+                          <option value="gemini">Suara: Gemini TTS (Auto-Fallback)</option>
+                          <option value="openai">Suara: OpenAI TTS (Auto-Fallback)</option>
+                          <option value="windows_offline">Suara: Windows Offline TTS</option>
+                        </select>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={isLoadingClips || !isTauriRuntime()}
+                      onClick={handleAttachClips}
+                      className="ui-btn-secondary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold disabled:opacity-45 cursor-pointer"
+                    >
+                      {isLoadingClips ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="h-3.5 w-3.5" />
+                      )}
+                      {attachedClips.length > 0 ? "+ Tambah Klip Lagi" : "Pilih Footage (Bisa >1)"}
+                    </button>
+                  </div>
+                </div>
+
+                {attachedClips.length === 0 && isFootageMode ? (
+                  <div
+                    className="rounded-lg px-3 py-2.5 text-xs"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px dashed var(--border-strong)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Pilih 1 atau beberapa klip video (MP4/MOV/MKV). AI akan melihat isi frame
+                    setiap klip lalu memotong & menggabungkannya otomatis mengikuti timing suara
+                    script lo.
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {attachedClips.map((c, idx) => (
                       <span
                         key={c.path}
-                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium"
                         style={{
                           backgroundColor: "var(--bg-elevated)",
+                          border: "1px solid var(--border-subtle)",
                           color: "var(--text-primary)",
                         }}
                       >
-                        <Film className="h-3 w-3" />
-                        {c.fileName}
+                        <Film className="h-3 w-3 shrink-0" style={{ color: "var(--accent)" }} />
+                        <span className="max-w-[160px] truncate">
+                          #{idx + 1} {c.fileName}
+                        </span>
+                        <span className="font-mono-num text-[11px]" style={{ color: "var(--text-muted)" }}>
+                          {(c.durationMs / 1000).toFixed(1)}s
+                        </span>
                         <button
                           type="button"
                           onClick={() =>
                             setAttachedClips((prev) => prev.filter((x) => x.path !== c.path))
                           }
                           className="cursor-pointer"
+                          style={{ color: "var(--text-muted)" }}
                           aria-label="Hapus klip"
                         >
                           <X className="h-3 w-3" />
@@ -686,6 +811,63 @@ export default function ProjectsHomeView({
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* CUSTOM DESIGN REFERENCE DRAWER (4 Modes: Image/Ctrl+V, Link, Clip, Text Prompt) */}
+            {showDesignPanel && (
+              <div
+                className="space-y-2 border-t pt-3"
+                style={{ borderColor: "var(--border-subtle)" }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold">
+                    Referensi & Arahan Desain Custom (Bukan Template)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowDesignPanel(false)}
+                    className="text-xs hover:underline cursor-pointer"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    Tutup
+                  </button>
+                </div>
+                <DesignReferencePanel value={styleRef} onChange={setStyleRef} compact />
+              </div>
+            )}
+
+            {/* Compact active Custom Design pill when panel is collapsed */}
+            {!showDesignPanel && styleRef && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium"
+                  style={{
+                    backgroundColor: "var(--accent-soft)",
+                    color: "var(--accent)",
+                  }}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: styleRef.customDesign.palette.accentPrimary }}
+                  />
+                  Desain Custom: {styleRef.customDesign.name}
+                  <button
+                    type="button"
+                    onClick={() => setShowDesignPanel(true)}
+                    className="underline ml-1 cursor-pointer"
+                  >
+                    Ubah
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStyleRef(null)}
+                    className="cursor-pointer"
+                    aria-label="Hapus referensi desain"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
               </div>
             )}
 
@@ -715,7 +897,10 @@ export default function ProjectsHomeView({
                     <button
                       key={m.id}
                       type="button"
-                      onClick={() => setHeroVisualMode(m.id)}
+                      onClick={() => {
+                        setHeroVisualMode(m.id);
+                        setHeroError(null);
+                      }}
                       className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors cursor-pointer"
                       style={{
                         backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
@@ -733,16 +918,17 @@ export default function ProjectsHomeView({
 
                 <button
                   type="button"
-                  onClick={() => setShowAttachPanel((v) => !v)}
+                  onClick={() => setShowDesignPanel((v) => !v)}
                   className="ui-btn-secondary inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium cursor-pointer"
+                  style={
+                    styleRef
+                      ? { borderColor: "var(--accent)", color: "var(--accent)" }
+                      : undefined
+                  }
                 >
-                  <Paperclip className="h-3.5 w-3.5" />
-                  Ref / Klip
-                  {(styleRef ? 1 : 0) + attachedClips.length > 0 && (
-                    <span className="font-mono-num font-bold" style={{ color: "var(--accent)" }}>
-                      ({(styleRef ? 1 : 0) + attachedClips.length})
-                    </span>
-                  )}
+                  <Palette className="h-3.5 w-3.5" />
+                  Ref Desain Custom
+                  {styleRef && <CheckCircle2 className="h-3 w-3" />}
                 </button>
               </div>
 
@@ -757,23 +943,36 @@ export default function ProjectsHomeView({
                 </button>
                 <button
                   type="submit"
-                  disabled={!heroPrompt.trim() || isCreatingVideo}
+                  disabled={!canSubmitHero}
                   className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-xl px-4 text-xs font-semibold disabled:opacity-40 cursor-pointer"
                 >
                   {isCreatingVideo ? (
                     <>
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Meracik...
+                      {createStatusText ? "Meracik..." : "Meracik..."}
                     </>
                   ) : (
                     <>
-                      Buat Video
+                      {isFootageMode ? "Auto-Cut Footage + Suara" : "Buat Video"}
                       <ArrowUp className="h-3.5 w-3.5" />
                     </>
                   )}
                 </button>
               </div>
             </div>
+
+            {isCreatingVideo && createStatusText && (
+              <div
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+                style={{
+                  backgroundColor: "var(--bg-elevated)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "var(--accent)" }} />
+                {createStatusText}
+              </div>
+            )}
           </form>
 
           {/* 1-Click Example Idea Pills */}

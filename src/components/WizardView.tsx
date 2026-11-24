@@ -7,12 +7,11 @@ import {
   ChevronDown,
   ChevronUp,
   Film,
-  Image as ImageIcon,
   Layers,
-  Link2,
   Loader2,
   Lock,
   Mic,
+  Palette,
   Plus,
   Shapes,
   Sparkles,
@@ -21,7 +20,6 @@ import {
   Upload,
   Volume2,
   Wand2,
-  X,
 } from "lucide-react";
 import {
   CONTENT_FORMAT_LABELS,
@@ -39,13 +37,10 @@ import { AI_MOTION_ENGINES, AI_MOTION_THEMES } from "../engine/aiMotionPresets";
 import {
   aiAssembleProject,
   aiGenerateScript,
-  analyzeStyleReference,
-  extractThumbnails,
-  extractYoutubeStyleReference,
+  extractFootageFrames,
   generateTtsAudio,
   isTauriRuntime,
   pickLocalAudio,
-  pickLocalVideo,
   pickLocalVideos,
   probeMedia,
   processUserAudio,
@@ -55,6 +50,7 @@ import {
   type ProcessedAudioResult,
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
+import DesignReferencePanel from "./DesignReferencePanel";
 
 interface WizardViewProps {
   initialFormat?: ContentFormat;
@@ -128,49 +124,6 @@ function formatSec(ms: number): string {
   return `${(ms / 1000).toFixed(1)} dtk`;
 }
 
-function compressImageBlobToDataUrl(blob: Blob, maxWidth = 480): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const objUrl = URL.createObjectURL(blob);
-    img.onload = () => {
-      try {
-        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          URL.revokeObjectURL(objUrl);
-          reject(new Error("Gagal memproses gambar."));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        URL.revokeObjectURL(objUrl);
-        resolve(dataUrl);
-      } catch (err) {
-        URL.revokeObjectURL(objUrl);
-        reject(err);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(objUrl);
-      reject(new Error("Format gambar tidak dapat dibaca."));
-    };
-    img.src = objUrl;
-  });
-}
-
-const LAYER_LABELS: Record<string, string> = {
-  yt_dlp: "yt-dlp · 4 frame",
-  gemini_direct: "Gemini Direct",
-  oembed_thumbnail: "YouTube Thumbnail",
-  vision_ai: "Vision AI",
-  local_fallback: "Analisis Lokal",
-};
-
 export default function WizardView({
   initialFormat = "ad_promo",
   byokStatus,
@@ -181,7 +134,7 @@ export default function WizardView({
 }: WizardViewProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Step 1: Visual Mode, Optional Style Reference, Brief & Script
+  // Step 1: Visual Mode, Optional Custom Design Reference, Brief & Script
   const [visualMode, setVisualMode] = useState<"motion" | "footage" | "hybrid">(
     initialFormat === "education" ? "motion" : "hybrid"
   );
@@ -193,12 +146,9 @@ export default function WizardView({
     "stick_figure",
   ]);
   const [showRefPanel, setShowRefPanel] = useState(false);
-  const [refSourceTab, setRefSourceTab] = useState<"youtube" | "images" | "local_video">("youtube");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
-  const [pastedImages, setPastedImages] = useState<string[]>([]);
-  const [isAnalyzingRef, setIsAnalyzingRef] = useState(false);
-  const [refError, setRefError] = useState<string | null>(null);
   const [styleRefResult, setStyleRefResult] = useState<StyleReferenceResult | null>(null);
+  const [scriptInputMode, setScriptInputMode] = useState<"structured" | "raw">("structured");
+  const [rawScript, setRawScript] = useState("");
 
   const [format, setFormat] = useState<ContentFormat>(initialFormat);
   const [tone, setTone] = useState("santai");
@@ -283,11 +233,16 @@ export default function WizardView({
   const selectedHookText =
     hooks.find((h) => h.id === selectedHookId)?.text || hooks[0]?.text || "";
 
-  const fullScriptText = [selectedHookText, ...bodySegments.filter((s) => s.trim()), ctaText]
+  const structuredScriptText = [selectedHookText, ...bodySegments.filter((s) => s.trim()), ctaText]
     .filter((s) => s.trim())
     .join(" ");
 
+  const fullScriptText =
+    scriptInputMode === "raw" ? rawScript.trim() : structuredScriptText;
+
   const hasAnyByok = Object.values(byokStatus.providers).some((p) => p.configured);
+  const isFootageMandatoryMissing = visualMode === "footage" && footageClips.length === 0;
+  const isScriptMandatoryMissing = fullScriptText.trim().length === 0;
 
   useEffect(() => {
     return () => {
@@ -298,126 +253,24 @@ export default function WizardView({
     };
   }, []);
 
-  // Support Ctrl+V pasting of 1-3 reference screenshots directly into Wizard Step 1
-  useEffect(() => {
-    if (step !== 1 || !showRefPanel || refSourceTab !== "images") return;
-    const onPaste = async (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const imageBlobs: Blob[] = [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          const file = items[i].getAsFile();
-          if (file) imageBlobs.push(file);
-        }
-      }
-      if (imageBlobs.length === 0) return;
-      e.preventDefault();
-      setRefError(null);
-      try {
-        const compressed: string[] = [];
-        for (const blob of imageBlobs) {
-          compressed.push(await compressImageBlobToDataUrl(blob));
-        }
-        setPastedImages((prev) => [...prev, ...compressed].slice(0, 3));
-      } catch (err) {
-        setRefError(err instanceof Error ? err.message : String(err));
-      }
-    };
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [step, showRefPanel, refSourceTab]);
-
-  function applyStyleSuggestions(res: StyleReferenceResult) {
+  function applyStyleSuggestions(res: StyleReferenceResult | null) {
     setStyleRefResult(res);
+    if (!res) return;
     setMotionTheme(res.suggestedTheme);
     setCaptionPreset(res.suggestedCaption);
-    setAccentColor(res.suggestedAccent);
-    const validEng = res.suggestedEngines.filter((e): e is AiMotionEngine =>
-      ["flow_diagram", "motion_chart", "tech_cards", "stick_figure", "breakdown_3d"].includes(e)
+    setAccentColor(res.customDesign?.palette.accentPrimary || res.suggestedAccent);
+    if (res.customDesign?.preferredMotion) {
+      setMotionPreset(res.customDesign.preferredMotion);
+    }
+    if (res.customDesign?.preferredTransition) {
+      setTransitionPreset(res.customDesign.preferredTransition);
+    }
+    const validEng = (res.customDesign?.preferredEngines || res.suggestedEngines).filter(
+      (e): e is AiMotionEngine =>
+        ["flow_diagram", "motion_chart", "tech_cards", "stick_figure", "breakdown_3d"].includes(e)
     );
     if (validEng.length > 0) {
       setPreferredEngines(validEng);
-    }
-  }
-
-  async function handleAnalyzeYoutubeRef() {
-    setRefError(null);
-    if (!youtubeUrl.trim()) {
-      setRefError("Tempel link YouTube atau YouTube Shorts terlebih dahulu.");
-      return;
-    }
-    setIsAnalyzingRef(true);
-    try {
-      const res = await extractYoutubeStyleReference(youtubeUrl.trim());
-      applyStyleSuggestions(res);
-    } catch (err) {
-      setRefError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsAnalyzingRef(false);
-    }
-  }
-
-  async function handlePickScreenshotFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    setRefError(null);
-    try {
-      const next: string[] = [];
-      for (let i = 0; i < Math.min(3, files.length); i++) {
-        next.push(await compressImageBlobToDataUrl(files[i]));
-      }
-      setPastedImages((prev) => [...prev, ...next].slice(0, 3));
-    } catch (err) {
-      setRefError(err instanceof Error ? err.message : String(err));
-    } finally {
-      e.target.value = "";
-    }
-  }
-
-  async function handleAnalyzeImagesRef() {
-    setRefError(null);
-    if (pastedImages.length === 0) {
-      setRefError("Tempel (Ctrl+V) atau unggah 1–3 screenshot cuplikan referensi dulu.");
-      return;
-    }
-    setIsAnalyzingRef(true);
-    try {
-      const res = await analyzeStyleReference({
-        sourceType: "images",
-        title: `Screenshot Referensi (${pastedImages.length} gambar)`,
-        thumbnails: pastedImages,
-      });
-      applyStyleSuggestions(res);
-    } catch (err) {
-      setRefError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsAnalyzingRef(false);
-    }
-  }
-
-  async function handleAnalyzeLocalRefClip() {
-    setRefError(null);
-    if (!isTauriRuntime()) {
-      setRefError("Pilih klip referensi lokal hanya tersedia di aplikasi desktop Synkcut.");
-      return;
-    }
-    const picked = await pickLocalVideo();
-    if (!picked) return;
-    setIsAnalyzingRef(true);
-    try {
-      const thumbs = await extractThumbnails(picked, 3);
-      const fileName = picked.split(/[\\/]/).pop() || "Klip Referensi";
-      const res = await analyzeStyleReference({
-        sourceType: "local_video",
-        title: fileName,
-        thumbnails: thumbs,
-      });
-      applyStyleSuggestions(res);
-    } catch (err) {
-      setRefError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsAnalyzingRef(false);
     }
   }
 
@@ -445,13 +298,21 @@ export default function WizardView({
         tone,
         targetDurationSec: targetDuration,
         visualMode,
-        styleReferenceSummary: styleRefResult?.styleDnaSummary ?? null,
+        styleReferenceSummary:
+          styleRefResult?.customDesign?.artDirectionNotes ??
+          styleRefResult?.styleDnaSummary ??
+          null,
       });
       setProjectTitle(res.projectTitle);
       setHooks(res.hooks);
       setSelectedHookId(res.hooks[0]?.id || "h1");
       setBodySegments(res.bodySegments);
       setCtaText(res.cta);
+      setRawScript(
+        [res.hooks[0]?.text || "", ...res.bodySegments, res.cta]
+          .filter((s) => s.trim())
+          .join("\n")
+      );
       setScriptProviderUsed(res.providerUsed);
     } catch (err) {
       setScriptError(err instanceof Error ? err.message : String(err));
@@ -466,18 +327,20 @@ export default function WizardView({
     if (paths.length === 0) return;
 
     setIsLoadingFootage(true);
+    setAudioError(null);
     try {
       const added: FootageInputItem[] = [];
       for (const path of paths) {
         if (footageClips.some((c) => c.path === path)) continue;
         const info = await probeMedia(path);
-        const thumbnails = await extractThumbnails(path, 2);
+        const frames = await extractFootageFrames(path, 4);
         const fileName = path.split(/[\\/]/).pop() || "footage.mp4";
         added.push({
           path,
           fileName,
           durationMs: info.durationMs,
-          thumbnails,
+          thumbnails: frames.map((f) => f.dataUrl),
+          frameTimestampsMs: frames.map((f) => f.timestampMs),
         });
       }
       setFootageClips((prev) => [...prev, ...added]);
@@ -586,6 +449,14 @@ export default function WizardView({
 
   async function handleAssembleProject() {
     setAssembleError(null);
+    if (isScriptMandatoryMissing) {
+      setAssembleError("Script video wajib diisi di Langkah 1 sebelum meracik video.");
+      return;
+    }
+    if (isFootageMandatoryMissing) {
+      setAssembleError("Mode Footage wajib melampirkan minimal 1 video footage di Langkah 2.");
+      return;
+    }
     setIsAssembling(true);
     try {
       const styleReference: ProjectStyleReference | null = styleRefResult
@@ -595,6 +466,7 @@ export default function WizardView({
             title: styleRefResult.title,
             thumbnails: styleRefResult.thumbnails,
             styleDnaSummary: styleRefResult.styleDnaSummary,
+            customDesign: styleRefResult.customDesign,
           }
         : null;
 
@@ -604,14 +476,15 @@ export default function WizardView({
         hookText: selectedHookText,
         bodySegments: bodySegments.filter((s) => s.trim().length > 0),
         ctaText,
+        rawScript: scriptInputMode === "raw" ? rawScript.trim() : null,
         audioPath: audioResult?.audioPath ?? null,
-        audioSource: audioResult ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
+        audioSource: audioResult ? (audioTab === "tts" ? "tts" : "recorded") : visualMode === "footage" ? "tts" : "demo",
         trimSilence,
         durationMs: audioResult?.durationMs ?? 0,
         words: audioResult?.words ?? [],
         footage: visualMode === "motion" ? [] : footageClips,
         captionPreset,
-        accentColor,
+        accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
         motionPreset,
         transitionPreset,
         overlayMode,
@@ -622,6 +495,11 @@ export default function WizardView({
         motionTheme,
         preferredEngines,
         styleReference,
+        customDesign: styleRefResult?.customDesign ?? null,
+        autoGenerateVoiceover: !audioResult && (visualMode === "footage" || footageClips.length > 0),
+        ttsEngine,
+        ttsVoice,
+        ttsTone: tone,
       });
       onProjectCreated(project);
     } catch (err) {
@@ -777,7 +655,12 @@ export default function WizardView({
                         <button
                           key={vm.id}
                           type="button"
-                          onClick={() => setVisualMode(vm.id)}
+                          onClick={() => {
+                            setVisualMode(vm.id);
+                            if (vm.id === "footage" && !rawScript.trim()) {
+                              setScriptInputMode("raw");
+                            }
+                          }}
                           className="flex flex-col items-start gap-0.5 rounded-lg p-2.5 text-left transition-colors cursor-pointer"
                           style={{
                             backgroundColor: active ? "var(--accent-soft)" : "var(--bg-elevated)",
@@ -882,7 +765,7 @@ export default function WizardView({
                   />
                 </div>
 
-                {/* Optional Style Reference Panel (YouTube / Ctrl+V Screenshot / Local Clip) */}
+                {/* Custom Design Reference Panel (Images / Ctrl+V / URL / Clip / Text Prompt) */}
                 <div
                   className="rounded-lg p-3 space-y-2.5"
                   style={{
@@ -899,13 +782,13 @@ export default function WizardView({
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-bold">
-                        <Link2 className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
-                        <span>Referensi Gaya Visual (Opsional)</span>
+                        <Palette className="h-3.5 w-3.5" style={{ color: "var(--accent)" }} />
+                        <span>Referensi & Arahan Desain Custom</span>
                       </div>
                       <p className="mt-0.5 text-[11px]" style={{ color: "var(--text-secondary)" }}>
                         {styleRefResult
-                          ? `Aktif: ${styleRefResult.title}`
-                          : "Link YouTube/Shorts, Ctrl+V Screenshot, atau Klip Lokal"}
+                          ? `Desain Custom Aktif: ${styleRefResult.customDesign.name}`
+                          : "Gambar/Ctrl+V, Link YouTube/Web, Klip Lokal, atau Deskripsi Teks"}
                       </p>
                     </div>
                     {showRefPanel ? (
@@ -916,227 +799,11 @@ export default function WizardView({
                   </button>
 
                   {showRefPanel && (
-                    <div className="space-y-2.5 pt-1 border-t" style={{ borderColor: "var(--border-subtle)" }}>
-                      {/* 3 Reference Tabs — NO Instagram link */}
-                      <div
-                        className="grid grid-cols-3 gap-1 rounded-md p-0.5"
-                        style={{
-                          backgroundColor: "var(--bg-panel)",
-                          border: "1px solid var(--border-subtle)",
-                        }}
-                      >
-                        {[
-                          { id: "youtube" as const, label: "YouTube", icon: Link2 },
-                          { id: "images" as const, label: "Screenshot", icon: ImageIcon },
-                          { id: "local_video" as const, label: "Klip Lokal", icon: Film },
-                        ].map((tab) => {
-                          const Icon = tab.icon;
-                          const active = refSourceTab === tab.id;
-                          return (
-                            <button
-                              key={tab.id}
-                              type="button"
-                              onClick={() => {
-                                setRefSourceTab(tab.id);
-                                setRefError(null);
-                              }}
-                              className="inline-flex items-center justify-center gap-1 rounded py-1 text-[11px] font-semibold cursor-pointer"
-                              style={{
-                                backgroundColor: active ? "var(--bg-elevated)" : "transparent",
-                                color: active ? "var(--text-primary)" : "var(--text-secondary)",
-                              }}
-                            >
-                              <Icon className="h-3 w-3" />
-                              {tab.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {refSourceTab === "youtube" && (
-                        <div className="space-y-2">
-                          <div className="flex gap-1.5">
-                            <input
-                              type="url"
-                              value={youtubeUrl}
-                              onChange={(e) => setYoutubeUrl(e.target.value)}
-                              placeholder="https://youtube.com/shorts/... atau watch?v=..."
-                              className="ui-input min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-xs"
-                            />
-                            <button
-                              type="button"
-                              disabled={isAnalyzingRef}
-                              onClick={handleAnalyzeYoutubeRef}
-                              className="ui-btn-secondary shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
-                            >
-                              {isAnalyzingRef ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                "Analisa"
-                              )}
-                            </button>
-                          </div>
-                          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                            Hanya mengambil sampel gaya (maks 30 dtk ≤360p via yt-dlp / Gemini /
-                            thumbnail) — bukan menyalin video asli.
-                          </p>
-                        </div>
-                      )}
-
-                      {refSourceTab === "images" && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                              Tekan <strong>Ctrl+V</strong> untuk tempel screenshot (maks 3)
-                            </span>
-                            <label className="ui-btn-secondary inline-flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold cursor-pointer">
-                              <Upload className="h-3 w-3" />
-                              Pilih
-                              <input
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                multiple
-                                onChange={handlePickScreenshotFiles}
-                                className="hidden"
-                              />
-                            </label>
-                          </div>
-
-                          {pastedImages.length > 0 && (
-                            <div className="grid grid-cols-3 gap-1.5">
-                              {pastedImages.map((src, idx) => (
-                                <div key={idx} className="relative overflow-hidden rounded">
-                                  <img
-                                    src={src}
-                                    alt={`Referensi ${idx + 1}`}
-                                    className="h-14 w-full object-cover"
-                                    style={{ border: "1px solid var(--border-subtle)" }}
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setPastedImages((prev) => prev.filter((_, i) => i !== idx))
-                                    }
-                                    className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/75 text-white cursor-pointer"
-                                    aria-label="Hapus gambar"
-                                  >
-                                    <X className="h-2.5 w-2.5" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <button
-                            type="button"
-                            disabled={isAnalyzingRef || pastedImages.length === 0}
-                            onClick={handleAnalyzeImagesRef}
-                            className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
-                          >
-                            {isAnalyzingRef ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Sparkles className="h-3.5 w-3.5" />
-                            )}
-                            Ekstrak DNA Gaya dari Screenshot
-                          </button>
-                        </div>
-                      )}
-
-                      {refSourceTab === "local_video" && (
-                        <div className="space-y-2">
-                          <button
-                            type="button"
-                            disabled={isAnalyzingRef || !isTauriRuntime()}
-                            onClick={handleAnalyzeLocalRefClip}
-                            className="ui-btn-secondary flex w-full items-center justify-center gap-1.5 rounded-md py-2 text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                          >
-                            {isAnalyzingRef ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Upload className="h-3.5 w-3.5" />
-                            )}
-                            Pilih 1 Klip Referensi MP4/MOV
-                          </button>
-                          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                            FFmpeg mengambil 3 frame sampel untuk membaca nuansa warna & ritme motion.
-                          </p>
-                        </div>
-                      )}
-
-                      {refError && (
-                        <div
-                          className="rounded p-2 text-[11px]"
-                          style={{
-                            backgroundColor: "var(--danger-soft)",
-                            color: "var(--danger)",
-                          }}
-                        >
-                          {refError}
-                        </div>
-                      )}
-
-                      {styleRefResult && (
-                        <div
-                          className="rounded-md p-2.5 space-y-2"
-                          style={{
-                            backgroundColor: "var(--bg-panel)",
-                            border: "1px solid var(--accent)",
-                          }}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-[11px] font-bold">
-                              {styleRefResult.title}
-                            </span>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span
-                                className="rounded px-1.5 py-0.5 font-mono-num text-[11px]"
-                                style={{
-                                  backgroundColor: "var(--accent-soft)",
-                                  color: "var(--accent)",
-                                }}
-                              >
-                                {LAYER_LABELS[styleRefResult.layerUsed] || styleRefResult.layerUsed}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setStyleRefResult(null)}
-                                className="p-0.5 cursor-pointer"
-                                style={{ color: "var(--text-muted)" }}
-                                aria-label="Hapus referensi gaya"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {styleRefResult.thumbnails.length > 0 && (
-                            <div className="grid grid-cols-4 gap-1">
-                              {styleRefResult.thumbnails.slice(0, 4).map((src, i) => (
-                                <img
-                                  key={i}
-                                  src={src}
-                                  alt={`Sampel ${i + 1}`}
-                                  className="h-10 w-full rounded object-cover"
-                                  style={{ border: "1px solid var(--border-subtle)" }}
-                                />
-                              ))}
-                            </div>
-                          )}
-
-                          <textarea
-                            rows={2}
-                            value={styleRefResult.styleDnaSummary}
-                            onChange={(e) =>
-                              setStyleRefResult((prev) =>
-                                prev ? { ...prev, styleDnaSummary: e.target.value } : null
-                              )
-                            }
-                            aria-label="Ringkasan DNA Gaya Referensi"
-                            className="ui-input w-full resize-none rounded p-1.5 text-[11px] leading-relaxed"
-                          />
-                        </div>
-                      )}
+                    <div className="border-t pt-2.5" style={{ borderColor: "var(--border-subtle)" }}>
+                      <DesignReferencePanel
+                        value={styleRefResult}
+                        onChange={applyStyleSuggestions}
+                      />
                     </div>
                   )}
                 </div>
@@ -1201,6 +868,66 @@ export default function WizardView({
                   )}
                 </div>
 
+                {/* Mode Toggle: Tempel Script Utuh vs Struktur Hook-Body-CTA */}
+                <div
+                  className="grid grid-cols-2 gap-1 rounded-lg p-1"
+                  style={{
+                    backgroundColor: "var(--bg-elevated)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setScriptInputMode("raw")}
+                    className="rounded-md py-1.5 text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor: scriptInputMode === "raw" ? "var(--bg-panel)" : "transparent",
+                      color: scriptInputMode === "raw" ? "var(--text-primary)" : "var(--text-muted)",
+                    }}
+                  >
+                    Tempel Script Utuh {visualMode === "footage" ? "(Disarankan)" : ""}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScriptInputMode("structured")}
+                    className="rounded-md py-1.5 text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor:
+                        scriptInputMode === "structured" ? "var(--bg-panel)" : "transparent",
+                      color:
+                        scriptInputMode === "structured"
+                          ? "var(--text-primary)"
+                          : "var(--text-muted)",
+                    }}
+                  >
+                    Struktur Hook–Body–CTA
+                  </button>
+                </div>
+
+                {scriptInputMode === "raw" ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold">
+                        Script Lengkap Video <span style={{ color: "var(--danger)" }}>*Wajib</span>
+                      </span>
+                      <span className="font-mono-num text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        {rawScript.trim() ? rawScript.trim().split(/\s+/).length : 0} kata
+                      </span>
+                    </div>
+                    <textarea
+                      rows={10}
+                      value={rawScript}
+                      onChange={(e) => setRawScript(e.target.value)}
+                      placeholder="Tempel seluruh naskah / script video lo di sini. AI akan memecahnya otomatis menjadi rangkaian cut video yang sinkron persis dengan suara voiceover..."
+                      className="ui-input w-full resize-none rounded-lg p-3 text-xs leading-relaxed"
+                    />
+                    <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      Tips: Pisahkan kalimat dengan titik atau baris baru agar ritme potong cut antar
+                      footage makin tajam dan alami.
+                    </p>
+                  </div>
+                ) : (
+                  <>
                 {/* 3 Hook Options */}
                 <div>
                   <div className="mb-2 flex items-center justify-between">
@@ -1339,15 +1066,21 @@ export default function WizardView({
                     className="ui-input w-full resize-none rounded-md p-2.5 text-xs leading-relaxed"
                   />
                 </div>
+                  </>
+                )}
 
                 <div
-                  className="flex items-center justify-end border-t pt-4"
+                  className="flex items-center justify-between border-t pt-4"
                   style={{ borderColor: "var(--border-subtle)" }}
                 >
+                  <span className="text-[11px]" style={{ color: isScriptMandatoryMissing ? "var(--danger)" : "var(--text-muted)" }}>
+                    {isScriptMandatoryMissing ? "Script wajib diisi sebelum lanjut." : "Script siap untuk disinkronkan ke suara & cut."}
+                  </span>
                   <button
                     type="button"
+                    disabled={isScriptMandatoryMissing}
                     onClick={() => setStep(2)}
-                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold cursor-pointer"
+                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-45 cursor-pointer"
                   >
                     Lanjut: Visual & Suara
                     <ArrowRight className="h-3.5 w-3.5" />
@@ -1471,11 +1204,11 @@ export default function WizardView({
                         <h2 className="text-sm font-bold">
                           {visualMode === "hybrid"
                             ? "Footage Lokal + AI Motion (Campur)"
-                            : "Footage Lokal (Multi-Klip)"}
+                            : "Footage Lokal Multi-Klip (*Wajib min. 1 video)"}
                         </h2>
                         <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          AI Multimodal melihat thumbnail klip untuk memasangkannya ke scene paling
-                          pas
+                          AI Multimodal melihat 4 frame bertimestamp dari setiap klip untuk membuat cut
+                          otomatis menjadi 1 video utuh sesuai script
                           {visualMode === "hybrid"
                             ? ", lalu melengkapi sisanya dengan AI Motion."
                             : "."}
@@ -1851,10 +1584,22 @@ export default function WizardView({
                   </button>
                   <button
                     type="button"
+                    disabled={isFootageMandatoryMissing}
                     onClick={() => setStep(3)}
-                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold cursor-pointer"
+                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-45 cursor-pointer"
+                    title={
+                      isFootageMandatoryMissing
+                        ? "Mode Footage wajib mengunggah minimal 1 klip video lokal"
+                        : undefined
+                    }
                   >
-                    {audioResult ? "Lanjut: Pilih Gaya" : "Lanjut (Audio Demo Dulu)"}
+                    {isFootageMandatoryMissing
+                      ? "Pilih Min. 1 Footage Dulu"
+                      : audioResult
+                        ? "Lanjut: Pilih Gaya"
+                        : visualMode === "footage"
+                          ? "Lanjut (Suara Auto-Generate)"
+                          : "Lanjut (Audio Demo Dulu)"}
                     <ArrowRight className="h-3.5 w-3.5" />
                   </button>
                 </div>

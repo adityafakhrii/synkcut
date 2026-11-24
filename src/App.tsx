@@ -19,6 +19,7 @@ import {
 import { BUILTIN_SAMPLES, createBlankProjectForFormat, type SampleTemplate } from "./engine/sampleTemplates";
 import { createBreakdown3DPreset, createDefaultAiMotion } from "./engine/aiMotionPresets";
 import { rebuildWordsFromScenes } from "./engine/sampleProject";
+import { normalizeProject } from "./engine/sceneOps";
 import {
   deleteProject,
   duplicateProject,
@@ -28,6 +29,7 @@ import {
   renameProject,
   saveProject,
 } from "./lib/tauriBridge";
+import ErrorBoundary from "./components/ErrorBoundary";
 import OnboardingView from "./components/OnboardingView";
 import ProjectsHomeView from "./components/ProjectsHomeView";
 import StudioView from "./components/StudioView";
@@ -397,14 +399,15 @@ export default function App() {
   }
 
   async function handleWizardProjectCreated(project: SynkcutProject) {
-    await saveProject(project);
+    const safeProject = normalizeProject(project);
+    await saveProject(safeProject);
     await refreshProjects();
-    setActiveProject(project);
+    setActiveProject(safeProject);
     setView("studio");
   }
 
   async function handleUseSample(sample: SampleTemplate) {
-    const fresh = sample.buildProject();
+    const fresh = normalizeProject(sample.buildProject());
     await saveProject(fresh);
     await refreshProjects();
     setActiveProject(fresh);
@@ -413,7 +416,7 @@ export default function App() {
 
   async function handleOpenProject(projectId: string) {
     try {
-      const loaded = await loadProject(projectId);
+      const loaded = normalizeProject(await loadProject(projectId));
       setActiveProject(loaded);
       setView("studio");
     } catch (err) {
@@ -439,22 +442,33 @@ export default function App() {
   /* Full-bleed Studio Editor */
   if (view === "studio" && activeProject) {
     return (
-      <StudioView
-        key={activeProject.meta.id}
-        initialProject={activeProject}
-        byokStatus={byokStatus}
-        theme={theme}
-        initialManualOpen={studioInitOpts.manualOpen}
-        initialManualTab={studioInitOpts.manualTab}
-        initialTimeMs={studioInitOpts.timeMs}
-        onToggleTheme={toggleTheme}
+      <ErrorBoundary
+        key={`eb_${activeProject.meta.id}`}
+        fallbackTitle="Studio Editor mengalami gangguan render"
+        recoverLabel="Pulihkan Editor"
         onBackHome={() => {
           setStudioInitOpts({});
           refreshProjects();
           setView("projects");
         }}
-        onProjectSaved={refreshProjects}
-      />
+      >
+        <StudioView
+          key={activeProject.meta.id}
+          initialProject={activeProject}
+          byokStatus={byokStatus}
+          theme={theme}
+          initialManualOpen={studioInitOpts.manualOpen}
+          initialManualTab={studioInitOpts.manualTab}
+          initialTimeMs={studioInitOpts.timeMs}
+          onToggleTheme={toggleTheme}
+          onBackHome={() => {
+            setStudioInitOpts({});
+            refreshProjects();
+            setView("projects");
+          }}
+          onProjectSaved={refreshProjects}
+        />
+      </ErrorBoundary>
     );
   }
 
@@ -533,7 +547,7 @@ export default function App() {
             className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v1.2
+            v1.3
           </span>
         </div>
 

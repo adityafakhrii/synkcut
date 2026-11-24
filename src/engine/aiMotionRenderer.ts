@@ -1,6 +1,11 @@
 import type {
   AiMotionSpec,
   AiMotionTheme,
+  CustomDesignDirection,
+  DesignBackgroundPattern,
+  DesignCardStyle,
+  DesignCornerStyle,
+  DesignFontFamily,
   FlowDiagramConfig,
   MotionChartConfig,
   StickFigureConfig,
@@ -10,6 +15,15 @@ import { renderBreakdown3DScene } from "./breakdown3dRenderer";
 
 const SANS = '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const MONO = '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace';
+const SERIF = 'Georgia, "Times New Roman", Cambria, serif';
+const DISPLAY = '"Impact", "Arial Black", "IBM Plex Sans", sans-serif';
+
+function fontStackFor(f?: DesignFontFamily): string {
+  if (f === "serif") return SERIF;
+  if (f === "mono") return MONO;
+  if (f === "display") return DISPLAY;
+  return SANS;
+}
 
 interface MotionPalette {
   bgTop: string;
@@ -25,6 +39,11 @@ interface MotionPalette {
   accentInk: string;
   grid: string;
   isLight: boolean;
+  headingFont?: string;
+  bodyFont?: string;
+  backgroundPattern?: DesignBackgroundPattern;
+  cardStyle?: DesignCardStyle;
+  cornerStyle?: DesignCornerStyle;
 }
 
 const PALETTES: Record<AiMotionTheme, MotionPalette> = {
@@ -138,22 +157,77 @@ function seededRng(seed: number) {
 
 function withAlpha(hexOrRgba: string, a: number): string {
   const safe = clamp(a);
-  if (hexOrRgba.startsWith("#")) {
-    const clean = hexOrRgba.slice(1);
+  if (typeof hexOrRgba !== "string" || !hexOrRgba.trim()) {
+    return `rgba(56,229,157,${safe.toFixed(3)})`;
+  }
+  const trimmed = hexOrRgba.trim();
+  if (trimmed.startsWith("#")) {
+    const clean = trimmed.slice(1);
     const full =
       clean.length === 3
         ? clean
             .split("")
             .map((c) => c + c)
             .join("")
-        : clean;
+        : clean.slice(0, 6);
     const n = parseInt(full, 16);
+    if (!Number.isFinite(n)) return `rgba(56,229,157,${safe.toFixed(3)})`;
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${safe.toFixed(3)})`;
   }
-  return hexOrRgba.replace(
+  return trimmed.replace(
     /rgba?\(([^,]+),([^,]+),([^,)]+)(,[^)]+)?\)/,
     `rgba($1,$2,$3,${safe.toFixed(3)})`
   );
+}
+
+function cardRadius(pal: MotionPalette, base: number): number {
+  if (pal.cornerStyle === "sharp") return Math.min(6, base * 0.22);
+  if (pal.cornerStyle === "pill") return base * 1.45;
+  return base;
+}
+
+function drawStyledCard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  baseRadius: number,
+  pal: MotionPalette,
+  u: number,
+  highlighted = false
+) {
+  const rad = cardRadius(pal, baseRadius);
+  const style = pal.cardStyle || "glass";
+
+  if (style === "brutalist") {
+    ctx.fillStyle = highlighted ? pal.accent : withAlpha(pal.ink, pal.isLight ? 0.85 : 0.35);
+    roundRect(ctx, x + 8 * u, y + 8 * u, w, h, rad);
+    ctx.fill();
+  }
+
+  ctx.save();
+  if (style === "neon" && highlighted) {
+    ctx.shadowColor = pal.accent;
+    ctx.shadowBlur = 22 * u;
+  }
+
+  ctx.fillStyle =
+    style === "hairline"
+      ? withAlpha(pal.cardBg, 0.35)
+      : pal.cardBg;
+  ctx.strokeStyle =
+    style === "brutalist"
+      ? pal.ink
+      : highlighted
+        ? pal.accent
+        : pal.cardBorder;
+  ctx.lineWidth =
+    (style === "brutalist" ? 3.5 : style === "hairline" ? 1.5 : highlighted ? 2.8 : 2) * u;
+  roundRect(ctx, x, y, w, h, rad);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }
 
 function roundRect(
@@ -179,7 +253,10 @@ function roundRect(
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
+  const words = String(text ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
@@ -205,15 +282,16 @@ function fitText(
   weight = 800,
   family = SANS
 ): { lines: string[]; size: number } {
+  const safeText = String(text ?? "");
   for (let s = startSize; s >= minSize; s -= Math.max(1, startSize * 0.04)) {
     ctx.font = `${weight} ${Math.round(s)}px ${family}`;
-    const lines = wrapText(ctx, text, maxW);
+    const lines = wrapText(ctx, safeText, maxW);
     if (lines.length <= maxLines && lines.every((l) => ctx.measureText(l).width <= maxW)) {
       return { lines, size: Math.round(s) };
     }
   }
   ctx.font = `${weight} ${Math.round(minSize)}px ${family}`;
-  return { lines: wrapText(ctx, text, maxW).slice(0, maxLines), size: Math.round(minSize) };
+  return { lines: wrapText(ctx, safeText, maxW).slice(0, maxLines), size: Math.round(minSize) };
 }
 
 function drawLayeredBackdrop(
@@ -229,33 +307,86 @@ function drawLayeredBackdrop(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
-  // Subtle architectural dot/line grid
   ctx.save();
-  ctx.strokeStyle = pal.grid;
-  ctx.lineWidth = Math.max(1, width / 540);
+  const pattern = pal.backgroundPattern || "grid";
   const step = Math.round(width / 9);
   const drift = (progress * step * 0.5) % step;
-  for (let x = 0; x <= width; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = -step; y <= height + step; y += step) {
-    ctx.beginPath();
-    ctx.moveTo(0, y + drift);
-    ctx.lineTo(width, y + drift);
-    ctx.stroke();
+
+  if (pattern === "grid") {
+    ctx.strokeStyle = pal.grid;
+    ctx.lineWidth = Math.max(1, width / 540);
+    for (let x = 0; x <= width; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = -step; y <= height + step; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + drift);
+      ctx.lineTo(width, y + drift);
+      ctx.stroke();
+    }
+  } else if (pattern === "dots") {
+    ctx.fillStyle = withAlpha(pal.ink, pal.isLight ? 0.11 : 0.14);
+    const dStep = Math.round(width / 14);
+    const dDrift = (progress * dStep * 0.4) % dStep;
+    for (let x = dStep / 2; x <= width; x += dStep) {
+      for (let y = -dStep; y <= height + dStep; y += dStep) {
+        ctx.beginPath();
+        ctx.arc(x, y + dDrift, Math.max(2, width / 380), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else if (pattern === "diagonal") {
+    ctx.strokeStyle = pal.grid;
+    ctx.lineWidth = Math.max(1.5, width / 480);
+    const diagStep = Math.round(width / 10);
+    const diagDrift = (progress * diagStep * 0.5) % diagStep;
+    for (let i = -height; i <= width + height; i += diagStep) {
+      ctx.beginPath();
+      ctx.moveTo(i + diagDrift, 0);
+      ctx.lineTo(i - height * 0.45 + diagDrift, height);
+      ctx.stroke();
+    }
+  } else if (pattern === "paper_grain") {
+    const rng = seededRng(101);
+    ctx.fillStyle = withAlpha(pal.ink, pal.isLight ? 0.045 : 0.05);
+    for (let i = 0; i < 240; i++) {
+      ctx.fillRect(rng() * width, rng() * height, 3, 3);
+    }
+    // Crisp editorial border frame
+    ctx.strokeStyle = withAlpha(pal.ink, 0.12);
+    ctx.lineWidth = Math.max(2, width / 400);
+    ctx.strokeRect(width * 0.04, height * 0.03, width * 0.92, height * 0.94);
+  } else if (pattern === "aurora") {
+    const b1x = width * (0.25 + 0.15 * Math.sin(progress * Math.PI * 2));
+    const b1y = height * 0.24;
+    const g1 = ctx.createRadialGradient(b1x, b1y, width * 0.04, b1x, b1y, width * 0.68);
+    g1.addColorStop(0, withAlpha(pal.accent, pal.isLight ? 0.22 : 0.26));
+    g1.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g1;
+    ctx.fillRect(0, 0, width, height);
+
+    const b2x = width * (0.76 - 0.14 * Math.cos(progress * Math.PI * 2));
+    const b2y = height * 0.52;
+    const g2 = ctx.createRadialGradient(b2x, b2y, width * 0.04, b2x, b2y, width * 0.62);
+    g2.addColorStop(0, withAlpha(pal.accentAlt, pal.isLight ? 0.18 : 0.22));
+    g2.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g2;
+    ctx.fillRect(0, 0, width, height);
   }
 
   // Soft radial focal aura centered on the 10%-59% Motion Stage
-  const orbX = width * (0.5 + 0.08 * Math.sin(progress * Math.PI * 2));
-  const orbY = height * 0.36;
-  const rad = ctx.createRadialGradient(orbX, orbY, width * 0.04, orbX, orbY, width * 0.62);
-  rad.addColorStop(0, withAlpha(pal.accent, pal.isLight ? 0.11 : 0.16));
-  rad.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = rad;
-  ctx.fillRect(0, 0, width, height);
+  if (pattern !== "minimal") {
+    const orbX = width * (0.5 + 0.08 * Math.sin(progress * Math.PI * 2));
+    const orbY = height * 0.36;
+    const rad = ctx.createRadialGradient(orbX, orbY, width * 0.04, orbX, orbY, width * 0.62);
+    rad.addColorStop(0, withAlpha(pal.accent, pal.isLight ? 0.11 : 0.16));
+    rad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = rad;
+    ctx.fillRect(0, 0, width, height);
+  }
 
   // Subtle bottom scrim in caption area for clean separation
   if (!pal.isLight) {
@@ -279,6 +410,8 @@ function drawStageHeader(
   const u = width / 1080;
   const enter = easeOutExpo(prog(p, 0, 0.16));
   const topY = height * 0.112;
+  const headFam = pal.headingFont || SANS;
+  const bodyFam = pal.bodyFont || SANS;
 
   ctx.save();
   ctx.globalAlpha = enter;
@@ -286,18 +419,18 @@ function drawStageHeader(
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
 
-  const titleFit = fitText(ctx, spec.title || "AI Motion", width * 0.84, 62 * u, 36 * u, 2, 800, SANS);
-  ctx.font = `800 ${titleFit.size}px ${SANS}`;
+  const titleFit = fitText(ctx, String(spec.title || "AI Motion"), width * 0.84, 62 * u, 36 * u, 2, 800, headFam);
+  ctx.font = `800 ${titleFit.size}px ${headFam}`;
   ctx.fillStyle = pal.ink;
   const lh = titleFit.size * 1.15;
   titleFit.lines.forEach((line, idx) => {
     ctx.fillText(line, width / 2, topY + titleFit.size + idx * lh);
   });
 
-  let bottomY = topY + titleFit.size + (titleFit.lines.length - 1) * lh;
-  if (spec.subtitle && spec.subtitle.trim()) {
+  let bottomY = topY + titleFit.size + Math.max(0, titleFit.lines.length - 1) * lh;
+  if (typeof spec.subtitle === "string" && spec.subtitle.trim()) {
     const subSize = Math.round(30 * u);
-    ctx.font = `500 ${subSize}px ${SANS}`;
+    ctx.font = `500 ${subSize}px ${bodyFam}`;
     ctx.fillStyle = pal.muted;
     bottomY += 44 * u;
     ctx.fillText(spec.subtitle.trim().slice(0, 52), width / 2, bottomY);
@@ -314,28 +447,34 @@ function drawStageTakeaway(
   pal: MotionPalette,
   p: number
 ) {
-  if (!takeaway || !takeaway.trim()) return;
+  if (typeof takeaway !== "string" || !takeaway.trim()) return;
   const u = width / 1080;
   const q = easeOutExpo(prog(p, 0.68, 0.86));
   if (q <= 0.01) return;
 
   const y = height * 0.568;
+  const bodyFam = pal.bodyFont || SANS;
   ctx.save();
   ctx.globalAlpha = q;
   ctx.translate(0, (1 - q) * 18 * u);
   const fontSize = Math.round(27 * u);
-  ctx.font = `600 ${fontSize}px ${SANS}`;
+  ctx.font = `600 ${fontSize}px ${bodyFam}`;
   const label = takeaway.trim().slice(0, 56);
   const tw = ctx.measureText(label).width;
   const pillW = Math.min(width * 0.86, tw + 54 * u);
   const pillH = 58 * u;
 
-  ctx.fillStyle = pal.cardBg;
-  ctx.strokeStyle = withAlpha(pal.accent, 0.55);
-  ctx.lineWidth = 2 * u;
-  roundRect(ctx, (width - pillW) / 2, y - pillH / 2, pillW, pillH, 999);
-  ctx.fill();
-  ctx.stroke();
+  drawStyledCard(
+    ctx,
+    (width - pillW) / 2,
+    y - pillH / 2,
+    pillW,
+    pillH,
+    pal.cornerStyle === "sharp" ? 6 * u : 999,
+    pal,
+    u,
+    true
+  );
 
   ctx.fillStyle = pal.ink;
   ctx.textAlign = "center";
@@ -509,15 +648,11 @@ function renderFlowDiagram(
         ctx.save();
         ctx.globalAlpha = lq;
         ctx.translate((1 - lq) * 28 * u, 0);
-        ctx.fillStyle = pal.cardBg;
-        ctx.strokeStyle = i === n - 1 ? withAlpha(pal.accent, 0.75) : pal.cardBorder;
-        ctx.lineWidth = 2 * u;
-        roundRect(ctx, cardX, y - cardH / 2, cardW, cardH, 20 * u);
-        ctx.fill();
-        ctx.stroke();
+        drawStyledCard(ctx, cardX, y - cardH / 2, cardW, cardH, 20 * u, pal, u, i === n - 1);
 
-        const fitted = fitText(ctx, label, cardW - 44 * u, 38 * u, 24 * u, 2, 700, SANS);
-        ctx.font = `700 ${fitted.size}px ${SANS}`;
+        const headFam = pal.headingFont || SANS;
+        const fitted = fitText(ctx, String(label ?? ""), cardW - 44 * u, 38 * u, 24 * u, 2, 700, headFam);
+        ctx.font = `700 ${fitted.size}px ${headFam}`;
         ctx.fillStyle = pal.ink;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
@@ -886,8 +1021,9 @@ function renderMotionChart(
   const suf = cfg.suffix || "";
 
   // Auto growth callout
-  let calloutText = cfg.callout;
-  if (calloutText === undefined || calloutText === "auto") {
+  let calloutText = typeof cfg.callout === "string" ? cfg.callout : cfg.callout === null ? "" : "auto";
+  if (calloutText === "" && cfg.callout === undefined) calloutText = "auto";
+  if (calloutText === "auto") {
     const first = vals[0];
     const last = vals[n - 1];
     if (n >= 2 && first > 0 && last > 0 && Math.abs(last - first) > 0.001) {
@@ -913,22 +1049,19 @@ function renderMotionChart(
       const q = easeOutExpo(prog(p, 0.06 + i * 0.14, 0.56 + i * 0.14));
       const y = startY + i * (cardH + gap);
       const isHi = (cfg.highlightIndex ?? cards.length - 1) === i;
+      const itemVal = Number(item?.value) || 0;
+      const itemLabel = String(item?.label ?? `Item ${i + 1}`);
       ctx.save();
       ctx.globalAlpha = clamp(q * 2);
       ctx.translate(0, (1 - q) * 28 * u);
-      ctx.fillStyle = pal.cardBg;
-      ctx.strokeStyle = isHi ? pal.accent : pal.cardBorder;
-      ctx.lineWidth = (isHi ? 3 : 2) * u;
-      roundRect(ctx, (width - cardW) / 2, y, cardW, cardH, 24 * u);
-      ctx.fill();
-      ctx.stroke();
+      drawStyledCard(ctx, (width - cardW) / 2, y, cardW, cardH, 24 * u, pal, u, isHi);
 
       // Label left
       ctx.fillStyle = pal.muted;
-      ctx.font = `600 ${Math.round(30 * u)}px ${SANS}`;
+      ctx.font = `600 ${Math.round(30 * u)}px ${pal.bodyFont || SANS}`;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(item.label, (width - cardW) / 2 + 34 * u, y + cardH * 0.36);
+      ctx.fillText(itemLabel.slice(0, 22), (width - cardW) / 2 + 34 * u, y + cardH * 0.36);
 
       // Progress track bar inside card
       const trackX = (width - cardW) / 2 + 34 * u;
@@ -938,14 +1071,14 @@ function renderMotionChart(
       roundRect(ctx, trackX, trackY, trackW, 12 * u, 999);
       ctx.fill();
       ctx.fillStyle = isHi ? pal.accent : withAlpha(pal.ink, 0.6);
-      roundRect(ctx, trackX, trackY, Math.max(12 * u, trackW * (item.value / vmax) * q), 12 * u, 999);
+      roundRect(ctx, trackX, trackY, Math.max(12 * u, trackW * (itemVal / vmax) * q), 12 * u, 999);
       ctx.fill();
 
       // Big counter right
       ctx.fillStyle = isHi ? pal.accent : pal.ink;
       ctx.font = `800 ${Math.round(52 * u)}px ${MONO}`;
       ctx.textAlign = "right";
-      ctx.fillText(formatCompact(item.value * q, pre, suf), (width + cardW) / 2 - 34 * u, y + cardH * 0.38);
+      ctx.fillText(formatCompact(itemVal * q, pre, suf), (width + cardW) / 2 - 34 * u, y + cardH * 0.38);
       ctx.restore();
     });
     return;
@@ -999,17 +1132,17 @@ function renderMotionChart(
       ctx.save();
       ctx.globalAlpha = clamp(q * 2.5);
       ctx.fillStyle = isHi ? pal.ink : pal.muted;
-      ctx.font = `700 ${Math.round((n > 5 ? 24 : 30) * u)}px ${SANS}`;
+      ctx.font = `700 ${Math.round((n > 5 ? 24 : 30) * u)}px ${pal.bodyFont || SANS}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText(d.label.slice(0, 12), x + bw / 2, pyBot + 20 * u);
+      ctx.fillText(String(d?.label ?? `Item ${i + 1}`).slice(0, 12), x + bw / 2, pyBot + 20 * u);
       ctx.restore();
 
       if (q <= 0) return;
-      const curV = d.value * q;
+      const curV = (Number(d?.value) || 0) * q;
       const yt = yOf(curV);
       const barH = Math.max(4 * u, pyBot - yt);
-      const r = Math.min(20 * u, bw * 0.35);
+      const r = cardRadius(pal, Math.min(20 * u, bw * 0.35));
 
       const barGrad = ctx.createLinearGradient(0, yt, 0, pyBot);
       if (isHi) {
@@ -1054,10 +1187,10 @@ function renderMotionChart(
       ctx.save();
       ctx.globalAlpha = a;
       ctx.fillStyle = pal.muted;
-      ctx.font = `600 ${Math.round(25 * u)}px ${SANS}`;
+      ctx.font = `600 ${Math.round(25 * u)}px ${pal.bodyFont || SANS}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText(d.label.slice(0, 10), lx(i), pyBot + 20 * u);
+      ctx.fillText(String(d?.label ?? `Item ${i + 1}`).slice(0, 10), lx(i), pyBot + 20 * u);
       ctx.restore();
     });
 
@@ -1214,10 +1347,11 @@ function renderTechCards(
       ctx.textBaseline = "middle";
       ctx.fillText(String(idx + 1), x + 58 * u, ly);
 
-      const visibleChars = Math.max(1, Math.ceil(code.length * clamp(lq * 1.25)));
+    const safeCode = String(code ?? "");
+      const visibleChars = Math.max(1, Math.ceil(safeCode.length * clamp(lq * 1.25)));
       ctx.fillStyle = isHl ? pal.accent : "#f1f5f9";
       ctx.textAlign = "left";
-      ctx.fillText(code.slice(0, visibleChars).slice(0, 42), x + 80 * u, ly);
+      ctx.fillText(safeCode.slice(0, visibleChars).slice(0, 42), x + 80 * u, ly);
       ctx.restore();
     });
 
@@ -1321,39 +1455,36 @@ function renderTechCards(
     ctx.scale(sc, sc);
     ctx.translate(-width / 2, -(y + cardH / 2));
 
-    ctx.fillStyle = pal.cardBg;
-    ctx.strokeStyle = i === cards.length - 1 ? withAlpha(pal.accent, 0.72) : pal.cardBorder;
-    ctx.lineWidth = 2.2 * u;
-    roundRect(ctx, x, y, cardW, cardH, 22 * u);
-    ctx.fill();
-    ctx.stroke();
+    drawStyledCard(ctx, x, y, cardW, cardH, 22 * u, pal, u, i === cards.length - 1);
 
     // Left badge pill
     const badgeW = 74 * u;
     const badgeH = 74 * u;
     ctx.fillStyle = pal.accent;
-    roundRect(ctx, x + 26 * u, y + (cardH - badgeH) / 2, badgeW, badgeH, 18 * u);
+    roundRect(ctx, x + 26 * u, y + (cardH - badgeH) / 2, badgeW, badgeH, cardRadius(pal, 18 * u));
     ctx.fill();
 
     ctx.fillStyle = pal.accentInk;
     ctx.font = `800 ${Math.round(30 * u)}px ${MONO}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(card.badge || `0${i + 1}`, x + 26 * u + badgeW / 2, y + cardH / 2 + 1 * u);
+    ctx.fillText(String(card?.badge || `0${i + 1}`), x + 26 * u + badgeW / 2, y + cardH / 2 + 1 * u);
 
     // Title & detail
     const textX = x + 124 * u;
     const textMaxW = cardW - 152 * u;
-    const titleF = fitText(ctx, card.title, textMaxW, 34 * u, 24 * u, 1, 800, SANS);
-    ctx.font = `800 ${titleF.size}px ${SANS}`;
+    const headFam = pal.headingFont || SANS;
+    const bodyFam = pal.bodyFont || SANS;
+    const titleF = fitText(ctx, String(card?.title ?? `Poin ${i + 1}`), textMaxW, 34 * u, 24 * u, 1, 800, headFam);
+    ctx.font = `800 ${titleF.size}px ${headFam}`;
     ctx.fillStyle = pal.ink;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(titleF.lines[0] || "", textX, y + (card.detail ? cardH * 0.36 : cardH * 0.5));
+    ctx.fillText(titleF.lines[0] || "", textX, y + (card?.detail ? cardH * 0.36 : cardH * 0.5));
 
-    if (card.detail) {
-      const detF = fitText(ctx, card.detail, textMaxW, 25 * u, 19 * u, 2, 500, SANS);
-      ctx.font = `500 ${detF.size}px ${SANS}`;
+    if (typeof card?.detail === "string" && card.detail.trim()) {
+      const detF = fitText(ctx, card.detail, textMaxW, 25 * u, 19 * u, 2, 500, bodyFam);
+      ctx.font = `500 ${detF.size}px ${bodyFam}`;
       ctx.fillStyle = pal.muted;
       detF.lines.forEach((ln, k) => {
         ctx.fillText(ln, textX, y + cardH * 0.66 + k * detF.size * 1.12);
@@ -1825,6 +1956,31 @@ function renderBreakdownPreviewStub(
 }
 
 /* ==================== MAIN PUBLIC RENDERER ==================== */
+function buildPaletteFromCustomDesign(custom: CustomDesignDirection): MotionPalette {
+  const p = custom.palette;
+  const isLight = Boolean(custom.isLight);
+  return {
+    bgTop: p.bgTop,
+    bgBottom: p.bgBottom,
+    cardBg: p.surfaceBg,
+    cardBorder: p.surfaceBorder,
+    ink: p.textPrimary,
+    muted: p.textSecondary,
+    soft: withAlpha(p.textPrimary, 0.24),
+    faint: withAlpha(p.textPrimary, 0.11),
+    accent: p.accentPrimary,
+    accentAlt: p.accentSecondary,
+    accentInk: p.accentInk,
+    grid: withAlpha(p.textPrimary, isLight ? 0.065 : 0.055),
+    isLight,
+    headingFont: fontStackFor(custom.typography.headingFont),
+    bodyFont: fontStackFor(custom.typography.bodyFont),
+    backgroundPattern: custom.visualStyle.backgroundPattern,
+    cardStyle: custom.visualStyle.cardStyle,
+    cornerStyle: custom.visualStyle.cornerStyle,
+  };
+}
+
 export function renderAiMotionScene(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -1833,11 +1989,13 @@ export function renderAiMotionScene(
   sceneProgress: number,
   sceneDurationSec: number,
   accentOverride?: string,
-  settledPreview = false
+  settledPreview = false,
+  customDesign?: CustomDesignDirection | null
 ) {
   const basePal = PALETTES[spec.theme] || PALETTES.carbon;
-  const pal: MotionPalette =
-    spec.theme === "carbon" && accentOverride
+  const pal: MotionPalette = customDesign
+    ? buildPaletteFromCustomDesign(customDesign)
+    : spec.theme === "carbon" && accentOverride
       ? { ...basePal, accent: accentOverride }
       : basePal;
 

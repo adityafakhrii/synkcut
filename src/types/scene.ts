@@ -195,12 +195,76 @@ export interface AiMotionSpec {
   breakdown3d?: Breakdown3DConfig;
 }
 
+export type DesignBackgroundPattern =
+  | "grid"
+  | "dots"
+  | "diagonal"
+  | "aurora"
+  | "paper_grain"
+  | "minimal";
+
+export type DesignCardStyle = "glass" | "solid" | "brutalist" | "hairline" | "neon";
+
+export type DesignCornerStyle = "sharp" | "rounded" | "pill";
+
+export type DesignFontFamily = "sans" | "serif" | "mono" | "display";
+
+export type DesignCaptionLook =
+  | "bold_outline"
+  | "custom_pill"
+  | "editorial_bar"
+  | "glass_tag"
+  | "minimal_clean";
+
+export interface CustomDesignDirection {
+  name: string;
+  summary: string;
+  artDirectionNotes: string;
+  isLight: boolean;
+  palette: {
+    bgTop: string;
+    bgBottom: string;
+    surfaceBg: string;
+    surfaceBorder: string;
+    textPrimary: string;
+    textSecondary: string;
+    accentPrimary: string;
+    accentSecondary: string;
+    accentInk: string;
+  };
+  typography: {
+    headingFont: DesignFontFamily;
+    bodyFont: DesignFontFamily;
+    captionFont: DesignFontFamily;
+    captionUppercase: boolean;
+  };
+  visualStyle: {
+    backgroundPattern: DesignBackgroundPattern;
+    cardStyle: DesignCardStyle;
+    cornerStyle: DesignCornerStyle;
+    captionLook: DesignCaptionLook;
+  };
+  pacing: "snappy" | "balanced" | "cinematic";
+  preferredMotion: MotionPreset;
+  preferredTransition: TransitionPreset;
+  preferredEngines: AiMotionEngine[];
+}
+
 export interface ProjectStyleReference {
-  sourceType: "youtube" | "images" | "local_video";
+  sourceType: "youtube" | "images" | "local_video" | "url" | "prompt";
   url?: string;
   title?: string;
   thumbnails: string[];
   styleDnaSummary: string;
+  customDesign?: CustomDesignDirection | null;
+}
+
+export interface FootageLibraryItem {
+  path: string;
+  fileName: string;
+  durationMs: number;
+  width?: number;
+  height?: number;
 }
 
 export interface WordTimestamp {
@@ -266,10 +330,12 @@ export interface SynkcutProject {
     updatedAt?: string;
   };
   styleReference?: ProjectStyleReference | null;
+  footageLibrary?: FootageLibraryItem[];
   globalStyle: {
     captionPreset: CaptionPreset;
     accentColor: string;
     showProgressBar: boolean;
+    customDesign?: CustomDesignDirection | null;
     bgm: {
       preset: string;
       volume: number;

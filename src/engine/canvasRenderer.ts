@@ -1,4 +1,11 @@
-import type { SceneItem, SceneOverlay, SynkcutProject, WordTimestamp } from "../types/scene";
+import type {
+  CustomDesignDirection,
+  DesignFontFamily,
+  SceneItem,
+  SceneOverlay,
+  SynkcutProject,
+  WordTimestamp,
+} from "../types/scene";
 import { getProjectDurationMs } from "./sampleProject";
 import { isLightAiMotionTheme } from "./aiMotionPresets";
 import { renderAiMotionScene } from "./aiMotionRenderer";
@@ -9,6 +16,24 @@ export interface RenderFrameOptions {
   showSafeZone?: boolean;
   isPosterThumbnail?: boolean;
   isPreviewPaused?: boolean;
+}
+
+const FONT_STACKS: Record<DesignFontFamily, string> = {
+  sans: '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  serif: 'Georgia, "Times New Roman", Cambria, serif',
+  mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
+  display: '"Impact", "Arial Black", "IBM Plex Sans", sans-serif',
+};
+
+function resolveFont(family?: DesignFontFamily): string {
+  return family && FONT_STACKS[family] ? FONT_STACKS[family] : FONT_STACKS.sans;
+}
+
+function cornerRadiusFor(design: CustomDesignDirection | null | undefined, base: number): number {
+  if (!design) return base;
+  if (design.visualStyle.cornerStyle === "sharp") return Math.min(6, base * 0.25);
+  if (design.visualStyle.cornerStyle === "pill") return Math.round(base * 1.45);
+  return base;
 }
 
 function easeOutCubic(t: number): number {
@@ -29,7 +54,7 @@ function roundRectPath(
   h: number,
   r: number
 ) {
-  const radius = Math.min(r, w / 2, h / 2);
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + radius, y);
   ctx.arcTo(x + w, y, x + w, y + h, radius);
@@ -40,12 +65,13 @@ function roundRectPath(
 }
 
 function findActiveScene(project: SynkcutProject, timeMs: number): SceneItem | null {
-  for (const scene of project.scenes) {
+  const scenes = project?.scenes ?? [];
+  for (const scene of scenes) {
     if (timeMs >= scene.startMs && timeMs < scene.endMs) {
       return scene;
     }
   }
-  return project.scenes[project.scenes.length - 1] ?? null;
+  return scenes[scenes.length - 1] ?? null;
 }
 
 function drawCoverVideo(
@@ -59,6 +85,7 @@ function drawCoverVideo(
 ) {
   const vw = videoEl.videoWidth;
   const vh = videoEl.videoHeight;
+  if (vw <= 0 || vh <= 0) return;
   const targetRatio = dw / dh;
   const sourceRatio = vw / vh;
 
@@ -96,20 +123,25 @@ function drawProceduralBackdrop(
   progress: number,
   isPosterThumbnail = false
 ) {
-  const formatPalettes: Record<SynkcutProject["meta"]["format"], [string, string, string]> = {
-    ad_promo: ["#0a1410", "#11241c", project.globalStyle.accentColor || "#38e59d"],
-    education: ["#09131d", "#0e2233", project.globalStyle.accentColor || "#38bdf8"],
-    storytelling: ["#171310", "#241b15", project.globalStyle.accentColor || "#f59e0b"],
-    review: ["#091714", "#0f2720", project.globalStyle.accentColor || "#38e59d"],
+  const custom = project.globalStyle?.customDesign ?? null;
+  const safeAccent = project.globalStyle?.accentColor || "#38e59d";
+  const formatPalettes: Record<string, [string, string, string]> = {
+    ad_promo: ["#0a1410", "#11241c", safeAccent],
+    education: ["#09131d", "#0e2233", safeAccent || "#38bdf8"],
+    storytelling: ["#171310", "#241b15", safeAccent || "#f59e0b"],
+    review: ["#091714", "#0f2720", safeAccent],
   };
-  const roleFallback: Record<SceneItem["role"], [string, string, string]> = {
+  const roleFallback: Record<string, [string, string, string]> = {
     hook: ["#13161f", "#1e1b2e", "#f59e0b"],
     body: ["#0d1520", "#112233", "#38bdf8"],
     cta: ["#0d1915", "#102820", "#34d399"],
   };
-  const [c1, c2, accent] = isPosterThumbnail
-    ? formatPalettes[project.meta.format]
-    : roleFallback[scene.role];
+
+  const [c1, c2, accent] = custom
+    ? [custom.palette.bgTop, custom.palette.bgBottom, custom.palette.accentPrimary]
+    : isPosterThumbnail
+      ? formatPalettes[project.meta?.format] ?? formatPalettes.ad_promo
+      : roleFallback[scene.role] ?? roleFallback.body;
 
   const bgGrad = ctx.createLinearGradient(0, 0, width, height);
   bgGrad.addColorStop(0, c1);
@@ -118,27 +150,54 @@ function drawProceduralBackdrop(
   ctx.fillRect(0, 0, width, height);
 
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
-  ctx.lineWidth = 2;
-  const gridStep = 120;
-  const shiftY = (progress * 60) % gridStep;
-  for (let x = 0; x <= width; x += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = -gridStep; y <= height + gridStep; y += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(0, y + shiftY);
-    ctx.lineTo(width, y + shiftY);
-    ctx.stroke();
+  const pattern = custom?.visualStyle.backgroundPattern ?? "grid";
+  const gridStroke = custom?.isLight ? "rgba(18, 22, 28, 0.06)" : "rgba(255, 255, 255, 0.045)";
+
+  if (pattern === "dots") {
+    ctx.fillStyle = gridStroke;
+    const step = 72;
+    const shiftY = (progress * 36) % step;
+    for (let x = step / 2; x <= width; x += step) {
+      for (let y = -step; y <= height + step; y += step) {
+        ctx.beginPath();
+        ctx.arc(x, y + shiftY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else if (pattern === "diagonal") {
+    ctx.strokeStyle = gridStroke;
+    ctx.lineWidth = 2;
+    const step = 96;
+    const shift = (progress * 48) % step;
+    for (let i = -height; i <= width + height; i += step) {
+      ctx.beginPath();
+      ctx.moveTo(i + shift, 0);
+      ctx.lineTo(i - height * 0.5 + shift, height);
+      ctx.stroke();
+    }
+  } else if (pattern === "grid") {
+    ctx.strokeStyle = gridStroke;
+    ctx.lineWidth = 2;
+    const gridStep = 120;
+    const shiftY = (progress * 60) % gridStep;
+    for (let x = 0; x <= width; x += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = -gridStep; y <= height + gridStep; y += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + shiftY);
+      ctx.lineTo(width, y + shiftY);
+      ctx.stroke();
+    }
   }
 
   const orbX = width * (0.3 + 0.4 * Math.sin(progress * Math.PI));
   const orbY = height * (0.38 + 0.08 * Math.cos(progress * Math.PI));
   const rad = ctx.createRadialGradient(orbX, orbY, 40, orbX, orbY, width * 0.72);
-  rad.addColorStop(0, `${accent}30`);
+  rad.addColorStop(0, accent.startsWith("#") ? `${accent}30` : "rgba(56,229,157,0.18)");
   rad.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = rad;
   ctx.fillRect(0, 0, width, height);
@@ -148,22 +207,39 @@ function drawProceduralBackdrop(
     const cardH = height * 0.34;
     const cardX = (width - cardW) / 2;
     const cardY = height * 0.27;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-    ctx.lineWidth = 2;
-    roundRectPath(ctx, cardX, cardY, cardW, cardH, 32);
+    const radCard = cornerRadiusFor(custom, 32);
+
+    if (custom?.visualStyle.cardStyle === "brutalist") {
+      ctx.fillStyle = custom.palette.accentPrimary;
+      roundRectPath(ctx, cardX + 10, cardY + 10, cardW, cardH, radCard);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = custom ? custom.palette.surfaceBg : "rgba(255, 255, 255, 0.04)";
+    ctx.strokeStyle = custom ? custom.palette.surfaceBorder : "rgba(255, 255, 255, 0.14)";
+    ctx.lineWidth = custom?.visualStyle.cardStyle === "brutalist" ? 4 : 2;
+    roundRectPath(ctx, cardX, cardY, cardW, cardH, radCard);
     ctx.fill();
     ctx.stroke();
 
+    const safeRole = typeof scene.role === "string" ? scene.role.toUpperCase() : "SCENE";
     ctx.fillStyle = accent;
-    ctx.font = '700 26px "JetBrains Mono", monospace';
+    ctx.font = `700 26px ${FONT_STACKS.mono}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`SCENE: ${scene.role.toUpperCase()}`, width / 2, cardY + cardH * 0.42);
+    ctx.fillText(
+      custom ? `${custom.name.toUpperCase().slice(0, 26)} · ${safeRole}` : `SCENE: ${safeRole}`,
+      width / 2,
+      cardY + cardH * 0.42
+    );
 
-    ctx.fillStyle = "rgba(241, 243, 247, 0.78)";
-    ctx.font = '500 32px "IBM Plex Sans", sans-serif';
-    ctx.fillText("Mode Backdrop Demo (Pilih Footage MP4 Lokal)", width / 2, cardY + cardH * 0.56);
+    ctx.fillStyle = custom ? custom.palette.textPrimary : "rgba(241, 243, 247, 0.78)";
+    ctx.font = `500 30px ${resolveFont(custom?.typography.bodyFont)}`;
+    ctx.fillText(
+      "Pasang Footage Lokal atau Aktifkan AI Motion",
+      width / 2,
+      cardY + cardH * 0.56
+    );
   }
   ctx.restore();
 }
@@ -182,15 +258,16 @@ function drawFootageWithMotion(
   settledPreview = false
 ) {
   const isAiMotion = scene.visualSource === "motion" && Boolean(scene.aiMotion);
-  const intensity = isAiMotion ? 0 : scene.motion.intensity;
+  const safeMotion = scene.motion ?? { preset: "static_clean", intensity: 0.5 };
+  const safeTrans = scene.transitionIn ?? { preset: "hard_cut", durationMs: 0 };
+  const intensity = isAiMotion ? 0 : Number.isFinite(safeMotion.intensity) ? safeMotion.intensity : 0.75;
   let scale = 1;
   let offsetX = 0;
   let offsetY = 0;
   let alpha = 1;
 
-  // Base motion preset (applied to footage scenes; AI Motion has its own native choreography)
   if (!isAiMotion) {
-    switch (scene.motion.preset) {
+    switch (safeMotion.preset) {
       case "zoom_punch": {
         const punch = easeOutCubic(Math.min(1, progress * 3.2));
         scale = 1 + 0.14 * intensity * (1 - punch) + 0.04 * intensity * progress;
@@ -222,14 +299,13 @@ function drawFootageWithMotion(
     }
   }
 
-  // Deterministic Entry Transitions (`transitionIn`)
-  const transDur = scene.transitionIn.durationMs || 0;
+  const transDur = safeTrans.durationMs || 0;
   const inTrans = transDur > 0 && sceneLocalMs < transDur && !isPosterThumbnail;
   const trProgress = inTrans ? Math.max(0, Math.min(1, sceneLocalMs / transDur)) : 1;
   const trEase = easeOutExpo(trProgress);
 
   if (inTrans) {
-    switch (scene.transitionIn.preset) {
+    switch (safeTrans.preset) {
       case "whip_pan": {
         offsetX += (1 - trEase) * width * 0.72;
         scale *= 1 + (1 - trEase) * 0.08;
@@ -253,7 +329,11 @@ function drawFootageWithMotion(
     }
   }
 
-  const splitOverlay = scene.overlays.find((o) => o.type === "split_screen");
+  const overlays = Array.isArray(scene.overlays) ? scene.overlays : [];
+  const splitOverlay = overlays.find((o) => o?.type === "split_screen");
+  const customDesign = project.globalStyle?.customDesign ?? null;
+  const accentColor =
+    customDesign?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -263,21 +343,25 @@ function drawFootageWithMotion(
 
   if (isAiMotion && scene.aiMotion) {
     const durSec = Math.max(0.8, (scene.endMs - scene.startMs) / 1000);
-    renderAiMotionScene(
-      ctx,
-      width,
-      height,
-      scene.aiMotion,
-      progress,
-      durSec,
-      project.globalStyle.accentColor,
-      settledPreview
-    );
+    try {
+      renderAiMotionScene(
+        ctx,
+        width,
+        height,
+        scene.aiMotion,
+        progress,
+        durSec,
+        accentColor,
+        settledPreview,
+        customDesign
+      );
+    } catch (err) {
+      console.warn("[Synkcut] AI Motion render fallback:", err);
+      drawProceduralBackdrop(ctx, width, height, project, scene, progress, isPosterThumbnail);
+    }
   } else if (splitOverlay) {
-    // True 50/50 Vertical Split-Screen / B-Roll Comparison
     const halfH = Math.round(height / 2);
 
-    // Top half: Primary footage or procedural top
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, width, halfH);
@@ -289,7 +373,6 @@ function drawFootageWithMotion(
     }
     ctx.restore();
 
-    // Bottom half: Secondary B-roll video OR crisp zoomed detail cut of primary video
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, halfH, width, height - halfH);
@@ -300,60 +383,70 @@ function drawFootageWithMotion(
       drawCoverVideo(ctx, videoEl, 0, halfH, width, height - halfH, 1.45);
     } else {
       const botGrad = ctx.createLinearGradient(0, halfH, width, height);
-      botGrad.addColorStop(0, "#121820");
-      botGrad.addColorStop(1, "#090d12");
+      botGrad.addColorStop(0, customDesign?.palette.bgBottom || "#121820");
+      botGrad.addColorStop(1, customDesign?.palette.bgTop || "#090d12");
       ctx.fillStyle = botGrad;
       ctx.fillRect(0, halfH, width, height - halfH);
       if (!isPosterThumbnail) {
         ctx.fillStyle = "rgba(255,255,255,0.65)";
-        ctx.font = '600 28px "JetBrains Mono", monospace';
+        ctx.font = `600 28px ${FONT_STACKS.mono}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(splitOverlay.text || "SPLIT-SCREEN · B-ROLL DETAIL", width / 2, halfH + (height - halfH) * 0.45);
+        ctx.fillText(
+          String(splitOverlay.text || "SPLIT-SCREEN · B-ROLL DETAIL"),
+          width / 2,
+          halfH + (height - halfH) * 0.45
+        );
       }
     }
     ctx.restore();
 
-    // Crisp hairline divider & badge at center seam
-    ctx.fillStyle = project.globalStyle.accentColor;
+    ctx.fillStyle = accentColor;
     ctx.fillRect(0, halfH - 3, width, 6);
 
-    if (splitOverlay.text) {
-      ctx.font = '700 24px "JetBrains Mono", monospace';
-      const tw = ctx.measureText(splitOverlay.text.toUpperCase()).width;
+    const splitText = String(splitOverlay.text || "");
+    if (splitText) {
+      ctx.font = `700 24px ${FONT_STACKS.mono}`;
+      const tw = ctx.measureText(splitText.toUpperCase()).width;
       const bw = Math.min(width * 0.72, tw + 44);
       const bh = 50;
-      ctx.fillStyle = "rgba(9, 9, 11, 0.92)";
-      ctx.strokeStyle = project.globalStyle.accentColor;
+      ctx.fillStyle = customDesign?.palette.surfaceBg || "rgba(9, 9, 11, 0.92)";
+      ctx.strokeStyle = accentColor;
       ctx.lineWidth = 2;
-      roundRectPath(ctx, (width - bw) / 2, halfH - bh / 2, bw, bh, 999);
+      roundRectPath(ctx, (width - bw) / 2, halfH - bh / 2, bw, bh, cornerRadiusFor(customDesign, 999));
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = customDesign?.palette.textPrimary || "#ffffff";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(splitOverlay.text.toUpperCase(), width / 2, halfH + 1);
+      ctx.fillText(splitText.toUpperCase(), width / 2, halfH + 1);
     }
   } else if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
     drawCoverVideo(ctx, videoEl, 0, 0, width, height, 1);
 
     const scrim = ctx.createLinearGradient(0, height * 0.45, 0, height);
     scrim.addColorStop(0, "rgba(0,0,0,0)");
-    scrim.addColorStop(0.65, "rgba(0,0,0,0.45)");
+    scrim.addColorStop(0.65, "rgba(0,0,0,0.42)");
     scrim.addColorStop(1, "rgba(0,0,0,0.72)");
     ctx.fillStyle = scrim;
     ctx.fillRect(0, 0, width, height);
+
+    // Subtle custom-design top accent trim bar on footage if Custom Design Direction is active
+    if (customDesign && customDesign.visualStyle.cardStyle === "brutalist") {
+      ctx.strokeStyle = customDesign.palette.accentPrimary;
+      ctx.lineWidth = 10;
+      ctx.strokeRect(5, 5, width - 10, height - 10);
+    }
   } else {
     drawProceduralBackdrop(ctx, width, height, project, scene, progress, isPosterThumbnail);
   }
 
   ctx.restore();
 
-  // Transition Post-FX (Whip Pan streak veil, Pop Zoom flash, Glitch RGB bands)
   if (inTrans) {
     ctx.save();
-    if (scene.transitionIn.preset === "whip_pan") {
+    if (safeTrans.preset === "whip_pan") {
       const blurAlpha = (1 - trEase) * 0.42;
       const streak = ctx.createLinearGradient(0, 0, width, 0);
       streak.addColorStop(0, `rgba(255,255,255,${blurAlpha})`);
@@ -361,11 +454,11 @@ function drawFootageWithMotion(
       streak.addColorStop(1, `rgba(0,0,0,${blurAlpha})`);
       ctx.fillStyle = streak;
       ctx.fillRect(0, 0, width, height);
-    } else if (scene.transitionIn.preset === "pop_zoom") {
+    } else if (safeTrans.preset === "pop_zoom") {
       const flash = Math.max(0, 1 - trProgress * 2.5) * 0.36;
       ctx.fillStyle = `rgba(255,255,255,${flash})`;
       ctx.fillRect(0, 0, width, height);
-    } else if (scene.transitionIn.preset === "glitch_flash") {
+    } else if (safeTrans.preset === "glitch_flash") {
       const strength = 1 - trProgress;
       ctx.globalCompositeOperation = "screen";
       ctx.fillStyle = `rgba(56, 229, 157, ${0.28 * strength})`;
@@ -380,7 +473,10 @@ function drawFootageWithMotion(
 }
 
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
+  const words = String(text ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   const lines: string[] = [];
   let current = "";
   for (const w of words) {
@@ -403,12 +499,24 @@ function drawOverlay(
   overlay: SceneOverlay,
   sceneProgress: number,
   accentColor: string,
-  settledPreview = false
+  settledPreview = false,
+  customDesign?: CustomDesignDirection | null
 ) {
-  if (overlay.type === "split_screen") return; // Handled directly in footage compositor
+  if (!overlay || overlay.type === "split_screen") return;
 
+  const overlayText = String(overlay.text ?? "");
+  const overlayTitle = String(overlay.title ?? "Notifikasi · Baru saja");
   const enter = settledPreview ? 1 : easeOutCubic(Math.min(1, sceneProgress * 5));
-  const topSafeY = height * 0.115; // Safe below TikTok/Reels 130px top zone
+  const topSafeY = height * 0.115;
+
+  const surfaceBg = customDesign?.palette.surfaceBg || "rgba(18, 21, 28, 0.9)";
+  const surfaceBorder = customDesign?.palette.surfaceBorder || "rgba(255, 255, 255, 0.18)";
+  const primaryText = customDesign?.palette.textPrimary || "#f8fafc";
+  const secondaryText = customDesign?.palette.textSecondary || "rgba(241, 243, 247, 0.68)";
+  const accentInk = customDesign?.palette.accentInk || "#09090b";
+  const headingFont = resolveFont(customDesign?.typography.headingFont);
+  const bodyFont = resolveFont(customDesign?.typography.bodyFont);
+  const isBrutalist = customDesign?.visualStyle.cardStyle === "brutalist";
 
   ctx.save();
   ctx.globalAlpha = enter;
@@ -418,102 +526,121 @@ function drawOverlay(
     const boxH = 152;
     const x = (width - boxW) / 2;
     const y = topSafeY - (1 - enter) * 40;
+    const rad = cornerRadiusFor(customDesign, 32);
 
-    ctx.fillStyle = "rgba(18, 21, 28, 0.9)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-    ctx.lineWidth = 2;
-    roundRectPath(ctx, x, y, boxW, boxH, 32);
+    if (isBrutalist) {
+      ctx.fillStyle = accentColor;
+      roundRectPath(ctx, x + 8, y + 8, boxW, boxH, rad);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = surfaceBg;
+    ctx.strokeStyle = isBrutalist ? primaryText : surfaceBorder;
+    ctx.lineWidth = isBrutalist ? 4 : 2;
+    roundRectPath(ctx, x, y, boxW, boxH, rad);
     ctx.fill();
     ctx.stroke();
 
     ctx.fillStyle = accentColor;
-    roundRectPath(ctx, x + 28, y + 32, 84, 84, 22);
+    roundRectPath(ctx, x + 28, y + 32, 84, 84, cornerRadiusFor(customDesign, 22));
     ctx.fill();
 
-    ctx.fillStyle = "#09090b";
-    ctx.font = '800 36px "IBM Plex Sans", sans-serif';
+    ctx.fillStyle = accentInk;
+    ctx.font = `800 36px ${headingFont}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("S", x + 70, y + 76);
 
     ctx.textAlign = "left";
-    ctx.fillStyle = "rgba(241, 243, 247, 0.68)";
-    ctx.font = '600 24px "IBM Plex Sans", sans-serif';
-    ctx.fillText(overlay.title || "Notifikasi · Baru saja", x + 136, y + 54);
+    ctx.fillStyle = secondaryText;
+    ctx.font = `600 24px ${bodyFont}`;
+    ctx.fillText(overlayTitle.slice(0, 36), x + 136, y + 54);
 
-    ctx.fillStyle = "#f8fafc";
-    ctx.font = '700 30px "IBM Plex Sans", sans-serif';
+    ctx.fillStyle = primaryText;
+    ctx.font = `700 30px ${headingFont}`;
     const maxChars = 34;
     const label =
-      overlay.text.length > maxChars ? `${overlay.text.slice(0, maxChars - 1)}…` : overlay.text;
+      overlayText.length > maxChars ? `${overlayText.slice(0, maxChars - 1)}…` : overlayText;
     ctx.fillText(label, x + 136, y + 100);
   } else if (overlay.type === "promo_badge") {
-    ctx.font = '700 28px "JetBrains Mono", monospace';
-    const textW = ctx.measureText(overlay.text).width;
+    ctx.font = `700 28px ${resolveFont(customDesign?.typography.captionFont || "mono")}`;
+    const textW = ctx.measureText(overlayText).width;
     const padX = 34;
     const pillW = Math.min(width * 0.84, textW + padX * 2);
     const pillH = 68;
     const x = (width - pillW) / 2;
     const y = topSafeY + (1 - enter) * 20;
+    const rad =
+      customDesign?.visualStyle.cornerStyle === "sharp" ? 6 : 999;
+
+    if (isBrutalist) {
+      ctx.fillStyle = customDesign?.isLight ? "#111318" : "#ffffff";
+      roundRectPath(ctx, x + 6, y + 6, pillW, pillH, rad);
+      ctx.fill();
+    }
 
     ctx.fillStyle = accentColor;
-    roundRectPath(ctx, x, y, pillW, pillH, 999);
+    roundRectPath(ctx, x, y, pillW, pillH, rad);
     ctx.fill();
 
-    ctx.fillStyle = "#09090b";
+    ctx.fillStyle = accentInk;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(overlay.text, width / 2, y + pillH / 2 + 1);
+    ctx.fillText(overlayText.slice(0, 38), width / 2, y + pillH / 2 + 1);
   } else if (overlay.type === "hook_headline") {
-    // 3-Second Sound-Off Bold Hook Headline Card
     const boxW = width * 0.84;
-    ctx.font = '800 50px "IBM Plex Sans", sans-serif';
-    const lines = wrapLines(ctx, overlay.text, boxW - 80);
+    ctx.font = `800 50px ${headingFont}`;
+    const lines = wrapLines(ctx, overlayText, boxW - 80);
     const lineH = 64;
-    const boxH = lines.length * lineH + 74;
+    const boxH = Math.max(1, lines.length) * lineH + 74;
     const x = (width - boxW) / 2;
     const y = height * 0.21 + (1 - enter) * 32;
+    const rad = cornerRadiusFor(customDesign, 28);
 
-    ctx.fillStyle = "rgba(9, 9, 11, 0.86)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
-    ctx.lineWidth = 2;
-    roundRectPath(ctx, x, y, boxW, boxH, 28);
+    if (isBrutalist) {
+      ctx.fillStyle = accentColor;
+      roundRectPath(ctx, x + 10, y + 10, boxW, boxH, rad);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = surfaceBg;
+    ctx.strokeStyle = isBrutalist ? primaryText : surfaceBorder;
+    ctx.lineWidth = isBrutalist ? 4 : 2;
+    roundRectPath(ctx, x, y, boxW, boxH, rad);
     ctx.fill();
     ctx.stroke();
 
-    // Accent bar inside top of card
     ctx.fillStyle = accentColor;
-    roundRectPath(ctx, x + 40, y + 26, 92, 8, 999);
+    roundRectPath(ctx, x + 40, y + 26, 92, 8, cornerRadiusFor(customDesign, 999));
     ctx.fill();
 
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = primaryText;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     lines.forEach((line, idx) => {
       ctx.fillText(line, x + 40, y + 72 + idx * lineH);
     });
   } else if (overlay.type === "doodle_highlight") {
-    // Organic Hand-Drawn Marker Underline + Sketchy Oval Callout (2026 Anti-Ad Trend)
     const centerY = height * 0.25;
     const boxW = width * 0.78;
     const x = (width - boxW) / 2;
+    const rad = cornerRadiusFor(customDesign, 22);
 
-    ctx.fillStyle = "rgba(15, 18, 22, 0.72)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.fillStyle = surfaceBg;
+    ctx.strokeStyle = surfaceBorder;
     ctx.lineWidth = 2;
-    roundRectPath(ctx, x, centerY - 58, boxW, 116, 22);
+    roundRectPath(ctx, x, centerY - 58, boxW, 116, rad);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = "#ffffff";
-    ctx.font = '700 40px "IBM Plex Sans", sans-serif';
+    ctx.fillStyle = primaryText;
+    ctx.font = `700 40px ${headingFont}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const clipped =
-      overlay.text.length > 26 ? `${overlay.text.slice(0, 25)}…` : overlay.text;
+      overlayText.length > 26 ? `${overlayText.slice(0, 25)}…` : overlayText;
     ctx.fillText(clipped, width / 2, centerY - 4);
 
-    // Animated hand-drawn double marker stroke underneath
     const drawLen = settledPreview ? 1 : Math.min(1, sceneProgress * 3.8);
     const startX = x + 64;
     const endX = startX + (boxW - 128) * drawLen;
@@ -525,7 +652,6 @@ function drawOverlay(
     ctx.quadraticCurveTo(width / 2, centerY + 22, endX, centerY + 36);
     ctx.stroke();
 
-    // Small sketchy pointer arc at top-right corner
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.arc(x + boxW - 22, centerY - 44, 24, 0.3, Math.PI * 1.45 * drawLen + 0.3);
@@ -543,12 +669,19 @@ function drawKineticCaptions(
   scene: SceneItem,
   timeMs: number
 ) {
-  const sceneWords = project.voiceover.words.filter(
-    (w) => w.startMs >= scene.startMs && w.startMs < scene.endMs
+  const words = Array.isArray(project.voiceover?.words) ? project.voiceover.words : [];
+  const sceneWords = words.filter(
+    (w) => w && typeof w.word === "string" && w.startMs >= scene.startMs && w.startMs < scene.endMs
   );
   if (sceneWords.length === 0) return;
 
-  const chunkSize = project.globalStyle.captionPreset === "kinetic_punch" ? 2 : 3;
+  const custom = project.globalStyle?.customDesign ?? null;
+  const preset = project.globalStyle?.captionPreset ?? "bold_pop";
+  const accent =
+    custom?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
+
+  const chunkSize =
+    preset === "kinetic_punch" || custom?.pacing === "snappy" ? 2 : 3;
   const chunks: WordTimestamp[][] = [];
   for (let i = 0; i < sceneWords.length; i += chunkSize) {
     chunks.push(sceneWords.slice(i, i + chunkSize));
@@ -557,24 +690,32 @@ function drawKineticCaptions(
   const activeChunk =
     chunks.find((ch) => timeMs >= ch[0].startMs && timeMs <= ch[ch.length - 1].endMs) ??
     chunks[chunks.length - 1];
+  if (!activeChunk || activeChunk.length === 0) return;
 
-  const baseY = height * 0.67; // Safe above bottom 480px Reels/TikTok UI
-  const preset = project.globalStyle.captionPreset;
-  const accent = project.globalStyle.accentColor;
+  const baseY = height * 0.67;
+
+  const captionLook = custom?.visualStyle.captionLook ?? null;
+  const useUppercase = custom
+    ? custom.typography.captionUppercase
+    : preset === "bold_pop" || preset === "kinetic_punch";
 
   const baseFontSize =
     preset === "kinetic_punch"
-      ? 86
-      : preset === "luxury_editorial"
+      ? 84
+      : captionLook === "editorial_bar" || preset === "luxury_editorial"
         ? 58
-        : preset === "clean_minimal"
+        : captionLook === "minimal_clean" || preset === "clean_minimal"
           ? 54
-          : 68;
-  const fontFamily =
-    preset === "luxury_editorial"
-      ? 'Georgia, "Times New Roman", serif'
-      : '"IBM Plex Sans", sans-serif';
-  const fontWeight = preset === "luxury_editorial" ? "600" : "800";
+          : 66;
+
+  const fontFamily = custom
+    ? resolveFont(custom.typography.captionFont)
+    : preset === "luxury_editorial"
+      ? FONT_STACKS.serif
+      : FONT_STACKS.sans;
+
+  const fontWeight =
+    custom?.typography.captionFont === "serif" || preset === "luxury_editorial" ? "700" : "800";
 
   ctx.save();
   ctx.textBaseline = "middle";
@@ -582,17 +723,16 @@ function drawKineticCaptions(
   const measureChunk = (sz: number) => {
     ctx.font = `${fontWeight} ${sz}px ${fontFamily}`;
     const baseSpaceW = ctx.measureText(" ").width;
-    const spW =
-      preset === "bold_pop" || preset === "kinetic_punch" ? baseSpaceW * 1.5 : baseSpaceW * 1.15;
+    const spW = useUppercase ? baseSpaceW * 1.45 : baseSpaceW * 1.15;
     const measured = activeChunk.map((w) => {
-      const label =
-        preset === "bold_pop" || preset === "kinetic_punch" ? w.word.toUpperCase() : w.word;
+      const safeWord = String(w.word ?? "");
+      const label = useUppercase ? safeWord.toUpperCase() : safeWord;
       const isActive = timeMs >= w.startMs && timeMs <= w.endMs;
       const wordDur = Math.max(80, w.endMs - w.startMs);
       const wordProg = isActive ? Math.min(1, (timeMs - w.startMs) / Math.min(140, wordDur)) : 0;
       const springBoost =
-        isActive && (preset === "bold_pop" || preset === "kinetic_punch")
-          ? 1 + 0.13 * easeOutCubic(wordProg)
+        isActive && (preset === "bold_pop" || preset === "kinetic_punch" || captionLook === "bold_outline")
+          ? 1 + 0.12 * easeOutCubic(wordProg)
           : 1;
       return {
         word: w,
@@ -607,7 +747,7 @@ function drawKineticCaptions(
     return { items: measured, spaceW: spW, totalW: tw };
   };
 
-  const maxRowW = width * 0.80;
+  const maxRowW = width * 0.8;
   let fontSize = baseFontSize;
   let layout = measureChunk(fontSize);
   if (layout.totalW > maxRowW && layout.totalW > 0) {
@@ -616,24 +756,51 @@ function drawKineticCaptions(
   }
   const { items, spaceW, totalW } = layout;
 
-  const isLightMotionBg =
-    scene.visualSource === "motion" &&
-    Boolean(scene.aiMotion) &&
-    isLightAiMotionTheme(scene.aiMotion!.theme);
+  const isLightMotionBg = custom
+    ? custom.isLight && scene.visualSource === "motion"
+    : scene.visualSource === "motion" &&
+      Boolean(scene.aiMotion) &&
+      isLightAiMotionTheme(scene.aiMotion!.theme);
 
-  if (preset === "clean_minimal" || (isLightMotionBg && preset !== "bold_pop" && preset !== "kinetic_punch")) {
+  const needsPillBg = custom
+    ? captionLook === "custom_pill" ||
+      captionLook === "glass_tag" ||
+      captionLook === "editorial_bar" ||
+      (isLightMotionBg && captionLook !== "bold_outline")
+    : preset === "clean_minimal" ||
+      (isLightMotionBg && preset !== "bold_pop" && preset !== "kinetic_punch");
+
+  if (needsPillBg) {
     const padX = 36;
     const padY = 22;
-    ctx.fillStyle = "rgba(13, 15, 18, 0.84)";
-    roundRectPath(
-      ctx,
-      (width - totalW) / 2 - padX,
-      baseY - fontSize / 2 - padY,
-      totalW + padX * 2,
-      fontSize + padY * 2,
-      24
-    );
+    const bx = (width - totalW) / 2 - padX;
+    const by = baseY - fontSize / 2 - padY;
+    const bw = totalW + padX * 2;
+    const bh = fontSize + padY * 2;
+    const rad =
+      captionLook === "editorial_bar"
+        ? 8
+        : cornerRadiusFor(custom, 24);
+
+    if (custom?.visualStyle.cardStyle === "brutalist") {
+      ctx.fillStyle = accent;
+      roundRectPath(ctx, bx + 7, by + 7, bw, bh, rad);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = custom
+      ? custom.isLight
+        ? "rgba(15, 18, 26, 0.90)"
+        : custom.palette.surfaceBg
+      : "rgba(13, 15, 18, 0.84)";
+    roundRectPath(ctx, bx, by, bw, bh, rad);
     ctx.fill();
+
+    if (custom && (captionLook === "glass_tag" || captionLook === "editorial_bar" || custom.visualStyle.cardStyle === "brutalist")) {
+      ctx.strokeStyle = captionLook === "editorial_bar" ? accent : custom.palette.surfaceBorder;
+      ctx.lineWidth = captionLook === "editorial_bar" ? 3 : 2;
+      ctx.stroke();
+    }
   }
 
   let cursorX = (width - totalW) / 2;
@@ -648,17 +815,23 @@ function drawKineticCaptions(
 
     ctx.textAlign = "center";
 
-    if (preset === "bold_pop" || preset === "kinetic_punch") {
+    const useOutline = custom
+      ? captionLook === "bold_outline" || (!needsPillBg && !isLightMotionBg)
+      : preset === "bold_pop" || preset === "kinetic_punch";
+
+    if (useOutline) {
       ctx.lineWidth = 14;
       ctx.lineJoin = "round";
       ctx.strokeStyle = "rgba(10, 12, 16, 0.92)";
       ctx.strokeText(item.label, 0, 0);
-    } else if (preset === "neon_tech" && item.isActive) {
+    } else if ((preset === "neon_tech" || custom?.visualStyle.cardStyle === "neon") && item.isActive) {
       ctx.shadowColor = accent;
       ctx.shadowBlur = 24;
     }
 
-    ctx.fillStyle = item.isActive ? accent : "#ffffff";
+    const inactiveColor =
+      custom && !needsPillBg && isLightMotionBg ? custom.palette.textPrimary : "#ffffff";
+    ctx.fillStyle = item.isActive ? accent : inactiveColor;
     ctx.fillText(item.label, 0, 0);
     ctx.restore();
 
@@ -685,7 +858,7 @@ function drawSafeZoneOverlay(ctx: CanvasRenderingContext2D, width: number, heigh
   ctx.strokeRect(24, topPx, width - rightPx - 24, height - topPx - bottomPx);
 
   ctx.fillStyle = "rgba(254, 202, 202, 0.95)";
-  ctx.font = '600 22px "JetBrains Mono", monospace';
+  ctx.font = `600 22px ${FONT_STACKS.mono}`;
   ctx.textAlign = "left";
   ctx.fillText("SAFE ZONE · TIKTOK / REELS (1080×1920)", 40, topPx - 18);
   ctx.restore();
@@ -703,11 +876,16 @@ export function renderProjectFrame(
   const scene = findActiveScene(project, timeMs);
   if (!scene) return;
 
-  const sceneDuration = Math.max(1, scene.endMs - scene.startMs);
-  const sceneLocalMs = Math.max(0, timeMs - scene.startMs);
+  const sceneDuration = Math.max(1, (scene.endMs || 2500) - (scene.startMs || 0));
+  const sceneLocalMs = Math.max(0, timeMs - (scene.startMs || 0));
   const sceneProgress = Math.max(0, Math.min(1, sceneLocalMs / sceneDuration));
 
-  const settledPreview = Boolean(options.isPosterThumbnail || (options.isPreviewPaused && sceneLocalMs < 350));
+  const settledPreview = Boolean(
+    options.isPosterThumbnail || (options.isPreviewPaused && sceneLocalMs < 350)
+  );
+  const customDesign = project.globalStyle?.customDesign ?? null;
+  const accentColor =
+    customDesign?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
 
   // 1. Footage OR Native AI Motion + Visual Entry Transition + Optional Split-Screen
   drawFootageWithMotion(
@@ -725,15 +903,17 @@ export function renderProjectFrame(
   );
 
   // 2. Scene overlays (Hook Headline, Native Notification, Promo Badge, Doodle Marker)
-  for (const overlay of scene.overlays) {
+  const overlays = Array.isArray(scene.overlays) ? scene.overlays : [];
+  for (const overlay of overlays) {
     drawOverlay(
       ctx,
       width,
       height,
       overlay,
       sceneProgress,
-      project.globalStyle.accentColor,
-      settledPreview
+      accentColor,
+      settledPreview,
+      customDesign
     );
   }
 
@@ -741,12 +921,12 @@ export function renderProjectFrame(
   drawKineticCaptions(ctx, width, height, project, scene, timeMs);
 
   // 4. Progress bar
-  if (project.globalStyle.showProgressBar) {
+  if (project.globalStyle?.showProgressBar) {
     const totalMs = Math.max(1, getProjectDurationMs(project));
     const overallProgress = Math.max(0, Math.min(1, timeMs / totalMs));
     ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
     ctx.fillRect(0, 0, width, 10);
-    ctx.fillStyle = project.globalStyle.accentColor;
+    ctx.fillStyle = accentColor;
     ctx.fillRect(0, 0, width * overallProgress, 10);
   }
 

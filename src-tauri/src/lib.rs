@@ -8,9 +8,19 @@ mod style_ref;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_shell::ShellExt;
+
+static ATOMIC_TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FootageFrameSample {
+    pub timestamp_ms: u64,
+    pub data_url: String,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -204,12 +214,12 @@ async fn probe_media(app: AppHandle, path: String) -> Result<MediaProbeInfo, Str
 }
 
 #[tauri::command]
-async fn extract_thumbnails(
+async fn extract_footage_frames(
     app: AppHandle,
     path: String,
     count: Option<u32>,
-) -> Result<Vec<String>, String> {
-    let thumb_count = count.unwrap_or(2).clamp(1, 4);
+) -> Result<Vec<FootageFrameSample>, String> {
+    let thumb_count = count.unwrap_or(4).clamp(1, 6);
     let probe = probe_media(app.clone(), path.clone()).await?;
     let total_sec = (probe.duration_ms as f64 / 1000.0).max(0.5);
 
@@ -217,12 +227,13 @@ async fn extract_thumbnails(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let temp_dir = std::env::temp_dir().join(format!("synkcut_thumbs_{stamp}"));
+    let seq = ATOMIC_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!("synkcut_thumbs_{stamp}_{seq}"));
     tokio::fs::create_dir_all(&temp_dir)
         .await
         .map_err(|e| format!("Gagal membuat folder temp thumbnail: {e}"))?;
 
-    let mut data_urls = Vec::new();
+    let mut samples = Vec::new();
 
     for i in 0..thumb_count {
         let ratio = (i as f64 + 0.5) / (thumb_count as f64);
@@ -253,13 +264,28 @@ async fn extract_thumbnails(
 
         if out.status.success() {
             if let Ok(bytes) = tokio::fs::read(&out_file).await {
-                data_urls.push(format!("data:image/jpeg;base64,{}", BASE64.encode(bytes)));
+                if !bytes.is_empty() {
+                    samples.push(FootageFrameSample {
+                        timestamp_ms: (ts * 1000.0).round() as u64,
+                        data_url: format!("data:image/jpeg;base64,{}", BASE64.encode(bytes)),
+                    });
+                }
             }
         }
     }
 
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-    Ok(data_urls)
+    Ok(samples)
+}
+
+#[tauri::command]
+async fn extract_thumbnails(
+    app: AppHandle,
+    path: String,
+    count: Option<u32>,
+) -> Result<Vec<String>, String> {
+    let frames = extract_footage_frames(app, path, count).await?;
+    Ok(frames.into_iter().map(|f| f.data_url).collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,6 +565,7 @@ pub fn run() {
             check_sidecars,
             probe_media,
             extract_thumbnails,
+            extract_footage_frames,
             mux_export_mp4,
             reveal_in_explorer,
             byok::get_byok_status,
@@ -560,6 +587,7 @@ pub fn run() {
             ai::ai_copilot_patch,
             style_ref::extract_youtube_style_reference,
             style_ref::analyze_style_reference,
+            style_ref::analyze_design_reference,
             audio::generate_tts_audio,
             audio::process_user_audio,
             audio_pack::get_audio_pack_catalog,
