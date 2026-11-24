@@ -1,6 +1,6 @@
 [package]
 name = "synkcut"
-version = "2.1.2"
+version = "2.1.3"
 description = "Synkcut — AI Desktop Video Editor (Suara, footage, dan motion otomatis sinkron)"
 authors = ["Aditya Fakhri"]
 edition = "2021"

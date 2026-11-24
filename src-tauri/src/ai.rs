@@ -3809,6 +3809,7 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - `world.objects[name]` -> stored THREE.Object3D props
 - `world.characters[name]` -> stored CharacterRig actors
 - `world.data` -> plain object to store custom parameters/references
+- `world.add(obj, name?)` -> attach any custom THREE.Object3D directly to the world root
 
 `state` fields in `animateFrame`:
 - `globalTimeMs`, `totalDurationMs`, `globalProgress` (0..1 across entire video!)
@@ -3831,8 +3832,11 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - In `animateCode`: `D3.poseCharacter(world.characters.hero, { action:'idle'|'point'|'wave'|'handshake'|'walk'|'think'|'surprised'|'sit'|'sleep'|'talk'|'cheer', phase: tSec, headTurn?: 0 })`
 
 `D3` 3D Prop Primitives (pass `world` OR a parent THREE.Group as 1st arg!):
-- `D3.group(world, { name?, pos?, rot?, scale? })`
+- `D3.group(parent, { name?, pos?, rot?, scale? })`
 - `D3.box(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, emissiveIntensity?, pos?, rot?, scale? })`
+- `D3.roundedBox(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, pos?, rot?, scale? })`
+- `D3.plane(parent, { name?, size:[w,h], color, roughness?, metalness?, opacity?, pos?, rot?, scale? })`
+- `D3.capsule(parent, { name?, radius?, length?, color, roughness?, metalness?, pos?, rot?, scale? })`
 - `D3.cylinder(parent, { name?, radius?, rTop?, rBottom?, height, color, roughness?, metalness?, pos?, rot? })`
 - `D3.sphere(parent, { name?, radius, color, roughness?, metalness?, opacity?, emissive?, pos?, rot?, scale? })`
 - `D3.cone(parent, { name?, radius, height, color, pos?, rot? })`
@@ -3840,8 +3844,8 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - `D3.tube(parent, [[x,y,z], [x2,y2,z2], ...], { name?, radius=0.12, color, metalness? })` (pipes, anchor cables, arches, wires!)
 - `D3.truss(parent, { name?, height=4.5, baseWidth=1.4, topWidth=0.55, levels=4, color, pos? })` (towers, rigs, cranes, stadiums!)
 - `D3.table(parent, { name?, size:[w,h,d], color?, pos?, rotY? })`
-- `D3.tree({ style:'palm'|'round'|'pine', scale=1, pos:[x,y,z] })` (add via `world.root.add(...)`)
-- `D3.fish({ color, scale, pos })` (add via `world.root.add(...)`)
+- `D3.tree(parent, { style:'palm'|'round'|'pine', scale=1, pos:[x,y,z] })`
+- `D3.fish(parent, { color, scale, pos })`
 - `D3.particles3D(world, { name?, count=24, area:[6,5,6], center:[0,2,0], color:'#FFFFFF', radius:0.09 })`
 
 `D3` Continuous 3D Camera Choreography (CRITICAL for viral Shorts flow!):

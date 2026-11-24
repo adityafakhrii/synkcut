@@ -91,6 +91,7 @@ export interface DioramaWorldHandle {
   cloudsGroup?: THREE.Group;
   width: number;
   height: number;
+  add?: <T extends THREE.Object3D>(obj: T, name?: string) => T;
 }
 
 export interface DioramaFrameState {
@@ -254,10 +255,126 @@ function roundRectPath(
   ctx.closePath();
 }
 
-function registerObj(world: DioramaWorldHandle, obj: THREE.Object3D, name?: string) {
-  world.root.add(obj);
-  if (name && typeof name === "string") {
-    world.objects[name] = obj;
+type ParentTarget = DioramaWorldHandle | CharacterRig | THREE.Object3D;
+
+let activeWorldRef: DioramaWorldHandle | null = null;
+
+/**
+ * Sets the currently executing DioramaWorldHandle so D3 builders can gracefully recover
+ * if LLM-generated code omits `world`, passes `undefined`, or passes a `CharacterRig`.
+ */
+export function setActiveDioramaWorld(world: DioramaWorldHandle | null) {
+  activeWorldRef = world;
+}
+
+function isWorldHandle(v: unknown): v is DioramaWorldHandle {
+  return Boolean(
+    v &&
+      typeof v === "object" &&
+      "root" in v &&
+      "scene" in v &&
+      (v as DioramaWorldHandle).root &&
+      typeof (v as DioramaWorldHandle).root.add === "function"
+  );
+}
+
+function isCharacterRig(v: unknown): v is CharacterRig {
+  return Boolean(
+    v &&
+      typeof v === "object" &&
+      "group" in v &&
+      "head" in v &&
+      (v as CharacterRig).group &&
+      typeof (v as CharacterRig).group.add === "function"
+  );
+}
+
+function isObject3D(v: unknown): v is THREE.Object3D {
+  return Boolean(
+    v &&
+      typeof v === "object" &&
+      typeof (v as THREE.Object3D).add === "function" &&
+      "position" in v
+  );
+}
+
+function isParentTarget(v: unknown): v is ParentTarget {
+  return isWorldHandle(v) || isCharacterRig(v) || isObject3D(v);
+}
+
+function resolveWorld(maybeWorld?: unknown): DioramaWorldHandle | null {
+  if (isWorldHandle(maybeWorld)) return maybeWorld;
+  return activeWorldRef;
+}
+
+function resolveWorldAndOpts<T extends object>(
+  worldOrOpts?: unknown,
+  maybeOpts?: T
+): { world: DioramaWorldHandle | null; opts: T } {
+  if (isWorldHandle(worldOrOpts)) {
+    return { world: worldOrOpts, opts: (maybeOpts ?? {}) as T };
+  }
+  if (
+    worldOrOpts &&
+    typeof worldOrOpts === "object" &&
+    !Array.isArray(worldOrOpts) &&
+    maybeOpts === undefined
+  ) {
+    return { world: activeWorldRef, opts: worldOrOpts as T };
+  }
+  return { world: activeWorldRef, opts: (maybeOpts ?? {}) as T };
+}
+
+function resolveParentAndOpts<T extends object>(
+  parentOrOpts?: unknown,
+  maybeOpts?: T
+): { parent: ParentTarget | null; opts: T } {
+  if (isParentTarget(parentOrOpts)) {
+    return { parent: parentOrOpts, opts: (maybeOpts ?? {}) as T };
+  }
+  if (
+    parentOrOpts &&
+    typeof parentOrOpts === "object" &&
+    !Array.isArray(parentOrOpts) &&
+    maybeOpts === undefined
+  ) {
+    return { parent: activeWorldRef, opts: parentOrOpts as T };
+  }
+  return { parent: activeWorldRef, opts: (maybeOpts ?? {}) as T };
+}
+
+function attach3D<T extends THREE.Object3D>(
+  parent: ParentTarget | null | undefined,
+  obj: T,
+  name?: string
+): T {
+  const w = isWorldHandle(parent) ? parent : activeWorldRef;
+  if (isWorldHandle(parent)) {
+    parent.root.add(obj);
+  } else if (isCharacterRig(parent)) {
+    parent.group.add(obj);
+  } else if (isObject3D(parent)) {
+    parent.add(obj);
+  } else if (activeWorldRef) {
+    activeWorldRef.root.add(obj);
+  }
+  if (w && name && typeof name === "string") {
+    w.objects[name] = obj;
+  }
+  return obj;
+}
+
+function registerObj<T extends THREE.Object3D>(
+  world: DioramaWorldHandle | null | undefined,
+  obj: T,
+  name?: string
+): T {
+  const w = resolveWorld(world);
+  if (w) {
+    w.root.add(obj);
+    if (name && typeof name === "string") {
+      w.objects[name] = obj;
+    }
   }
   return obj;
 }
@@ -293,8 +410,8 @@ export function createDiorama3DSdk() {
      * (daylight, night, neon cyberpunk, outer space with stars, warm cafe/sunset, clean dark/light studio).
      */
     setupAtmosphere(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         bgTop?: string;
         bgMid?: string;
         bgBottom?: string;
@@ -312,6 +429,8 @@ export function createDiorama3DSdk() {
         stars?: boolean;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return;
       const isDark = opts?.isDark ?? false;
       const top = opts?.bgTop || (isDark ? "#070B18" : "#5AAEE8");
       const mid = opts?.bgMid || (isDark ? "#101932" : "#A3D7F5");
@@ -393,8 +512,8 @@ export function createDiorama3DSdk() {
 
     /** Bright daylight PBR sky helper (shorthand for `setupAtmosphere` with warm sun) */
     setupDaylight(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         skyTop?: string;
         skyMid?: string;
         skyBottom?: string;
@@ -406,6 +525,8 @@ export function createDiorama3DSdk() {
         fogFar?: number;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return;
       this.setupAtmosphere(world, {
         bgTop: opts?.skyTop || "#5AAEE8",
         bgMid: opts?.skyMid || "#A3D7F5",
@@ -422,9 +543,10 @@ export function createDiorama3DSdk() {
 
     /** Soft Blender-style puffy 3D clouds drifting gently in the upper sky */
     addClouds(
-      world: DioramaWorldHandle,
-      opts?: { count?: number; y?: number; spreadX?: number; zMin?: number; zMax?: number; seed?: number }
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: { count?: number; y?: number; spreadX?: number; zMin?: number; zMax?: number; seed?: number }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
       const count = clamp(opts?.count ?? 6, 1, 14);
       const baseY = opts?.y ?? 11;
       const spreadX = opts?.spreadX ?? 26;
@@ -457,13 +579,15 @@ export function createDiorama3DSdk() {
         group.add(cloud);
       }
 
-      world.cloudsGroup = group;
+      if (world) world.cloudsGroup = group;
       return registerObj(world, group, "__clouds");
     },
 
     /** Animate previously created clouds smoothly with time */
-    animateClouds(world: DioramaWorldHandle, tSec: number) {
-      if (!world.cloudsGroup) return;
+    animateClouds(worldOrTime?: DioramaWorldHandle | number, maybeTSec?: number) {
+      const world = resolveWorld(worldOrTime);
+      const tSec = typeof worldOrTime === "number" ? worldOrTime : Number(maybeTSec ?? 0);
+      if (!world || !world.cloudsGroup) return;
       for (const child of world.cloudsGroup.children) {
         const bx = Number(child.userData.baseX ?? 0);
         const spd = Number(child.userData.speed ?? 0.4);
@@ -473,8 +597,8 @@ export function createDiorama3DSdk() {
 
     /** Ocean Cross-Section Diorama (AkuTahu style: bright sky + turquoise water slice + sandy seabed + optional fish) */
     buildOceanCutaway(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         width?: number;
         depth?: number;
         waterHeight?: number;
@@ -484,6 +608,8 @@ export function createDiorama3DSdk() {
         fishCount?: number;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return new THREE.Group();
       this.setupDaylight(world, {
         skyTop: "#4EA8E5",
         skyMid: "#9FD8F7",
@@ -586,7 +712,10 @@ export function createDiorama3DSdk() {
     },
 
     /** Gently animate ocean ripples & swimming fish */
-    animateOcean(world: DioramaWorldHandle, tSec: number) {
+    animateOcean(worldOrTime?: DioramaWorldHandle | number, maybeTSec?: number) {
+      const world = resolveWorld(worldOrTime);
+      const tSec = typeof worldOrTime === "number" ? worldOrTime : Number(maybeTSec ?? 0);
+      if (!world) return;
       if (world.waterMesh) {
         const mat = world.waterMesh.material as THREE.MeshStandardMaterial;
         if (mat.map) {
@@ -611,8 +740,8 @@ export function createDiorama3DSdk() {
 
     /** Ground / Desert / Farm Cutaway World (How Come? & Outdoor Explainer style) */
     buildGroundCutaway(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         style?: "desert" | "grass" | "farm" | "urban";
         width?: number;
         depth?: number;
@@ -623,6 +752,8 @@ export function createDiorama3DSdk() {
         treeCount?: number;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return new THREE.Group();
       const style = opts?.style || "grass";
       const isDesert = style === "desert";
       this.setupDaylight(world, {
@@ -739,8 +870,8 @@ export function createDiorama3DSdk() {
 
     /** Isometric / Perspective Cutaway Room (Kenapa Yaaa? / Indoor Cafe / Office / Studio style) */
     buildRoomCutaway(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         width?: number;
         depth?: number;
         height?: number;
@@ -749,6 +880,8 @@ export function createDiorama3DSdk() {
         trimColor?: string;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return new THREE.Group();
       this.setupDaylight(world, {
         skyTop: "#7AB8E8",
         skyMid: "#C3E2F7",
@@ -818,14 +951,16 @@ export function createDiorama3DSdk() {
 
     /** Clean Bright Daylight Pedestal Stage (Architecture / Product / Concept Diorama) */
     buildStudioStage(
-      world: DioramaWorldHandle,
-      opts?: {
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown>,
+      maybeOpts?: {
         bgTop?: string;
         bgBottom?: string;
         stageColor?: string;
         radius?: number;
       }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return new THREE.Group();
       this.setupDaylight(world, {
         skyTop: opts?.bgTop || "#CFE6FA",
         skyMid: "#E6F1FC",
@@ -858,7 +993,15 @@ export function createDiorama3DSdk() {
      * Stylized Articulated 3D Human Character (Blender clay/explainer look, inspired by Kenapa Yaaa? / How Come?).
      * Supports expressive real-time acting via `D3.poseCharacter(char, { action, phase })`.
      */
-    createCharacter(world: DioramaWorldHandle, opts?: CharacterOptions): CharacterRig {
+    createCharacter(
+      worldOrOpts?: DioramaWorldHandle | ParentTarget | CharacterOptions,
+      maybeOpts?: CharacterOptions
+    ): CharacterRig {
+      const { parent, opts } = resolveParentAndOpts<CharacterOptions>(
+        worldOrOpts,
+        maybeOpts
+      );
+      const world = isWorldHandle(parent) ? parent : activeWorldRef;
       const group = new THREE.Group();
       const body = new THREE.Group();
       group.add(body);
@@ -1046,16 +1189,23 @@ export function createDiorama3DSdk() {
         mouth,
       };
 
-      world.root.add(group);
-      if (opts?.name) {
+      attach3D(parent, group, opts?.name);
+      if (world && opts?.name) {
         world.objects[opts.name] = group;
         world.characters[opts.name] = rig;
       }
       return rig;
     },
 
-    /** Drive expressive acting poses on a CharacterRig deterministically */
-    poseCharacter(rig: CharacterRig | undefined, opts?: CharacterPoseOptions) {
+    /** Drive expressive acting poses on a CharacterRig (or character name string) deterministically */
+    poseCharacter(
+      rigOrName: CharacterRig | string | undefined,
+      opts?: CharacterPoseOptions
+    ) {
+      const rig =
+        typeof rigOrName === "string"
+          ? activeWorldRef?.characters?.[rigOrName]
+          : rigOrName;
       if (!rig || !rig.group) return;
       const action = String(opts?.action || "idle").toLowerCase();
       const ph = Number(opts?.phase ?? 0);
@@ -1151,15 +1301,38 @@ export function createDiorama3DSdk() {
 
     /* ==================== PROCEDURAL 3D PROP BUILDERS ==================== */
 
-    group(world: DioramaWorldHandle, opts?: { name?: string; pos?: Vec3Tuple; rot?: Vec3Tuple; scale?: Vec3Tuple | number }) {
+    /** Attach any custom THREE.Object3D to world/parent (accepts `(parent, obj, name?)` OR `(obj, name?)`) */
+    add<T extends THREE.Object3D>(
+      parentOrObj: ParentTarget | T | null | undefined,
+      maybeObjOrName?: T | string,
+      maybeName?: string
+    ): T | null {
+      if (isParentTarget(parentOrObj) && maybeObjOrName && typeof maybeObjOrName === "object" && isObject3D(maybeObjOrName)) {
+        return attach3D(parentOrObj, maybeObjOrName as T, maybeName);
+      }
+      if (isObject3D(parentOrObj)) {
+        const name = typeof maybeObjOrName === "string" ? maybeObjOrName : maybeName;
+        return attach3D(activeWorldRef, parentOrObj as T, name);
+      }
+      if (maybeObjOrName && typeof maybeObjOrName === "object" && isObject3D(maybeObjOrName)) {
+        return attach3D(activeWorldRef, maybeObjOrName as T, maybeName);
+      }
+      return null;
+    },
+
+    group(
+      parentOrOpts?: ParentTarget | { name?: string; pos?: Vec3Tuple; rot?: Vec3Tuple; scale?: Vec3Tuple | number } | null,
+      maybeOpts?: { name?: string; pos?: Vec3Tuple; rot?: Vec3Tuple; scale?: Vec3Tuple | number }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const g = new THREE.Group();
       applyTransform(g, opts);
-      return registerObj(world, g, opts?.name);
+      return attach3D(parent, g, opts?.name);
     },
 
     box(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         size?: Vec3Tuple;
         color?: string | number;
@@ -1173,20 +1346,98 @@ export function createDiorama3DSdk() {
         scale?: Vec3Tuple | number;
       }
     ) {
-      const s = opts?.size ?? [1, 1, 1];
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const s = Array.isArray(opts?.size) ? opts.size : [1, 1, 1];
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(s[0] || 1, s[1] || 1, s[2] || 1),
+        new THREE.BoxGeometry(Number(s[0]) || 1, Number(s[1]) || 1, Number(s[2]) || 1),
         makeMat(opts)
       );
       applyTransform(mesh, opts);
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
+    },
+
+    /** Rounded/chamfer-friendly box alias (never fails if LLM calls `D3.roundedBox`) */
+    roundedBox(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        size?: Vec3Tuple;
+        radius?: number;
+        color?: string | number;
+        roughness?: number;
+        metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+      }
+    ) {
+      return this.box(parentOrOpts, maybeOpts);
+    },
+
+    /** Flat 3D plane (ground patches, screens, signs, water surfaces) */
+    plane(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        size?: [number, number] | Vec3Tuple;
+        width?: number;
+        height?: number;
+        color?: string | number;
+        roughness?: number;
+        metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const w = opts?.width ?? (Array.isArray(opts?.size) ? Number(opts.size[0]) : 2) ?? 2;
+      const h = opts?.height ?? (Array.isArray(opts?.size) ? Number(opts.size[1]) : 2) ?? 2;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(w || 2, h || 2),
+        makeMat({ ...opts, side: THREE.DoubleSide })
+      );
+      applyTransform(mesh, opts);
+      return attach3D(parent, mesh, opts?.name);
+    },
+
+    /** Smooth 3D capsule (submarines, server pods, pills, limbs) */
+    capsule(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        radius?: number;
+        length?: number;
+        height?: number;
+        color?: string | number;
+        roughness?: number;
+        metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(opts?.radius ?? 0.45, opts?.length ?? opts?.height ?? 1.2, 8, 16),
+        makeMat(opts)
+      );
+      applyTransform(mesh, opts);
+      return attach3D(parent, mesh, opts?.name);
     },
 
     cylinder(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         rTop?: number;
         rBottom?: number;
@@ -1197,11 +1448,14 @@ export function createDiorama3DSdk() {
         roughness?: number;
         metalness?: number;
         opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
         pos?: Vec3Tuple;
         rot?: Vec3Tuple;
         scale?: Vec3Tuple | number;
       }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const rt = opts?.rTop ?? opts?.radius ?? 0.5;
       const rb = opts?.rBottom ?? opts?.radius ?? rt;
       const mesh = new THREE.Mesh(
@@ -1209,14 +1463,12 @@ export function createDiorama3DSdk() {
         makeMat(opts)
       );
       applyTransform(mesh, opts);
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
     },
 
     sphere(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         radius?: number;
         color?: string | number;
@@ -1230,19 +1482,18 @@ export function createDiorama3DSdk() {
         scale?: Vec3Tuple | number;
       }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(opts?.radius ?? 0.6, 20, 16),
         makeMat(opts)
       );
       applyTransform(mesh, opts);
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
     },
 
     cone(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         radius?: number;
         height?: number;
@@ -1250,58 +1501,89 @@ export function createDiorama3DSdk() {
         color?: string | number;
         roughness?: number;
         metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
         pos?: Vec3Tuple;
         rot?: Vec3Tuple;
         scale?: Vec3Tuple | number;
       }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const mesh = new THREE.Mesh(
         new THREE.ConeGeometry(opts?.radius ?? 0.7, opts?.height ?? 1.6, opts?.segments ?? 18),
         makeMat(opts)
       );
       applyTransform(mesh, opts);
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
     },
 
     torus(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         radius?: number;
         tube?: number;
         color?: string | number;
         roughness?: number;
         metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
         pos?: Vec3Tuple;
         rot?: Vec3Tuple;
         scale?: Vec3Tuple | number;
       }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const mesh = new THREE.Mesh(
         new THREE.TorusGeometry(opts?.radius ?? 1.2, opts?.tube ?? 0.22, 12, 32),
         makeMat(opts)
       );
       applyTransform(mesh, opts);
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
     },
 
-    /** Smooth curved pipe/cable/mooring line/arch along 3D control points */
+    /** Smooth curved pipe/cable/mooring line/arch along 3D control points (accepts `(parent, pts, opts)` OR `(pts, opts)`) */
     tube(
-      world: DioramaWorldHandle | THREE.Object3D,
-      points: Vec3Tuple[],
-      opts?: {
+      parentOrPoints?: ParentTarget | Vec3Tuple[] | null,
+      pointsOrOpts?: Vec3Tuple[] | Record<string, unknown>,
+      maybeOpts?: {
         name?: string;
         radius?: number;
         segments?: number;
         color?: string | number;
         roughness?: number;
         metalness?: number;
+        opacity?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
       }
     ) {
+      const firstIsPoints = Array.isArray(parentOrPoints);
+      const parent = firstIsPoints
+        ? activeWorldRef
+        : isParentTarget(parentOrPoints)
+          ? parentOrPoints
+          : activeWorldRef;
+      const points = firstIsPoints
+        ? (parentOrPoints as Vec3Tuple[])
+        : Array.isArray(pointsOrOpts)
+          ? (pointsOrOpts as Vec3Tuple[])
+          : [];
+      const opts = (firstIsPoints ? pointsOrOpts : maybeOpts) as
+        | {
+            name?: string;
+            radius?: number;
+            segments?: number;
+            color?: string | number;
+            roughness?: number;
+            metalness?: number;
+            opacity?: number;
+            emissive?: string | number;
+            emissiveIntensity?: number;
+          }
+        | undefined;
       const vecs = (Array.isArray(points) && points.length >= 2 ? points : [[0, 0, 0], [0, 2, 0]]).map(
         (p) => new THREE.Vector3(Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0)
       );
@@ -1311,15 +1593,13 @@ export function createDiorama3DSdk() {
         makeMat(opts)
       );
       applyTransform(mesh, {});
-      if ("root" in world) return registerObj(world, mesh, opts?.name);
-      world.add(mesh);
-      return mesh;
+      return attach3D(parent, mesh, opts?.name);
     },
 
     /** Industrial lattice truss / derrick tower (oil rig, crane, radio tower, stadium mast) */
     truss(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: {
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
         name?: string;
         height?: number;
         baseWidth?: number;
@@ -1327,8 +1607,11 @@ export function createDiorama3DSdk() {
         levels?: number;
         color?: string | number;
         pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
       }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const h = opts?.height ?? 4.5;
       const bw = opts?.baseWidth ?? 1.4;
       const tw = opts?.topWidth ?? 0.55;
@@ -1371,14 +1654,17 @@ export function createDiorama3DSdk() {
         }
       }
 
-      applyTransform(grp, { pos: opts?.pos });
-      if ("root" in world) return registerObj(world, grp, opts?.name);
-      world.add(grp);
-      return grp;
+      applyTransform(grp, { pos: opts?.pos, rot: opts?.rot, scale: opts?.scale });
+      return attach3D(parent, grp, opts?.name);
     },
 
-    /** Stylized 3D tree (palm / round / pine) */
-    tree(opts?: { style?: "palm" | "round" | "pine"; scale?: number; pos?: Vec3Tuple }): THREE.Group {
+    /** Stylized 3D tree (palm / round / pine) — accepts `(world/parent, opts)` OR `(opts)` */
+    tree(
+      parentOrOpts?: ParentTarget | { name?: string; style?: "palm" | "round" | "pine"; scale?: number; pos?: Vec3Tuple } | null,
+      maybeOpts?: { name?: string; style?: "palm" | "round" | "pine"; scale?: number; pos?: Vec3Tuple }
+    ): THREE.Group {
+      const hasExplicitParent = isParentTarget(parentOrOpts) || maybeOpts !== undefined;
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const style = opts?.style ?? "round";
       const grp = new THREE.Group();
       const trunkMat = makeMat({ color: "#7C4D2B", roughness: 0.92 });
@@ -1419,15 +1705,19 @@ export function createDiorama3DSdk() {
       }
 
       applyTransform(grp, { pos: opts?.pos, scale: opts?.scale ?? 1 });
+      if (hasExplicitParent) {
+        return attach3D(parent, grp, opts?.name);
+      }
       return grp;
     },
 
     /** Simple 3D wooden table/desk prop */
     table(
-      world: DioramaWorldHandle | THREE.Object3D,
-      opts?: { name?: string; size?: Vec3Tuple; color?: string; pos?: Vec3Tuple; rotY?: number }
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: { name?: string; size?: Vec3Tuple; color?: string; pos?: Vec3Tuple; rotY?: number }
     ) {
-      const [w, h, d] = opts?.size ?? [2.8, 1.2, 1.5];
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const [w, h, d] = Array.isArray(opts?.size) ? opts.size : [2.8, 1.2, 1.5];
       const mat = makeMat({ color: opts?.color || "#9C6B3B", roughness: 0.78 });
       const grp = new THREE.Group();
       const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.16, d), mat);
@@ -1441,13 +1731,16 @@ export function createDiorama3DSdk() {
         }
       }
       applyTransform(grp, { pos: opts?.pos, rot: [0, opts?.rotY ?? 0, 0] });
-      if ("root" in world) return registerObj(world, grp, opts?.name);
-      world.add(grp);
-      return grp;
+      return attach3D(parent, grp, opts?.name);
     },
 
-    /** Cute low-poly 3D fish for ocean / catfish pond dioramas */
-    fish(opts?: { color?: string; scale?: number; pos?: Vec3Tuple }): THREE.Group {
+    /** Cute low-poly 3D fish for ocean / pond dioramas — accepts `(world/parent, opts)` OR `(opts)` */
+    fish(
+      parentOrOpts?: ParentTarget | { name?: string; color?: string; scale?: number; pos?: Vec3Tuple } | null,
+      maybeOpts?: { name?: string; color?: string; scale?: number; pos?: Vec3Tuple }
+    ): THREE.Group {
+      const hasExplicitParent = isParentTarget(parentOrOpts) || maybeOpts !== undefined;
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const grp = new THREE.Group();
       const mat = makeMat({ color: opts?.color || "#F59E0B", roughness: 0.5 });
       const body = new THREE.Mesh(new THREE.SphereGeometry(0.45, 12, 10), mat);
@@ -1458,17 +1751,21 @@ export function createDiorama3DSdk() {
       tail.position.set(-0.78, 0, 0);
       grp.add(tail);
       applyTransform(grp, { pos: opts?.pos, scale: opts?.scale ?? 1 });
+      if (hasExplicitParent) {
+        return attach3D(parent, grp, opts?.name);
+      }
       return grp;
     },
 
     /** Floating 3D bubble/sparkle/steam particle cluster */
     particles3D(
-      world: DioramaWorldHandle,
-      opts?: { name?: string; count?: number; area?: Vec3Tuple; center?: Vec3Tuple; color?: string; radius?: number; seed?: number }
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: { name?: string; count?: number; area?: Vec3Tuple; center?: Vec3Tuple; color?: string; radius?: number; seed?: number }
     ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
       const count = clamp(opts?.count ?? 24, 4, 80);
-      const area = opts?.area ?? [6, 5, 6];
-      const center = opts?.center ?? [0, 2, 0];
+      const area = Array.isArray(opts?.area) ? opts.area : [6, 5, 6];
+      const center = Array.isArray(opts?.center) ? opts.center : [0, 2, 0];
       const rand = seededRng(opts?.seed ?? 303);
       const mat = makeMat({
         color: opts?.color || "#FFFFFF",
@@ -1489,14 +1786,45 @@ export function createDiorama3DSdk() {
         m.userData.phase = rand() * Math.PI * 2;
         grp.add(m);
       }
-      return registerObj(world, grp, opts?.name || "__particles");
+      return attach3D(parent, grp, opts?.name || "__particles");
     },
 
     /* ==================== CONTINUOUS 3D CAMERA CHOREOGRAPHY ==================== */
 
-    setCamera(world: DioramaWorldHandle, pos: Vec3Tuple, lookAt: Vec3Tuple, fov = 38) {
-      world.camera.position.set(Number(pos[0]) || 0, Number(pos[1]) || 4, Number(pos[2]) || 14);
-      world.camera.lookAt(Number(lookAt[0]) || 0, Number(lookAt[1]) || 0, Number(lookAt[2]) || 0);
+    setCamera(
+      worldOrPos: DioramaWorldHandle | Vec3Tuple | null | undefined,
+      posOrLookAt?: Vec3Tuple,
+      lookAtOrFov?: Vec3Tuple | number,
+      maybeFov = 38
+    ) {
+      const firstIsPos = Array.isArray(worldOrPos);
+      const world = firstIsPos ? activeWorldRef : resolveWorld(worldOrPos);
+      if (!world) return;
+      const pos = firstIsPos ? (worldOrPos as Vec3Tuple) : posOrLookAt;
+      const lookAt = firstIsPos
+        ? posOrLookAt
+        : Array.isArray(lookAtOrFov)
+          ? (lookAtOrFov as Vec3Tuple)
+          : undefined;
+      const fov = firstIsPos
+        ? typeof lookAtOrFov === "number"
+          ? lookAtOrFov
+          : 38
+        : typeof lookAtOrFov === "number"
+          ? lookAtOrFov
+          : maybeFov;
+      const safePos = Array.isArray(pos) ? pos : [0, 4, 14];
+      const safeLook = Array.isArray(lookAt) ? lookAt : [0, 0, 0];
+      world.camera.position.set(
+        Number(safePos[0]) || 0,
+        Number(safePos[1]) || 4,
+        Number(safePos[2]) || 14
+      );
+      world.camera.lookAt(
+        Number(safeLook[0]) || 0,
+        Number(safeLook[1]) || 0,
+        Number(safeLook[2]) || 0
+      );
       const safeFov = clamp(Number(fov) || 38, 18, 72);
       if (Math.abs(world.camera.fov - safeFov) > 0.05) {
         world.camera.fov = safeFov;
@@ -1504,8 +1832,22 @@ export function createDiorama3DSdk() {
       }
     },
 
-    lerpCamera(world: DioramaWorldHandle, keyframes: CameraKeyframe[], progress: number) {
-      if (!Array.isArray(keyframes) || keyframes.length === 0) return;
+    lerpCamera(
+      worldOrKeyframes: DioramaWorldHandle | CameraKeyframe[] | null | undefined,
+      keyframesOrProgress?: CameraKeyframe[] | number,
+      maybeProgress?: number
+    ) {
+      const firstIsKf = Array.isArray(worldOrKeyframes);
+      const world = firstIsKf ? activeWorldRef : resolveWorld(worldOrKeyframes);
+      const keyframes = firstIsKf
+        ? (worldOrKeyframes as CameraKeyframe[])
+        : Array.isArray(keyframesOrProgress)
+          ? (keyframesOrProgress as CameraKeyframe[])
+          : [];
+      const progress = firstIsKf
+        ? Number(keyframesOrProgress ?? 0)
+        : Number(maybeProgress ?? 0);
+      if (!world || !Array.isArray(keyframes) || keyframes.length === 0) return;
       const sorted = [...keyframes].sort((a, b) => a.t - b.t);
       const p = clamp(progress, 0, 1);
       if (p <= sorted[0].t || sorted.length === 1) {
@@ -1542,15 +1884,21 @@ export function createDiorama3DSdk() {
 
     /* ==================== 3D-TRACKED 2D HUD OVERLAYS ==================== */
 
-    projectTo2D(world: DioramaWorldHandle, pos3d: Vec3Tuple) {
+    projectTo2D(worldOrPos: DioramaWorldHandle | Vec3Tuple | null | undefined, maybePos3d?: Vec3Tuple) {
+      const firstIsPos = Array.isArray(worldOrPos);
+      const world = firstIsPos ? activeWorldRef : resolveWorld(worldOrPos);
+      const pos3d = firstIsPos ? (worldOrPos as Vec3Tuple) : (maybePos3d ?? [0, 0, 0]);
+      if (!world) return { x: 0, y: 0, visible: false };
       return projectWorldPoint(world, pos3d);
     },
 
     /** AkuTahu-style vertical left-margin depth/height ruler with animated indicator dot */
     drawRuler(
-      world: DioramaWorldHandle,
-      opts?: { minLabel?: string; maxLabel?: string; progress?: number; accent?: string }
+      worldOrOpts?: DioramaWorldHandle | Record<string, unknown> | null,
+      maybeOpts?: { minLabel?: string; maxLabel?: string; progress?: number; accent?: string }
     ) {
+      const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
+      if (!world) return;
       const minLabel = opts?.minLabel || "0 m";
       const maxLabel = opts?.maxLabel || "1500 m";
       const prog = clamp(opts?.progress ?? 0.5);
@@ -1611,10 +1959,21 @@ export function createDiorama3DSdk() {
 
     /** Floating badge anchored directly to a 3D world point (e.g. yellow '?' or 'TVRI' or '1200m') */
     drawBadgeAt3D(
-      world: DioramaWorldHandle,
-      pos3d: Vec3Tuple,
-      opts?: { text?: string; bg?: string; textColor?: string; scale?: number; pulse?: number }
+      worldOrPos: DioramaWorldHandle | Vec3Tuple | null | undefined,
+      posOrOpts?: Vec3Tuple | { text?: string; bg?: string; textColor?: string; scale?: number; pulse?: number },
+      maybeOpts?: { text?: string; bg?: string; textColor?: string; scale?: number; pulse?: number }
     ) {
+      const firstIsPos = Array.isArray(worldOrPos);
+      const world = firstIsPos ? activeWorldRef : resolveWorld(worldOrPos);
+      const pos3d = firstIsPos
+        ? (worldOrPos as Vec3Tuple)
+        : Array.isArray(posOrOpts)
+          ? (posOrOpts as Vec3Tuple)
+          : ([0, 0, 0] as Vec3Tuple);
+      const opts = (firstIsPos ? posOrOpts : maybeOpts) as
+        | { text?: string; bg?: string; textColor?: string; scale?: number; pulse?: number }
+        | undefined;
+      if (!world) return;
       const pt = projectWorldPoint(world, pos3d);
       if (!pt.visible) return;
       const text = String(opts?.text ?? "?");
@@ -1663,9 +2022,17 @@ export function createDiorama3DSdk() {
 
     /** Viral Shorts Bold Opening Title (yellow + white highlight with crisp black outline) */
     drawPopupTitle(
-      world: DioramaWorldHandle,
-      text: string,
-      opts?: {
+      worldOrText: DioramaWorldHandle | string | null | undefined,
+      textOrOpts?:
+        | string
+        | {
+            yRatio?: number;
+            accentWord?: string;
+            color?: string;
+            accentColor?: string;
+            progress?: number;
+          },
+      maybeOpts?: {
         yRatio?: number;
         accentWord?: string;
         color?: string;
@@ -1673,6 +2040,23 @@ export function createDiorama3DSdk() {
         progress?: number;
       }
     ) {
+      const firstIsText = typeof worldOrText === "string";
+      const world = firstIsText ? activeWorldRef : resolveWorld(worldOrText);
+      const text = firstIsText
+        ? (worldOrText as string)
+        : typeof textOrOpts === "string"
+          ? textOrOpts
+          : "";
+      const opts = (firstIsText ? textOrOpts : maybeOpts) as
+        | {
+            yRatio?: number;
+            accentWord?: string;
+            color?: string;
+            accentColor?: string;
+            progress?: number;
+          }
+        | undefined;
+      if (!world) return;
       const clean = String(text || "").trim();
       if (!clean) return;
       const yRatio = clamp(opts?.yRatio ?? 0.19, 0.1, 0.44);
@@ -1740,11 +2124,29 @@ export function createDiorama3DSdk() {
 
     /** Clean pointer callout line + crisp label attached to a 3D world point */
     drawCalloutAt3D(
-      world: DioramaWorldHandle,
-      pos3d: Vec3Tuple,
-      label: string,
-      opts?: { color?: string; side?: "left" | "right"; progress?: number }
+      worldOrPos: DioramaWorldHandle | Vec3Tuple | null | undefined,
+      posOrLabel?: Vec3Tuple | string,
+      labelOrOpts?: string | { color?: string; side?: "left" | "right"; progress?: number },
+      maybeOpts?: { color?: string; side?: "left" | "right"; progress?: number }
     ) {
+      const firstIsPos = Array.isArray(worldOrPos);
+      const world = firstIsPos ? activeWorldRef : resolveWorld(worldOrPos);
+      const pos3d = firstIsPos
+        ? (worldOrPos as Vec3Tuple)
+        : Array.isArray(posOrLabel)
+          ? (posOrLabel as Vec3Tuple)
+          : ([0, 0, 0] as Vec3Tuple);
+      const label = firstIsPos
+        ? typeof posOrLabel === "string"
+          ? posOrLabel
+          : ""
+        : typeof labelOrOpts === "string"
+          ? labelOrOpts
+          : "";
+      const opts = (firstIsPos ? labelOrOpts : maybeOpts) as
+        | { color?: string; side?: "left" | "right"; progress?: number }
+        | undefined;
+      if (!world) return;
       const pt = projectWorldPoint(world, pos3d);
       if (!pt.visible || !label) return;
       const color = opts?.color || "#FACC15";

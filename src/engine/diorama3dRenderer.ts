@@ -3,6 +3,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { SceneItem, SynkcutProject } from "../types/scene";
 import {
   createDiorama3DSdk,
+  setActiveDioramaWorld,
   type Diorama3DSdk,
   type DioramaFrameState,
   type DioramaWorldHandle,
@@ -265,6 +266,15 @@ function getOrBuildWorld(
     skyColorBottom: "#E2F2FD",
     width,
     height,
+    add<T extends THREE.Object3D>(obj: T, name?: string): T {
+      if (obj && typeof obj === "object" && "isObject3D" in obj) {
+        root.add(obj);
+        if (name && typeof name === "string") {
+          world.objects[name] = obj;
+        }
+      }
+      return obj;
+    },
   };
 
   let setupError: string | undefined;
@@ -280,6 +290,7 @@ function getOrBuildWorld(
       const guard = () => {
         if (++guardSteps > 12000) throw new Error("Loop guard setupCode terlampaui.");
       };
+      setActiveDioramaWorld(world);
       try {
         compiled.fn(world, D3_SDK, guard);
         // Ensure basic lighting exists if LLM omitted explicit lights
@@ -288,6 +299,8 @@ function getOrBuildWorld(
         }
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);
+      } finally {
+        setActiveDioramaWorld(null);
       }
     }
   }
@@ -450,11 +463,14 @@ export function renderDiorama3DFrame(params: {
   const guard = () => {
     if (++guardSteps > 12000) throw new Error("Loop guard animateCode terlampaui.");
   };
+  setActiveDioramaWorld(world);
   try {
     compiledAnim.fn(world, frameState, D3_SDK, guard);
   } catch (err) {
     renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    setActiveDioramaWorld(null);
   }
 
   // Render WebGL scene and blit seamlessly onto target 2D canvas
