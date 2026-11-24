@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Code2,
   Copy,
   Download,
   Film,
@@ -70,10 +71,13 @@ import {
   estimateExportSizeBytes,
   exportProjectToMp4,
 } from "../engine/exportEngine";
+import { verifyAndRepairProjectBeats } from "../engine/freeformPipeline";
+import { buildRemotionProjectFiles } from "../engine/remotionExporter";
 import {
   aiCopilotPatch,
   checkSidecars,
   ensureAudioPackAsset,
+  exportRemotionProject,
   extractThumbnails,
   generateTtsAudio,
   getAudioPackCatalog,
@@ -82,6 +86,7 @@ import {
   pickExportSavePath,
   pickLocalAudio,
   pickLocalVideo,
+  pickRemotionExportFolder,
   probeMedia,
   revealInExplorer,
   saveProject,
@@ -266,6 +271,8 @@ export default function StudioView({
   const [exportEtaMs, setExportEtaMs] = useState<number | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [isExportingRemotion, setIsExportingRemotion] = useState(false);
+  const [remotionExportDir, setRemotionExportDir] = useState<string | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1358,13 +1365,24 @@ export default function StudioView({
         const focusId = targetAllScenes ? null : (activeScene?.id ?? null);
         const res = await aiCopilotPatch(before, raw, focusId);
         const safePatched = normalizeProject(res.project, before);
-        const patched: SynkcutProject = {
+        let patched: SynkcutProject = {
           ...safePatched,
           voiceover: {
             ...safePatched.voiceover,
             words: rebuildWordsFromScenes(safePatched),
           },
         };
+        // Auto-verify & auto-repair any newly authored `custom_code` beats so Studio NEVER goes blank!
+        const hasUpdatedCustomCode = patched.scenes.some((s, i) => {
+          if (s.visualSource !== "motion" || s.aiMotion?.engine !== "custom_code") return false;
+          const prevCode = before.scenes[i]?.aiMotion?.customCode?.code ?? "";
+          const nextCode = s.aiMotion.customCode?.code ?? "";
+          return nextCode.trim().length > 0 && (nextCode !== prevCode || !s.aiMotion.customCode?.verified);
+        });
+        if (hasUpdatedCustomCode) {
+          const verified = await verifyAndRepairProjectBeats(patched);
+          patched = verified.project;
+        }
         const beforeScript = before.scenes.map((s) => s.text.trim()).join(" ");
         const afterScript = patched.scenes.map((s) => s.text.trim()).join(" ");
         const scriptChanged = beforeScript !== afterScript;
@@ -1724,6 +1742,28 @@ export default function StudioView({
 
   function handleCancelExport() {
     exportAbortRef.current?.abort();
+  }
+
+  async function handleExportRemotionProject() {
+    if (!isTauriRuntime() || isExportingRemotion) return;
+    setExportError(null);
+    setRemotionExportDir(null);
+    const folder = await pickRemotionExportFolder();
+    if (!folder) return;
+    setIsExportingRemotion(true);
+    try {
+      const files = buildRemotionProjectFiles(project);
+      const outDir = await exportRemotionProject({
+        targetDir: folder,
+        files,
+        audioPath,
+      });
+      setRemotionExportDir(outDir);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsExportingRemotion(false);
+    }
   }
 
   async function handleExport() {
@@ -3584,7 +3624,58 @@ export default function StudioView({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              {remotionExportDir && (
+                <div
+                  className="rounded-lg p-3 text-xs"
+                  style={{
+                    backgroundColor: "var(--accent-soft)",
+                    border: "1px solid var(--accent)",
+                  }}
+                >
+                  <div className="flex items-center gap-1.5 font-semibold" style={{ color: "var(--accent)" }}>
+                    <Code2 className="h-4 w-4" />
+                    Proyek Remotion (.tsx) Siap Render
+                  </div>
+                  <p className="mt-1 break-all font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                    {remotionExportDir}
+                  </p>
+                  <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Jalankan <code>npm install &amp;&amp; npm run build</code> di folder tersebut untuk render via Remotion CLI.
+                  </p>
+                  {isTauriRuntime() && (
+                    <button
+                      type="button"
+                      onClick={() => revealInExplorer(remotionExportDir)}
+                      className="ui-btn-secondary mt-2 flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold cursor-pointer"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      Buka Folder Remotion
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                {isTauriRuntime() && !isExporting ? (
+                  <button
+                    type="button"
+                    disabled={isExportingRemotion}
+                    onClick={handleExportRemotionProject}
+                    className="ui-btn-secondary inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                    title="Ekspor proyek siap jalan ke format Remotion (.tsx) beserta audio dubbing"
+                  >
+                    {isExportingRemotion ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Code2 className="h-3.5 w-3.5" />
+                    )}
+                    Export Remotion (.tsx)
+                  </button>
+                ) : (
+                  <span />
+                )}
+
+                <div className="flex items-center gap-2">
                 {isExporting ? (
                   <button
                     type="button"
@@ -3612,6 +3703,7 @@ export default function StudioView({
                   <Download className="h-3.5 w-3.5" />
                   {isExporting ? `Rendering ${Math.round(exportPct)}%` : "Mulai Export MP4"}
                 </button>
+                </div>
               </div>
             </div>
           </div>

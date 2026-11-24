@@ -9,6 +9,7 @@ import type {
 import { getProjectDurationMs } from "./sampleProject";
 import { isLightAiMotionTheme } from "./aiMotionPresets";
 import { renderAiMotionScene } from "./aiMotionRenderer";
+import { buildBeatRenderState, renderFreeformBeat } from "./freeformMotionRenderer";
 
 export interface RenderFrameOptions {
   videoElement?: HTMLVideoElement | null;
@@ -344,17 +345,33 @@ function drawFootageWithMotion(
   if (isAiMotion && scene.aiMotion) {
     const durSec = Math.max(0.8, (scene.endMs - scene.startMs) / 1000);
     try {
-      renderAiMotionScene(
-        ctx,
-        width,
-        height,
-        scene.aiMotion,
-        progress,
-        durSec,
-        accentColor,
-        settledPreview,
-        customDesign
-      );
+      if (scene.aiMotion.engine === "custom_code") {
+        const beatProgress = settledPreview ? 0.68 : progress;
+        const beatState = buildBeatRenderState({
+          width,
+          height,
+          scene,
+          progress: beatProgress,
+          fps: project.meta?.fps || 30,
+          allWords: project.voiceover?.words ?? [],
+          accentColor,
+          customDesign,
+          brandLogoUrl: project.styleReference?.logoDataUrl ?? null,
+        });
+        renderFreeformBeat(ctx, beatState, scene.aiMotion.customCode?.code ?? "");
+      } else {
+        renderAiMotionScene(
+          ctx,
+          width,
+          height,
+          scene.aiMotion,
+          progress,
+          durSec,
+          accentColor,
+          settledPreview,
+          customDesign
+        );
+      }
     } catch (err) {
       console.warn("[Synkcut] AI Motion render fallback:", err);
       drawProceduralBackdrop(ctx, width, height, project, scene, progress, isPosterThumbnail);

@@ -70,6 +70,12 @@ pub struct StyleReferenceResult {
     pub suggested_accent: String,
     pub suggested_engines: Vec<String>,
     pub layer_used: String,
+    #[serde(default)]
+    pub logo_data_url: Option<String>,
+    #[serde(default)]
+    pub brand_headings: Vec<String>,
+    #[serde(default)]
+    pub brand_colors: Vec<String>,
     pub custom_design: CustomDesignDirection,
 }
 
@@ -952,9 +958,169 @@ fn extract_html_title(html: &str) -> Option<String> {
     }
 }
 
-async fn fetch_webpage_design_context(
-    url: &str,
-) -> (String, String, Option<String>, Vec<String>) {
+fn extract_tag_attr(tag: &str, attr_name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let needle = format!("{}=", attr_name.to_ascii_lowercase());
+    let pos = lower.find(&needle)?;
+    let after = tag[pos + needle.len()..].trim_start();
+    let quote = after.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let inner = &after[1..];
+        let close = inner.find(quote)?;
+        let val = inner[..close]
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .trim()
+            .to_string();
+        if !val.is_empty() {
+            return Some(val);
+        }
+    }
+    None
+}
+
+pub fn extract_stylesheet_urls(html: &str, page_url: &str) -> Vec<String> {
+    let head = safe_utf8_prefix(html, 64_000);
+    let lower = head.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("<link") {
+        let start = from + pos;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let tag = &head[start..start + end_rel + 1];
+        let tag_lower = &lower[start..start + end_rel + 1];
+        from = start + end_rel + 1;
+        if !tag_lower.contains("stylesheet") {
+            continue;
+        }
+        if let Some(href) = extract_tag_attr(tag, "href") {
+            let hl = href.to_ascii_lowercase();
+            // Skip Google Fonts / icon CDNs that don't carry brand palette
+            if hl.contains("fonts.googleapis.com") || hl.contains("fontawesome") {
+                continue;
+            }
+            if let Some(resolved) = resolve_relative_url(page_url, &href) {
+                if !out.contains(&resolved) {
+                    out.push(resolved);
+                }
+                if out.len() >= 2 {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn extract_brand_logo_url(html: &str, page_url: &str) -> Option<String> {
+    let slice = safe_utf8_prefix(html, 64_000);
+    let lower = slice.to_ascii_lowercase();
+    // 1. Prefer <img> with "logo" in src, alt, or class
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("<img") {
+        let start = from + pos;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let tag = &slice[start..start + end_rel + 1];
+        let tag_lower = &lower[start..start + end_rel + 1];
+        from = start + end_rel + 1;
+        if tag_lower.contains("logo") {
+            if let Some(src) = extract_tag_attr(tag, "src") {
+                if !src.starts_with("data:image/svg") && !src.to_ascii_lowercase().ends_with(".svg") {
+                    if let Some(resolved) = resolve_relative_url(page_url, &src) {
+                        return Some(resolved);
+                    }
+                }
+            }
+        }
+    }
+    // 2. Fallback: apple-touch-icon or PNG icon
+    from = 0;
+    while let Some(pos) = lower[from..].find("<link") {
+        let start = from + pos;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let tag = &slice[start..start + end_rel + 1];
+        let tag_lower = &lower[start..start + end_rel + 1];
+        from = start + end_rel + 1;
+        if tag_lower.contains("apple-touch-icon")
+            || (tag_lower.contains("icon") && tag_lower.contains(".png"))
+        {
+            if let Some(href) = extract_tag_attr(tag, "href") {
+                if let Some(resolved) = resolve_relative_url(page_url, &href) {
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn extract_html_headings(html: &str) -> Vec<String> {
+    let slice = safe_utf8_prefix(html, 80_000);
+    let lower = slice.to_ascii_lowercase();
+    let mut headings = Vec::new();
+    for tag_name in ["h1", "h2"] {
+        let open_pat = format!("<{tag_name}");
+        let close_pat = format!("</{tag_name}>");
+        let mut from = 0;
+        while let Some(pos) = lower[from..].find(&open_pat) {
+            let abs = from + pos;
+            let Some(gt_rel) = lower[abs..].find('>') else {
+                break;
+            };
+            let content_start = abs + gt_rel + 1;
+            let Some(close_rel) = lower[content_start..].find(&close_pat) else {
+                break;
+            };
+            let inner = &slice[content_start..content_start + close_rel];
+            from = content_start + close_rel + close_pat.len();
+
+            // Strip inner HTML tags cleanly
+            let mut clean = String::new();
+            let mut in_tag = false;
+            for ch in inner.chars() {
+                if ch == '<' {
+                    in_tag = true;
+                } else if ch == '>' {
+                    in_tag = false;
+                    clean.push(' ');
+                } else if !in_tag {
+                    clean.push(ch);
+                }
+            }
+            let normalized = clean
+                .replace("&amp;", "&")
+                .replace("&nbsp;", " ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if normalized.len() >= 4 && normalized.len() <= 110 && !headings.contains(&normalized) {
+                headings.push(normalized);
+                if headings.len() >= 4 {
+                    return headings;
+                }
+            }
+        }
+    }
+    headings
+}
+
+struct WebpageBrandContext {
+    title: String,
+    desc: String,
+    og_thumb: Option<String>,
+    logo_data_url: Option<String>,
+    colors: Vec<String>,
+    headings: Vec<String>,
+}
+
+async fn fetch_webpage_design_context(url: &str) -> WebpageBrandContext {
     let fallback_title = url
         .trim_start_matches("https://")
         .trim_start_matches("http://")
@@ -963,20 +1129,29 @@ async fn fetch_webpage_design_context(
         .unwrap_or("Referensi Desain Web")
         .to_string();
 
+    let empty = |title: String| WebpageBrandContext {
+        title,
+        desc: String::new(),
+        og_thumb: None,
+        logo_data_url: None,
+        colors: Vec::new(),
+        headings: Vec::new(),
+    };
+
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(14))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
     else {
-        return (fallback_title, String::new(), None, Vec::new());
+        return empty(fallback_title);
     };
 
     let Ok(res) = client.get(url).send().await else {
-        return (fallback_title, String::new(), None, Vec::new());
+        return empty(fallback_title);
     };
 
     if !res.status().is_success() {
-        return (fallback_title, String::new(), None, Vec::new());
+        return empty(fallback_title);
     }
 
     let final_url = res.url().as_str().to_string();
@@ -994,15 +1169,17 @@ async fn fetch_webpage_design_context(
             if !bytes.is_empty() && bytes.len() <= 5 * 1024 * 1024 {
                 let mime = content_type.split(';').next().unwrap_or("image/jpeg");
                 let data_url = format!("data:{mime};base64,{}", BASE64.encode(bytes));
-                return (
-                    format!("Gambar Referensi ({fallback_title})"),
-                    "Gambar referensi langsung dari URL.".to_string(),
-                    Some(data_url),
-                    Vec::new(),
-                );
+                return WebpageBrandContext {
+                    title: format!("Gambar Referensi ({fallback_title})"),
+                    desc: "Gambar referensi langsung dari URL.".to_string(),
+                    og_thumb: Some(data_url),
+                    logo_data_url: None,
+                    colors: Vec::new(),
+                    headings: Vec::new(),
+                };
             }
         }
-        return (fallback_title, String::new(), None, Vec::new());
+        return empty(fallback_title);
     }
 
     let html = res.text().await.unwrap_or_default();
@@ -1017,6 +1194,8 @@ async fn fetch_webpage_design_context(
         .or_else(|| extract_html_meta_content(head_slice, "description"))
         .unwrap_or_default();
 
+    let headings = extract_html_headings(&html);
+
     let mut colors = Vec::new();
     if let Some(theme_col) = extract_html_meta_content(head_slice, "theme-color") {
         if parse_hex_rgb(&theme_col).is_some() {
@@ -1029,6 +1208,36 @@ async fn fetch_webpage_design_context(
         }
         if colors.len() >= 5 {
             break;
+        }
+    }
+
+    // Also fetch up to 2 external CSS stylesheets to uncover true Tailwind / brand CSS colors
+    if colors.len() < 4 {
+        let css_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(6))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .build()
+            .ok();
+        if let Some(ref c) = css_client {
+            for css_url in extract_stylesheet_urls(&html, &final_url) {
+                if let Ok(css_res) = c.get(&css_url).send().await {
+                    if css_res.status().is_success() {
+                        if let Ok(css_txt) = css_res.text().await {
+                            for hex in extract_html_brand_colors(&css_txt) {
+                                if !colors.contains(&hex) {
+                                    colors.push(hex);
+                                }
+                                if colors.len() >= 6 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if colors.len() >= 6 {
+                    break;
+                }
+            }
         }
     }
 
@@ -1062,7 +1271,39 @@ async fn fetch_webpage_design_context(
         }
     }
 
-    (title, desc, thumb_data_url, colors)
+    let mut logo_data_url = None;
+    if let Some(logo_url) = extract_brand_logo_url(&html, &final_url) {
+        if let Ok(logo_res) = client.get(&logo_url).send().await {
+            if logo_res.status().is_success() {
+                let mime = logo_res
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("image/png")
+                    .split(';')
+                    .next()
+                    .unwrap_or("image/png")
+                    .to_string();
+                if mime.starts_with("image/") && !mime.contains("svg") && !mime.contains("icon") {
+                    if let Ok(bytes) = logo_res.bytes().await {
+                        if !bytes.is_empty() && bytes.len() <= 1_500_000 {
+                            logo_data_url =
+                                Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    WebpageBrandContext {
+        title,
+        desc,
+        og_thumb: thumb_data_url,
+        logo_data_url,
+        colors,
+        headings,
+    }
 }
 
 /* ==================== AI CUSTOM DESIGN GENERATOR ==================== */
@@ -1419,6 +1660,9 @@ fn build_style_result(
         suggested_accent,
         suggested_engines,
         layer_used: layer_used.to_string(),
+        logo_data_url: None,
+        brand_headings: Vec::new(),
+        brand_colors: sampled_colors.to_vec(),
         custom_design,
     }
 }
@@ -1528,17 +1772,22 @@ pub async fn analyze_design_reference(
             return Err("Format link tidak valid. Masukkan URL lengkap (mis. https://...) atau gunakan tab Screenshot (Ctrl+V).".to_string());
         }
 
-        let (page_title, page_desc, og_thumb, page_colors) =
-            fetch_webpage_design_context(&normalized).await;
+        let web_ctx = fetch_webpage_design_context(&normalized).await;
         let mut combined_colors = req.sampled_colors.clone();
-        for c in page_colors {
+        for c in web_ctx.colors {
             if !combined_colors.contains(&c) {
                 combined_colors.push(c);
             }
         }
-        let thumbs: Vec<String> = og_thumb.into_iter().collect();
+        let thumbs: Vec<String> = web_ctx.og_thumb.into_iter().collect();
+        let headings_hint = if web_ctx.headings.is_empty() {
+            String::new()
+        } else {
+            format!(" Heading utama website: [{}].", web_ctx.headings.join(" | "))
+        };
         let ctx_desc = format!(
-            "Halaman referensi desain: \"{page_title}\" ({normalized}). Deskripsi: {page_desc}. Catatan tambahan user: {notes}"
+            "Halaman referensi desain: \"{}\" ({normalized}). Deskripsi: {}.{} Catatan tambahan user: {notes}",
+            web_ctx.title, web_ctx.desc, headings_hint
         );
         let ai_dna = analyze_with_byok(&app, &ctx_desc, &thumbs, &combined_colors).await;
         let layer = if !thumbs.is_empty() && ai_dna.is_some() {
@@ -1549,16 +1798,20 @@ pub async fn analyze_design_reference(
             "local_fallback"
         };
 
-        return Ok(build_style_result(
+        let mut res = build_style_result(
             "url",
             Some(normalized),
-            page_title,
+            web_ctx.title,
             thumbs,
             ai_dna,
             layer,
             &ctx_desc,
             &combined_colors,
-        ));
+        );
+        res.logo_data_url = web_ctx.logo_data_url;
+        res.brand_headings = web_ctx.headings;
+        res.brand_colors = combined_colors;
+        return Ok(res);
     }
 
     // 3. Images / Screenshots / Local Video Clip Frames
@@ -1772,5 +2025,21 @@ mod tests {
         let colors = extract_html_brand_colors(html);
         assert!(colors.contains(&"#00B894".to_string()));
         assert!(colors.contains(&"#FF9F1A".to_string()));
+    }
+
+    #[test]
+    fn test_extract_stylesheet_urls_and_html_headings() {
+        let html = r##"<html><head>
+            <link rel="stylesheet" href="/assets/app.css" />
+            <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter" />
+        </head><body>
+            <h1>Belajar Coding Anak <span>Seru</span></h1>
+            <h2>Mulai dari Scratch hingga Game Sendiri</h2>
+        </body></html>"##;
+        let css = extract_stylesheet_urls(html, "https://junior.codepolitan.com/");
+        assert_eq!(css, vec!["https://junior.codepolitan.com/assets/app.css"]);
+        let headings = extract_html_headings(html);
+        assert_eq!(headings[0], "Belajar Coding Anak Seru");
+        assert_eq!(headings[1], "Mulai dari Scratch hingga Game Sendiri");
     }
 }

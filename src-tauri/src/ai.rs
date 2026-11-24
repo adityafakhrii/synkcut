@@ -4,6 +4,7 @@ use tauri::AppHandle;
 
 use crate::audio::{align_words_proportionally, synthesize_tts_with_fallback, WordTimestamp};
 use crate::byok;
+use crate::motion_skills;
 use crate::style_ref::sanitize_custom_design_value;
 
 #[derive(Debug, Deserialize)]
@@ -1243,17 +1244,18 @@ fn default_breakdown_3d_parts(preset_id: &str) -> Value {
     }
 }
 
-/// Sanitize any LLM-produced `aiMotion` JSON so frontend renderers NEVER crash on missing fields!
+/// Sanitize any LLM-produced `aiMotion` JSON so frontend renderers NEVER crash on missing fields
+/// AND NEVER inject unrelated sample assets (like smartphone breakdowns into a coffee video!).
 pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme: &str) -> Value {
     let eng = raw["engine"]
         .as_str()
         .filter(|e| {
             matches!(
                 *e,
-                "flow_diagram" | "motion_chart" | "tech_cards" | "stick_figure" | "breakdown_3d"
+                "custom_code" | "flow_diagram" | "motion_chart" | "tech_cards" | "stick_figure" | "breakdown_3d"
             )
         })
-        .unwrap_or("flow_diagram");
+        .unwrap_or("custom_code");
 
     let theme = raw["theme"]
         .as_str()
@@ -1280,6 +1282,46 @@ pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme:
     let takeaway = raw["takeaway"].as_str().unwrap_or("").to_string();
 
     match eng {
+        "custom_code" => {
+            let cc = raw.get("customCode").filter(|v| v.is_object());
+            let code = cc
+                .and_then(|v| v["code"].as_str())
+                .or_else(|| raw["code"].as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let visual_concept = cc
+                .and_then(|v| v["visualConcept"].as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| format!("Visual motion kustom untuk: {title}"));
+            let emotional_intent = cc
+                .and_then(|v| v["emotionalIntent"].as_str())
+                .filter(|s| matches!(*s, "playful" | "bold" | "calm" | "urgent" | "luxury" | "editorial"))
+                .unwrap_or("bold");
+            let skills_used: Vec<String> = cc
+                .and_then(|v| v["skillsUsed"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(ToString::to_string))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["motion-craft-physics".to_string(), "kinetic-typography".to_string()]);
+            json!({
+                "engine": "custom_code",
+                "theme": theme,
+                "title": title,
+                "subtitle": subtitle,
+                "takeaway": takeaway,
+                "customCode": {
+                    "code": code,
+                    "visualConcept": visual_concept,
+                    "emotionalIntent": emotional_intent,
+                    "skillsUsed": skills_used,
+                    "verified": cc.and_then(|v| v["verified"].as_bool()).unwrap_or(false)
+                }
+            })
+        }
         "motion_chart" => {
             let c = raw.get("chart").filter(|v| v.is_object());
             let chart_type = c
@@ -1513,12 +1555,20 @@ pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme:
                 })
                 .filter(|v: &Vec<String>| !v.is_empty())
                 .unwrap_or_else(|| {
-                    vec![
-                        "Masukan".to_string(),
-                        "Proses Inti".to_string(),
-                        "Validasi".to_string(),
-                        "Hasil Akhir".to_string(),
-                    ]
+                    // Derive steps strictly from the beat's real narration text (NEVER dummy Masukan/Proses/Validasi!)
+                    let words: Vec<&str> = fallback_text.split_whitespace().collect();
+                    if words.len() >= 6 {
+                        let chunk_sz = (words.len() / 3).max(2);
+                        words
+                            .chunks(chunk_sz)
+                            .take(3)
+                            .map(|c| c.join(" "))
+                            .collect()
+                    } else if !fallback_text.trim().is_empty() {
+                        vec![fallback_text.trim().to_string()]
+                    } else {
+                        vec![title.clone()]
+                    }
                 });
             let mut flow_obj = json!({
                 "pattern": pattern,
@@ -1546,16 +1596,17 @@ pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme:
     }
 }
 
-/// Build a clean, deterministic v1.1 `AiMotionSpec` fallback tailored to scene text, index, theme, and preferred engines.
+/// Zero-Sample-Asset fallback: NEVER picks unrelated smartphone 3D breakdowns or dummy diagrams!
+/// Falls back cleanly to `custom_code` (which renders pure brand-styled dynamic kinetic typography of the real beat text)
+/// when LLM custom code is unavailable.
 fn build_fallback_ai_motion(
-    role: &str,
-    scene_idx: usize,
+    _role: &str,
+    _scene_idx: usize,
     text: &str,
     project_title: &str,
     theme: &str,
-    preferred_engines: &[String],
+    _preferred_engines: &[String],
 ) -> Value {
-    let lower = text.to_lowercase();
     let short_title: String = text
         .split_whitespace()
         .take(5)
@@ -1567,56 +1618,19 @@ fn build_fallback_ai_motion(
         short_title
     };
 
-    let picked_engine = if lower.contains("3d")
-        || lower.contains("bedah")
-        || lower.contains("smartphone")
-        || lower.contains("laptop")
-        || lower.contains("komponen")
-        || lower.contains("lapisan")
-    {
-        "breakdown_3d"
-    } else if lower.contains('%')
-        || lower.contains("persen")
-        || lower.contains("angka")
-        || lower.contains("grafik")
-        || lower.contains("naik")
-        || lower.contains("turun")
-        || lower.contains("detik")
-        || lower.contains("ms")
-    {
-        "motion_chart"
-    } else if lower.contains("analogi")
-        || lower.contains("cerita")
-        || lower.contains("ibarat")
-        || lower.contains("bayangin")
-        || lower.contains("seperti")
-    {
-        "stick_figure"
-    } else if lower.contains("kode")
-        || lower.contains("terminal")
-        || lower.contains("langkah")
-        || lower.contains("tips")
-        || lower.contains("banding")
-        || role == "cta"
-    {
-        "tech_cards"
-    } else if !preferred_engines.is_empty() {
-        preferred_engines[scene_idx % preferred_engines.len()].as_str()
-    } else {
-        match scene_idx % 4 {
-            0 => "flow_diagram",
-            1 => "motion_chart",
-            2 => "tech_cards",
-            _ => "stick_figure",
-        }
-    };
-
     sanitize_ai_motion_value(
         &json!({
-            "engine": picked_engine,
-            "theme": if picked_engine == "stick_figure" && theme == "carbon" { "paper" } else { theme },
+            "engine": "custom_code",
+            "theme": theme,
             "title": title,
-            "subtitle": project_title
+            "subtitle": project_title,
+            "customCode": {
+                "code": "",
+                "visualConcept": format!("Tipografi kinetik dinamis untuk: {title}"),
+                "emotionalIntent": "bold",
+                "skillsUsed": ["motion-craft-physics", "kinetic-typography"],
+                "verified": true
+            }
         }),
         text,
         theme,
@@ -2683,14 +2697,42 @@ pub async fn ai_copilot_patch(
     }
     let resolved = byok::resolve_active_provider(&app)?;
 
-    // Send a compact summary (omit huge words[] & base64 thumbnails to save BYOK tokens!)
+    // Send a compact summary (omit huge words[], base64 thumbnails, and unselected scene codes to save BYOK tokens!)
     let mut compact_project = project.clone();
     if let Some(vo) = compact_project.get_mut("voiceover").and_then(Value::as_object_mut) {
         vo.insert("words".to_string(), json!([]));
     }
     if let Some(sr) = compact_project.get_mut("styleReference").and_then(Value::as_object_mut) {
         sr.insert("thumbnails".to_string(), json!([]));
+        if sr.get("logoDataUrl").is_some() {
+            sr.insert("logoDataUrl".to_string(), json!("[brand-logo-loaded]"));
+        }
     }
+    if let Some(scenes_arr) = compact_project.get_mut("scenes").and_then(Value::as_array_mut) {
+        for s in scenes_arr.iter_mut() {
+            let sid = s["id"].as_str().unwrap_or("");
+            let is_selected = selected_scene_id.as_deref() == Some(sid);
+            if !is_selected {
+                if let Some(cc) = s
+                    .get_mut("aiMotion")
+                    .and_then(|m| m.get_mut("customCode"))
+                    .and_then(Value::as_object_mut)
+                {
+                    cc.insert("code".to_string(), json!("[custom-motion-code-preserved]"));
+                }
+            }
+        }
+    }
+
+    let active_skills_text = motion_skills::build_active_skills_prompt(
+        &app,
+        &[
+            "motion-craft-physics".to_string(),
+            "procedural-illustration-svg".to_string(),
+            "kinetic-typography".to_string(),
+            "product-ui-brand-storytelling".to_string(),
+        ],
+    );
 
     let footage_hint = project
         .get("footageLibrary")
@@ -2716,25 +2758,37 @@ pub async fn ai_copilot_patch(
         })
         .unwrap_or_default();
 
-    let system_prompt = "Kamu adalah AI Video & AI Motion Director di aplikasi Synkcut. \
-        Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa merusak path media lokal atau field wajib. \
-        PENTING: Selalu kembalikan SEMUA scene proyek di array `scenes` (jangan hapus scene lain kecuali user minta menghapus scene). \
-        Untuk mengganti klip footage atau titik potong cut pada suatu scene, ubah `footageIndex` (atau `media.path`) dan `media.trimStartMs` (ms). \
-        Untuk mengubah arah desain custom (warna latar, pola, font, gaya kartu), ubah objek `globalStyle.customDesign`. \
-        Jika user minta mengubah scene jadi AI Motion / diagram / grafik / kartu / stick figure / 3D breakdown, set visualSource=\"motion\" dan isi aiMotion dengan: \
-        engine (flow_diagram | motion_chart | tech_cards | stick_figure | breakdown_3d), theme (carbon | paper | coral | mint | blue), title, subtitle, takeaway, serta field engine yang cocok (flow / chart / techCards / stickFigure / breakdown3d). \
-        Nilai captionPreset valid: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech. \
-        Nilai motion.preset valid: zoom_punch, smooth_ken_burns, shake_impact, slide_reveal, static_clean. \
-        Nilai transitionIn.preset valid: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade. \
-        Nilai overlays[].type valid: hook_headline, notification_banner, promo_badge, doodle_highlight, split_screen. \
-        Nilai sfx[].preset valid: whoosh_fast, whoosh_soft, pop_text, ding_notif, impact_boom, riser, camera_shutter, keyboard_click, cash_register, vinyl_scratch, glitch_zap, swoosh_reverse. \
-        Nilai globalStyle.bgm.preset valid: upbeat_promo, lofi_education, cinematic_story, tech_modern, trendy_funk, chill_aesthetic, none. \
-        Balas HANYA dalam JSON: {\"reply\":\"ringkasan singkat Bahasa Indonesia apa yang diubah\",\"globalStyle\":{...},\"scenes\":[...]}";
+    let system_prompt = format!(
+        "Kamu adalah AI Video & Freeform Motion Director di aplikasi Synkcut v2.0.\n\
+        Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa merusak path media lokal atau field wajib.\n\
+        ATURAN KERAS:\n\
+        1. Selalu kembalikan SEMUA scene proyek di array `scenes` (atau hanya scene target jika edit 1 scene), JANGAN hapus scene lain kecuali user minta menghapus.\n\
+        2. JANGAN PERNAH memakai aset contoh / placeholder generik (seperti smartphone untuk topik kopi, atau label 'Masukan/Proses Inti').\n\
+        3. Untuk mengubah visual AI Motion secara BEBAS / CUSTOM (tanpa template!), set `visualSource: \"motion\"` dan `aiMotion`: {{\n\
+           \"engine\": \"custom_code\", \"theme\": \"carbon|paper\", \"title\": \"...\",\n\
+           \"customCode\": {{\n\
+             \"visualConcept\": \"deskripsi singkat visual baru\",\n\
+             \"emotionalIntent\": \"playful|bold|calm|urgent|luxury|editorial\",\n\
+             \"skillsUsed\": [\"motion-craft-physics\", \"procedural-illustration-svg\"],\n\
+             \"code\": \"// Pure JS body of renderBeat(ctx, state, M) — lihat Motion SDK M di bawah!\"\n\
+           }}\n\
+        }}\n\
+        4. Jika scene lain tidak diubah dan kode-nya bertuliskan \"[custom-motion-code-preserved]\", biarkan saja atau jangan ubah scene itu (backend otomatis mempertahankan kode aslinya!).\n\
+        5. Untuk mengganti klip footage/cut: ubah `footageIndex` (atau `media.path`) dan `media.trimStartMs`.\n\
+        6. Untuk mengubah arahan desain custom: ubah `globalStyle.customDesign`.\n\
+        7. Nilai captionPreset: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech.\n\
+        8. Nilai transitionIn.preset: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade.\n\
+        9. Nilai sfx[].preset: whoosh_fast, whoosh_soft, pop_text, ding_notif, impact_boom, riser, camera_shutter, keyboard_click, cash_register, vinyl_scratch, glitch_zap, swoosh_reverse.\n\n\
+        {sdk_ref}\n\n\
+        {active_skills_text}\n\n\
+        Balas HANYA dalam JSON: {{\"reply\":\"ringkasan singkat Bahasa Indonesia apa yang diubah\",\"globalStyle\":{{...}},\"scenes\":[...]}}",
+        sdk_ref = MOTION_SDK_COMPACT_REFERENCE
+    );
 
     let focus_hint = selected_scene_id
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .map(|id| format!("\nScene yang sedang dipilih user di Studio: \"{id}\" (jika user menyebut 'scene ini' atau 'scene aktif', fokus ke scene tersebut dan pertahankan scene lainnya)."))
+        .map(|id| format!("\nScene yang sedang dipilih user di Studio: \"{id}\" (jika user menyebut 'scene ini' atau 'beat ini', fokus ubah scene tersebut)."))
         .unwrap_or_default();
 
     let user_prompt = format!(
@@ -2745,7 +2799,31 @@ pub async fn ai_copilot_patch(
         instruction.trim()
     );
 
-    let (val, provider_used) = call_llm_json(&resolved, system_prompt, &user_prompt, &[]).await?;
+    let (mut val, provider_used) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+    // Restore any `[custom-motion-code-preserved]` markers from original project before merging!
+    if let (Some(orig_scenes), Some(patch_scenes)) = (
+        project.get("scenes").and_then(Value::as_array),
+        val.get_mut("scenes").and_then(Value::as_array_mut),
+    ) {
+        for ps in patch_scenes.iter_mut() {
+            let sid = ps["id"].as_str().unwrap_or("");
+            let code_marker = ps["aiMotion"]["customCode"]["code"].as_str().unwrap_or("");
+            if code_marker == "[custom-motion-code-preserved]" || code_marker.trim().is_empty() {
+                if let Some(orig) = orig_scenes.iter().find(|o| o["id"].as_str() == Some(sid)) {
+                    if let Some(orig_code) = orig["aiMotion"]["customCode"]["code"].as_str() {
+                        if let Some(cc) = ps
+                            .get_mut("aiMotion")
+                            .and_then(|m| m.get_mut("customCode"))
+                            .and_then(Value::as_object_mut)
+                        {
+                            cc.insert("code".to_string(), Value::String(orig_code.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let reply = val["reply"]
         .as_str()
         .unwrap_or("Revisi berhasil diterapkan pada proyek.")
@@ -2761,6 +2839,757 @@ pub async fn ai_copilot_patch(
     Ok(CopilotPatchResponse {
         project: updated,
         reply,
+        provider_used,
+    })
+}
+
+/* ==================== V2.0 FREEFORM AI MOTION ENGINE (ZERO SAMPLE ASSETS) ==================== */
+
+const MOTION_SDK_COMPACT_REFERENCE: &str = r#"=== SYNKCUT MOTION SDK `M` (Pure JS Body of `renderBeat(ctx, state, M)`) ===
+Contract: Write ONLY the pure JavaScript body of `function renderBeat(ctx, state, M) { ... }`.
+NO `window`, `document`, `fetch`, `eval`, `import`, `setTimeout`, or infinite loops. Every frame MUST be deterministic from `state`.
+`state` fields:
+- `frame` (float), `fps` (30|60), `totalFrames`, `timeMs`, `durationMs`, `progress` (0..1)
+- `width`, `height`, `u` (= width / 1080 — ALWAYS multiply pixel sizes/radii/fonts by `u`!)
+- `text` (narration string), `title`, `role` ("hook"|"body"|"cta")
+- `words`: [{ word, startMs, endMs }] (relative to beat start!), `activeWordIndex`
+- `hasBrandLogo` (bool)
+- `design.isLight`, `design.palette`: { bgTop, bgBottom, surfaceBg, surfaceBorder, textPrimary, textSecondary, accentPrimary, accentSecondary, accentInk }
+`M` helpers:
+- `M.spring(frame, fps, { stiffness=180, damping=18, mass=1, delay=0, from=0, to=1 })` -> smooth spring number
+- `M.interpolate(val, [in0, in1], [out0, out1], { easing?, extrapolateLeft='clamp', extrapolateRight='clamp' })`
+- `M.stagger(index, delayFrames, frame, fps, springCfg?)` -> staggered 0..1 spring
+- `M.clamp(v, a=0, b=1)`, `M.lerp(a, b, t)`, `M.rng(seed)` -> deterministic () => 0..1, `M.withAlpha(color, alpha)`
+- `M.ease`: `.outCubic`, `.inCubic`, `.inOutCubic`, `.outExpo`, `.inOutQuart`, `.backOut`, `.anticipation`, `.bezier(x1,y1,x2,y2)`
+- `M.squash(impact01, strength=0.18)` -> `{ sx, sy }` (area-conserving squash & stretch)
+- `M.wordHit(state, keyword)` -> 0 before spoken, ramps 0..1 when keyword is spoken!
+- `M.withCamera(ctx, state, { zoom=1, panX=0, panY=0, rotateDeg=0, shake=0 }, () => { ... })`
+- `M.drawBackdrop(ctx, state, { pattern?, glowX?, glowY?, glowColor?, glowAlpha?, vignette? })` -> ALWAYS call FIRST!
+- `M.drawBrandLogo(ctx, state, cx, cy, maxW, maxH, alpha=1)` -> draws authentic brand logo if `state.hasBrandLogo`
+- `M.font(kind, weight, sizePx)` -> kind: 'heading'|'body'|'mono'|'display'|'serif'
+- `M.wrapText(ctx, text, maxW)` -> string[], `M.fitText(ctx, text, maxW, startPx, minPx=24, kind='heading', weight=800)`
+- `M.drawRoundRect(ctx, x, y, w, h, r)`
+- `M.drawCard(ctx, state, x, y, w, h, { radius?, highlighted?, fill?, border? })`
+- `M.drawPill(ctx, state, text, cx, cy, { fill?, textColor?, fontSize?, padX?, padY?, kind? })`
+- `M.drawMaskedText(ctx, text, x, y, progress, { font?, color?, align='center', direction='up', maxWidth?, lineHeight? })`
+- `M.drawKineticHeadline(ctx, state, text, cx, cy, { maxWidth?, fontSize?, color?, accentColor?, highlightWord?, delayFrames=3 })`
+- `M.drawSvgPath(ctx, pathData, { x=0, y=0, scale=1, stroke?, fill?, lineWidth=4, strokeProgress=1, glowColor?, glowBlur=0 })`
+- `M.drawLiquidWave(ctx, x, y, w, h, fillRatio, colorTop, colorBottom, phase, amplitude=10)`
+- `M.drawBrowserWindow(ctx, state, x, y, w, h, { url, typedProgress=1, contentFn? })`
+- `M.drawCursor(ctx, x, y, { clickProgress=0, scale=1, color='#FFFFFF', rippleColor? })`
+- `M.drawCounter(ctx, cx, cy, { from=0, to=100, progress, prefix='', suffix='', decimals=0, fontSize=110, color?, kind='display' })`
+- `M.drawProgressRing(ctx, cx, cy, r, progress, { color?, trackColor?, lineWidth?, label?, labelColor? })`
+- `M.drawParticles(ctx, cx, cy, count, progress, { seed=1, color?, color2?, spread=260, size=10, shape='circle'|'star'|'rect' })`
+- `M.drawSpotlight(ctx, cx, cy, radius, color, alpha=0.28)`
+CRITICAL LAYOUT RULE: Keep hero visuals inside `y = height * 0.11 .. height * 0.68` and `x = width * 0.08 .. width * 0.92` so bottom captions (`y = 74%..88%`) NEVER overlap!"#;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryboardBeat {
+    pub id: String,
+    pub role: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+    pub title: String,
+    pub visual_concept: String,
+    pub emotional_intent: String,
+    pub skills_used: Vec<String>,
+    pub transition_in: String,
+    pub sfx: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStoryboardRequest {
+    pub project_title: String,
+    pub format: String,
+    pub full_script: String,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub words: Vec<WordTimestamp>,
+    #[serde(default)]
+    pub custom_design: Option<Value>,
+    #[serde(default)]
+    pub style_reference: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStoryboardResponse {
+    pub beats: Vec<StoryboardBeat>,
+    pub provider_used: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBeatCodesRequest {
+    pub project_title: String,
+    pub format: String,
+    pub beats: Vec<StoryboardBeat>,
+    #[serde(default)]
+    pub words: Vec<WordTimestamp>,
+    #[serde(default)]
+    pub custom_design: Option<Value>,
+    #[serde(default)]
+    pub style_reference: Option<Value>,
+    pub audio_path: Option<String>,
+    pub audio_source: String,
+    pub trim_silence: bool,
+    pub caption_preset: String,
+    pub accent_color: String,
+    pub bgm_preset: String,
+    pub auto_ducking: bool,
+    pub auto_sfx: bool,
+    #[serde(default)]
+    pub footage: Vec<FootageInputItem>,
+    #[serde(default)]
+    pub visual_mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairBeatCodeRequest {
+    pub beat: StoryboardBeat,
+    pub broken_code: String,
+    pub error_message: String,
+    #[serde(default)]
+    pub custom_design: Option<Value>,
+    #[serde(default)]
+    pub has_brand_logo: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairBeatCodeResponse {
+    pub code: String,
+    pub provider_used: String,
+}
+
+/// Split script into crisp 2.5–4.5 second micro-beats (never 15-second static scenes!).
+pub fn segment_script_into_micro_beats(
+    raw_script: &str,
+    duration_ms: u64,
+    words: &[WordTimestamp],
+) -> Vec<(String, String, u64, u64)> {
+    let base_cuts = segment_raw_script_into_cuts(raw_script);
+    if base_cuts.is_empty() {
+        return Vec::new();
+    }
+
+    // Subdivide any beat whose estimated duration exceeds 4.8 seconds into ~3-second micro-beats!
+    let total_words: usize = base_cuts
+        .iter()
+        .map(|(_, t)| t.split_whitespace().count().max(1))
+        .sum::<usize>()
+        .max(1);
+    let safe_dur = duration_ms.max((total_words as u64) * 380).max(4000);
+    let ms_per_word = (safe_dur as f64) / (total_words as f64);
+    let max_words_per_beat = ((4300.0 / ms_per_word).round() as usize).clamp(7, 13);
+
+    let mut fine_texts: Vec<String> = Vec::new();
+    for (_, txt) in base_cuts {
+        let wlist: Vec<&str> = txt.split_whitespace().collect();
+        if wlist.len() <= max_words_per_beat {
+            fine_texts.push(txt);
+        } else {
+            let chunks_n = ((wlist.len() as f64) / (max_words_per_beat as f64)).ceil() as usize;
+            let per_chunk = (wlist.len() + chunks_n - 1) / chunks_n.max(1);
+            for chunk in wlist.chunks(per_chunk.max(4)) {
+                fine_texts.push(chunk.join(" "));
+            }
+        }
+    }
+
+    // Cap at 12 crisp micro-beats for fast generation + tight pacing
+    while fine_texts.len() > 12 {
+        let mut best_i = 0;
+        let mut best_wc = usize::MAX;
+        for i in 0..fine_texts.len() - 1 {
+            let wc = fine_texts[i].split_whitespace().count()
+                + fine_texts[i + 1].split_whitespace().count();
+            if wc < best_wc {
+                best_wc = wc;
+                best_i = i;
+            }
+        }
+        let next = fine_texts.remove(best_i + 1);
+        fine_texts[best_i].push(' ');
+        fine_texts[best_i].push_str(&next);
+    }
+
+    let total = fine_texts.len();
+    let segs: Vec<(String, String)> = fine_texts
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let role = if i == 0 {
+                "hook"
+            } else if total >= 3 && i == total - 1 {
+                "cta"
+            } else {
+                "body"
+            };
+            (role.to_string(), text)
+        })
+        .collect();
+
+    let timings = compute_scene_timings(&segs, safe_dur, words);
+    segs.into_iter()
+        .zip(timings)
+        .map(|((role, txt), (s, e))| (role, txt, s, e))
+        .collect()
+}
+
+pub fn clean_js_code_output(raw: &str) -> String {
+    let trimmed = strip_thinking_blocks(raw).trim().to_string();
+    let unfenced = if trimmed.contains("```") {
+        strip_json_fences(&trimmed)
+    } else {
+        trimmed
+    };
+    let mut s = unfenced.trim().to_string();
+    // If LLM wrapped the body inside `function renderBeat(ctx, state, M) { ... }`, unwrap cleanly
+    if let Some(fn_pos) = s.find("function renderBeat") {
+        if let Some(open_brace) = s[fn_pos..].find('{') {
+            if let Some(close_brace) = s.rfind('}') {
+                let inner_start = fn_pos + open_brace + 1;
+                if close_brace > inner_start {
+                    s = s[inner_start..close_brace].trim().to_string();
+                }
+            }
+        }
+    }
+    s
+}
+
+#[tauri::command]
+pub async fn ai_plan_storyboard(
+    app: AppHandle,
+    req: PlanStoryboardRequest,
+) -> Result<PlanStoryboardResponse, String> {
+    let micro = segment_script_into_micro_beats(&req.full_script, req.duration_ms, &req.words);
+    if micro.is_empty() {
+        return Err("Script kosong — tulis atau generate script terlebih dahulu.".to_string());
+    }
+
+    let resolved = byok::resolve_active_provider(&app)?;
+    let skills_catalog = motion_skills::build_skills_catalog_for_storyboard(&app);
+
+    let design_hint = req
+        .custom_design
+        .as_ref()
+        .map(|d| {
+            format!(
+                "Arahan Desain Custom: {} — {}. Palette: bgTop={}, accentPrimary={}, accentSecondary={}, isLight={}",
+                d["name"].as_str().unwrap_or("Custom"),
+                d["artDirectionNotes"].as_str().or_else(|| d["summary"].as_str()).unwrap_or(""),
+                d["palette"]["bgTop"].as_str().unwrap_or("#0B0F17"),
+                d["palette"]["accentPrimary"].as_str().unwrap_or("#38E59D"),
+                d["palette"]["accentSecondary"].as_str().unwrap_or("#F59E0B"),
+                d["isLight"].as_bool().unwrap_or(false)
+            )
+        })
+        .unwrap_or_else(|| "Arahan Desain Custom: Rancang mood visual yang paling cocok dengan produk/topik.".to_string());
+
+    let brand_headings = req
+        .style_reference
+        .as_ref()
+        .and_then(|sr| sr["brandHeadings"].as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default();
+
+    let beat_lines: String = micro
+        .iter()
+        .enumerate()
+        .map(|(i, (role, txt, s, e))| {
+            format!(
+                "- Beat #{i} ({role}, {:.1}s–{:.1}s, durasi {}ms): \"{txt}\"",
+                (*s as f64) / 1000.0,
+                (*e as f64) / 1000.0,
+                e.saturating_sub(*s)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let system_prompt = "Kamu adalah Creative Director & Motion Graphics Storyboarder kelas dunia (setara studio Remotion / Apple Launch / LottieFiles).\n\
+        Tugasmu merancang KONSEP VISUAL UNIK TANPA TEMPLATE untuk setiap micro-beat (2.5–4.5 detik) berdasarkan naskah asli user.\n\
+        ATURAN KERAS:\n\
+        1. DILARANG KERAS mengulang pola visual atau metafora yang sama pada 2 beat berturut-turut!\n\
+        2. DILARANG memakai aset/konsep yang tidak nyambung dengan topik (misal: topik kopi WAJIB visualisasi kopi/es/gula aren/botol/gelas/harga, BUKAN smartphone/kotak generik!).\n\
+        3. Setiap beat harus punya visual konkret yang bisa digambar secara prosedural di Canvas 2D + SVG + Spring Physics (misal: gelas kopi 3 lapis dituang, blok Scratch saling menyambung, counter harga Rp45rb, jendela browser mengetik URL & diklik kursor, perbandingan split-screen, tipografi kinetik ber-highlight).\n\
+        4. Pilih 2-3 ID skill motion terbaik dari katalog skill untuk tiap beat.\n\
+        Balas HANYA dalam JSON valid.";
+
+    let user_prompt = format!(
+        "Proyek: \"{}\" (format: {})\n{}\n{}\n\n\
+        Katalog Motion Skills tersedia (pilih ID yang paling cocok per beat):\n{}\n\n\
+        Daftar Micro-Beat (durasi dikunci ke suara dubbing):\n{}\n\n\
+        Balas JSON persis seperti ini:\n\
+        {{\n\
+          \"beats\": [\n\
+            {{\n\
+              \"beatIndex\": 0,\n\
+              \"title\": \"Judul visual singkat 2-5 kata\",\n\
+              \"visualConcept\": \"Deskripsi konkret 1-2 kalimat tentang objek, ilustrasi, layout, dan aksi gerak yang HARUS digambar di beat ini (100% spesifik ke isi kalimat, TANPA mengulang beat sebelumnya)\",\n\
+              \"emotionalIntent\": \"playful|bold|calm|urgent|luxury|editorial\",\n\
+              \"skillsUsed\": [\"motion-craft-physics\", \"procedural-illustration-svg\"],\n\
+              \"transitionIn\": \"hard_cut|whip_pan|pop_zoom|glitch_flash|smooth_crossfade\",\n\
+              \"sfx\": \"impact_boom|whoosh_fast|whoosh_soft|pop_text|ding_notif|riser|camera_shutter|keyboard_click|cash_register|glitch_zap|none\"\n\
+            }}\n\
+          ]\n\
+        }}",
+        req.project_title.trim(),
+        req.format,
+        design_hint,
+        if brand_headings.is_empty() {
+            String::new()
+        } else {
+            format!("Fakta/Heading Brand Website: [{brand_headings}]")
+        },
+        skills_catalog,
+        beat_lines
+    );
+
+    let (val, provider_used) = call_llm_json(&resolved, system_prompt, &user_prompt, &[]).await?;
+    let ai_beats = val["beats"].as_array().cloned().unwrap_or_default();
+
+    let mut out_beats = Vec::with_capacity(micro.len());
+    for (i, (role, txt, start_ms, end_ms)) in micro.into_iter().enumerate() {
+        let matched = ai_beats
+            .iter()
+            .find(|b| b["beatIndex"].as_u64() == Some(i as u64))
+            .or_else(|| ai_beats.get(i));
+
+        let fallback_title: String = txt.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+        let title = matched
+            .and_then(|b| b["title"].as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .unwrap_or(fallback_title);
+
+        let visual_concept = matched
+            .and_then(|b| b["visualConcept"].as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| format!("Ilustrasi & tipografi kinetik kustom menggambarkan: {txt}"));
+
+        let emotional_intent = matched
+            .and_then(|b| b["emotionalIntent"].as_str())
+            .filter(|s| matches!(*s, "playful" | "bold" | "calm" | "urgent" | "luxury" | "editorial"))
+            .unwrap_or(if role == "hook" { "bold" } else { "playful" })
+            .to_string();
+
+        let mut skills_used: Vec<String> = matched
+            .and_then(|b| b["skillsUsed"].as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if skills_used.is_empty() {
+            skills_used = vec![
+                "motion-craft-physics".to_string(),
+                if i == 0 {
+                    "kinetic-typography".to_string()
+                } else {
+                    "procedural-illustration-svg".to_string()
+                },
+            ];
+        }
+
+        let transition_in = if i == 0 {
+            "hard_cut".to_string()
+        } else {
+            matched
+                .and_then(|b| b["transitionIn"].as_str())
+                .filter(|t| matches!(*t, "hard_cut" | "whip_pan" | "pop_zoom" | "glitch_flash" | "smooth_crossfade"))
+                .unwrap_or("pop_zoom")
+                .to_string()
+        };
+
+        let sfx = matched
+            .and_then(|b| b["sfx"].as_str())
+            .filter(|s| !s.trim().is_empty() && *s != "none")
+            .unwrap_or(match role.as_str() {
+                "hook" => "impact_boom",
+                "cta" => "riser",
+                _ => "whoosh_fast",
+            })
+            .to_string();
+
+        out_beats.push(StoryboardBeat {
+            id: format!("beat_{}", i + 1),
+            role,
+            start_ms,
+            end_ms,
+            text: txt,
+            title,
+            visual_concept,
+            emotional_intent,
+            skills_used,
+            transition_in,
+            sfx,
+        });
+    }
+
+    Ok(PlanStoryboardResponse {
+        beats: out_beats,
+        provider_used,
+    })
+}
+
+async fn generate_single_beat_code(
+    resolved: byok::ResolvedProvider,
+    project_title: String,
+    beat: StoryboardBeat,
+    beat_index: usize,
+    total_beats: usize,
+    prev_concept: Option<String>,
+    design_summary: String,
+    has_brand_logo: bool,
+    local_words_json: String,
+    skills_rules: String,
+) -> (usize, Result<String, String>) {
+    let dur_ms = beat.end_ms.saturating_sub(beat.start_ms).max(1000);
+    let prev_note = prev_concept
+        .map(|p| format!("\nBeat sebelumnya menggambar: \"{p}\". WAJIB buat komposisi & ilustrasi yang BERBEDA TOTAL dari beat sebelumnya!"))
+        .unwrap_or_default();
+
+    let system_prompt = format!(
+        "Kamu adalah Senior Motion Graphics Engineer (Remotion + Canvas 2D + SVG + Disney Animation Physics).\n\
+        Tugasmu menulis KODE ANIMASI PROCEDURAL BARU DARI NOL untuk 1 beat video pendek vertikal 9:16.\n\
+        ATURAN WAJIB:\n\
+        1. Panggil `M.drawBackdrop(ctx, state)` di baris pertama.\n\
+        2. Gambar ilustrasi/visual NYATA sesuai `visualConcept` menggunakan Canvas 2D, gradien, `Path2D`/`M.drawSvgPath`, `M.drawLiquidWave`, `M.drawBrowserWindow`, `M.drawCursor`, `M.drawCounter`, `M.drawKineticHeadline`, `M.drawParticles`, `M.withCamera`, `M.spring`, dan `M.interpolate`.\n\
+        3. DILARANG KERAS memakai aset tidak nyambung atau placeholder dummy!\n\
+        4. Gunakan `const {{ width, height, u, frame, fps, progress, design }} = state; const P = design.palette;` — semua koordinat & ukuran WAJIB proporsional terhadap `width`, `height`, dan `u`!\n\
+        5. Jaga area utama di `y = height * 0.11 .. height * 0.68` dan `x = width * 0.08 .. width * 0.92` (JANGAN menutupi zona caption bawah `74%..90%`).\n\
+        6. Animasi HARUS terasa hidup & mulus (pakai `M.spring`, stagger, subtle continuous motion, dan exit momentum 0.2s terakhir).\n\
+        7. Kembalikan JSON: {{\"code\": \"...pure JS function body...\"}}.\n\n\
+        {MOTION_SDK_COMPACT_REFERENCE}\n\n\
+        {skills_rules}"
+    );
+
+    let user_prompt = format!(
+        "Proyek: \"{project_title}\" | Beat {}/{total_beats} (role: {}, durasi: {}ms)\n\
+        Judul Beat: \"{}\"\n\
+        Narasi Dubbing Beat Ini: \"{}\"\n\
+        Konsep Visual yang HARUS Digambar: \"{}\"\n\
+        Emotional Intent: {}\n\
+        Brand Logo Tersedia (`state.hasBrandLogo`): {}\n\
+        Design DNA: {}{prev_note}\n\
+        Word Timestamps Lokal Beat Ini (ms dari awal beat): {}\n\n\
+        Tulis kode JS bersih, ekspresif, kaya detail visual, dan 100% bebas error dalam JSON `{{\"code\": \"...\"}}`.",
+        beat_index + 1,
+        beat.role,
+        dur_ms,
+        beat.title,
+        beat.text,
+        beat.visual_concept,
+        beat.emotional_intent,
+        has_brand_logo,
+        design_summary,
+        local_words_json
+    );
+
+    match call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await {
+        Ok((val, _)) => {
+            let raw_code = val["code"]
+                .as_str()
+                .or_else(|| val["renderCode"].as_str())
+                .unwrap_or("");
+            let cleaned = clean_js_code_output(raw_code);
+            if cleaned.len() < 40 {
+                (beat_index, Err("Kode animasi yang dikembalikan terlalu pendek.".to_string()))
+            } else {
+                (beat_index, Ok(cleaned))
+            }
+        }
+        Err(e) => (beat_index, Err(e)),
+    }
+}
+
+#[tauri::command]
+pub async fn ai_generate_beat_codes(
+    app: AppHandle,
+    req: GenerateBeatCodesRequest,
+) -> Result<Value, String> {
+    if req.beats.is_empty() {
+        return Err("Storyboard beat kosong.".to_string());
+    }
+
+    let resolved = byok::resolve_active_provider(&app)?;
+    let raw_custom_design = req.custom_design.as_ref().or_else(|| {
+        req.style_reference
+            .as_ref()
+            .and_then(|sr| sr.get("customDesign"))
+            .filter(|v| v.is_object())
+    });
+    let sanitized_custom = raw_custom_design
+        .map(|cd| sanitize_custom_design_value(cd, &req.project_title, &[]));
+    let custom_design_json = sanitized_custom
+        .as_ref()
+        .and_then(|d| serde_json::to_value(d).ok())
+        .unwrap_or(Value::Null);
+    let effective_accent = sanitized_custom
+        .as_ref()
+        .map(|d| d.palette.accent_primary.clone())
+        .unwrap_or_else(|| req.accent_color.clone());
+    let motion_theme = if sanitized_custom.as_ref().map(|d| d.is_light).unwrap_or(false) {
+        "paper"
+    } else {
+        "carbon"
+    };
+    let has_brand_logo = req
+        .style_reference
+        .as_ref()
+        .and_then(|sr| sr["logoDataUrl"].as_str())
+        .is_some_and(|s| s.starts_with("data:image/"));
+
+    let design_summary = sanitized_custom
+        .as_ref()
+        .map(|d| {
+            format!(
+                "{} (isLight={}, bgTop={}, bgBottom={}, textPrimary={}, accentPrimary={}, accentSecondary={}, cardStyle={}, pattern={}) — {}",
+                d.name,
+                d.is_light,
+                d.palette.bg_top,
+                d.palette.bg_bottom,
+                d.palette.text_primary,
+                d.palette.accent_primary,
+                d.palette.accent_secondary,
+                d.visual_style.card_style,
+                d.visual_style.background_pattern,
+                d.art_direction_notes
+            )
+        })
+        .unwrap_or_else(|| format!("Tema {}, aksen {}", motion_theme, effective_accent));
+
+    // Generate all beat codes in parallel batches of up to 4 concurrent LLM calls!
+    let total_beats = req.beats.len();
+    let mut codes: Vec<String> = vec![String::new(); total_beats];
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for (idx, beat) in req.beats.iter().enumerate() {
+        let sem = semaphore.clone();
+        let res_clone = resolved.clone();
+        let proj_title = req.project_title.clone();
+        let beat_clone = beat.clone();
+        let prev_concept = if idx > 0 {
+            Some(req.beats[idx - 1].visual_concept.clone())
+        } else {
+            None
+        };
+        let design_sum = design_summary.clone();
+        let skills_rules = motion_skills::build_active_skills_prompt(&app, &beat.skills_used);
+        let local_words: Vec<Value> = req
+            .words
+            .iter()
+            .filter(|w| w.end_ms > beat.start_ms && w.start_ms < beat.end_ms)
+            .take(18)
+            .map(|w| {
+                json!({
+                    "word": w.word,
+                    "startMs": w.start_ms.saturating_sub(beat.start_ms),
+                    "endMs": w.end_ms.saturating_sub(beat.start_ms)
+                })
+            })
+            .collect();
+        let local_words_json = serde_json::to_string(&local_words).unwrap_or_else(|_| "[]".to_string());
+
+        join_set.spawn(async move {
+            let _permit = sem.acquire_owned().await;
+            generate_single_beat_code(
+                res_clone,
+                proj_title,
+                beat_clone,
+                idx,
+                total_beats,
+                prev_concept,
+                design_sum,
+                has_brand_logo,
+                local_words_json,
+                skills_rules,
+            )
+            .await
+        });
+    }
+
+    while let Some(joined) = join_set.join_next().await {
+        if let Ok((idx, Ok(code))) = joined {
+            if idx < codes.len() {
+                codes[idx] = code;
+            }
+        }
+    }
+
+    let vmode = req.visual_mode.as_deref().unwrap_or("motion");
+    let mut scenes_json = Vec::with_capacity(total_beats);
+    for (idx, beat) in req.beats.iter().enumerate() {
+        let use_footage = vmode == "hybrid" && !req.footage.is_empty() && idx % 2 == 0;
+        let clip = if use_footage {
+            req.footage.get((idx / 2) % req.footage.len())
+        } else {
+            None
+        };
+
+        let sfx_arr = if req.auto_sfx && !beat.sfx.is_empty() && beat.sfx != "none" {
+            vec![json!({
+                "preset": beat.sfx,
+                "offsetMs": 0,
+                "volume": 0.65
+            })]
+        } else {
+            Vec::new()
+        };
+
+        let ai_motion_val = if use_footage {
+            Value::Null
+        } else {
+            json!({
+                "engine": "custom_code",
+                "theme": motion_theme,
+                "title": beat.title,
+                "subtitle": req.project_title.trim(),
+                "customCode": {
+                    "code": codes[idx],
+                    "visualConcept": beat.visual_concept,
+                    "emotionalIntent": beat.emotional_intent,
+                    "skillsUsed": beat.skills_used,
+                    "verified": false
+                }
+            })
+        };
+
+        scenes_json.push(json!({
+            "id": beat.id,
+            "role": beat.role,
+            "startMs": beat.start_ms,
+            "endMs": beat.end_ms,
+            "text": beat.text,
+            "visualSource": if use_footage { "footage" } else { "motion" },
+            "aiMotion": ai_motion_val,
+            "media": {
+                "path": clip.map(|c| Value::String(c.path.clone())).unwrap_or(Value::Null),
+                "secondaryPath": Value::Null,
+                "trimStartMs": 0,
+                "fit": "cover"
+            },
+            "motion": {
+                "preset": if use_footage { "zoom_punch" } else { "static_clean" },
+                "intensity": if use_footage { 0.72 } else { 0.35 }
+            },
+            "transitionIn": {
+                "preset": if idx == 0 { "hard_cut" } else { beat.transition_in.as_str() },
+                "durationMs": if idx == 0 || beat.transition_in == "hard_cut" { 0 } else { 240 }
+            },
+            "sfx": sfx_arr,
+            "overlays": []
+        }));
+    }
+
+    let footage_library: Vec<Value> = req
+        .footage
+        .iter()
+        .map(|f| {
+            json!({
+                "path": f.path,
+                "fileName": f.file_name,
+                "durationMs": f.duration_ms
+            })
+        })
+        .collect();
+
+    let now_ts = chrono::Utc::now().timestamp_millis();
+    let now_iso = chrono::Utc::now().to_rfc3339();
+
+    Ok(json!({
+        "version": "2.0",
+        "meta": {
+            "id": format!("proj_{now_ts}"),
+            "name": req.project_title.trim(),
+            "format": req.format,
+            "aspectRatio": "9:16",
+            "fps": 30,
+            "createdAt": now_iso,
+            "updatedAt": now_iso
+        },
+        "styleReference": req.style_reference.unwrap_or(Value::Null),
+        "footageLibrary": footage_library,
+        "globalStyle": {
+            "captionPreset": req.caption_preset,
+            "accentColor": effective_accent,
+            "showProgressBar": true,
+            "customDesign": custom_design_json,
+            "bgm": {
+                "preset": req.bgm_preset,
+                "volume": 0.22,
+                "autoDucking": req.auto_ducking
+            },
+            "safeZone": "tiktok_reels"
+        },
+        "voiceover": {
+            "source": req.audio_source,
+            "audioPath": req.audio_path,
+            "trimSilence": req.trim_silence,
+            "words": req.words
+        },
+        "scenes": scenes_json
+    }))
+}
+
+#[tauri::command]
+pub async fn ai_repair_beat_code(
+    app: AppHandle,
+    req: RepairBeatCodeRequest,
+) -> Result<RepairBeatCodeResponse, String> {
+    let resolved = byok::resolve_active_provider(&app)?;
+    let skills_rules = motion_skills::build_active_skills_prompt(&app, &req.beat.skills_used);
+    let system_prompt = format!(
+        "Kamu adalah Motion Graphics Debugger untuk Synkcut.\n\
+        Perbaiki kode JS `renderBeat(ctx, state, M)` berikut agar 100% lolos eksekusi 4 frame tanpa error, tanpa NaN, dan menggambar visual yang jelas serta bergerak mulus sesuai konsepnya.\n\
+        Balas HANYA JSON `{{\"code\": \"...kode perbaikan lengkap...\"}}`.\n\n\
+        {MOTION_SDK_COMPACT_REFERENCE}\n\n\
+        {skills_rules}"
+    );
+    let design_hint = req
+        .custom_design
+        .as_ref()
+        .map(|d| {
+            format!(
+                "\nPalette Custom: bgTop={}, accentPrimary={}, accentSecondary={}, isLight={}",
+                d["palette"]["bgTop"].as_str().unwrap_or("#0B0F17"),
+                d["palette"]["accentPrimary"].as_str().unwrap_or("#38E59D"),
+                d["palette"]["accentSecondary"].as_str().unwrap_or("#F59E0B"),
+                d["isLight"].as_bool().unwrap_or(false)
+            )
+        })
+        .unwrap_or_default();
+    let user_prompt = format!(
+        "Beat: \"{}\" (narasi: \"{}\")\nKonsep Visual: \"{}\"\nError / Masalah Validasi: \"{}\"\nBrand Logo tersedia: {}{design_hint}\n\nKode sebelumnya yang bermasalah:\n```js\n{}\n```",
+        req.beat.title,
+        req.beat.text,
+        req.beat.visual_concept,
+        req.error_message,
+        req.has_brand_logo,
+        req.broken_code.chars().take(4500).collect::<String>()
+    );
+    let (val, provider_used) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+    let fixed = clean_js_code_output(val["code"].as_str().unwrap_or(""));
+    if fixed.len() < 30 {
+        return Err("AI tidak mengembalikan kode perbaikan yang valid.".to_string());
+    }
+    Ok(RepairBeatCodeResponse {
+        code: fixed,
         provider_used,
     })
 }
@@ -3000,5 +3829,43 @@ mod tests {
             extract_gemini_text(&resp).as_deref(),
             Some("{\"projectTitle\":\"Final\"}")
         );
+    }
+
+    #[test]
+    fn test_coffee_lapisan_never_falls_back_to_smartphone_sample() {
+        let motion = build_fallback_ai_motion(
+            "body",
+            1,
+            "3 Lapis Racikan Pas, tuang es batu 5 detik siap seruput kopi susu gula aren!",
+            "Kopi Susu Gula Aren",
+            "carbon",
+            &[],
+        );
+        // Must NEVER trigger smartphone 3D breakdown or dummy Masukan/Proses Inti!
+        assert_eq!(motion["engine"], "custom_code");
+        let serialized = motion.to_string();
+        assert!(!serialized.contains("MagSafe"));
+        assert!(!serialized.contains("OLED"));
+        assert!(!serialized.contains("Masukan"));
+    }
+
+    #[test]
+    fn test_segment_script_into_micro_beats_avoids_long_15s_scenes() {
+        let script = "Pernah bingung kenapa anak terus main HP seharian tanpa henti? Di CODEPOLITAN Junior, screen time anak diubah jadi bikin game sendiri pakai blok Scratch yang seru banget. Belajarnya santai sambil melatih logika dan problem solving sejak dini. Investasi skill masa depan cuma satu koma dua juta sudah lengkap dengan bimbingan mentor. Daftar sekarang di junior dot codepolitan dot com!";
+        let beats = segment_script_into_micro_beats(script, 36_000, &[]);
+        assert!(beats.len() >= 6, "expected at least 6 micro-beats, got {}", beats.len());
+        for (_, _, s, e) in &beats {
+            assert!(
+                e.saturating_sub(*s) <= 8500,
+                "no micro-beat should be 15s static (got {}ms)",
+                e.saturating_sub(*s)
+            );
+        }
+    }
+
+    #[test]
+    fn test_clean_js_code_output_unwraps_fences_and_function_wrapper() {
+        let raw = "```javascript\nfunction renderBeat(ctx, state, M) {\n  M.drawBackdrop(ctx, state);\n}\n```";
+        assert_eq!(clean_js_code_output(raw), "M.drawBackdrop(ctx, state);");
     }
 }

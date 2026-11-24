@@ -24,26 +24,29 @@ import {
 } from "lucide-react";
 import {
   CONTENT_FORMAT_LABELS,
-  type AiMotionTheme,
   type ByokStatus,
   type ContentFormat,
   type ProjectStyleReference,
   type ProjectSummary,
+  type StoryboardBeat,
   type SynkcutProject,
 } from "../types/scene";
 import { BUILTIN_SAMPLES, type SampleTemplate } from "../engine/sampleTemplates";
-import { rebuildWordsFromScenes } from "../engine/sampleProject";
 import {
-  aiAssembleProject,
   aiGenerateScript,
+  aiPlanStoryboard,
   extractFootageFrames,
+  generateTtsAudio,
   isTauriRuntime,
   pickLocalVideos,
   probeMedia,
   type FootageInputItem,
+  type HookOption,
+  type ProcessedAudioResult,
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
 import DesignReferencePanel from "./DesignReferencePanel";
+import PreProductionReviewModal, { type PreProductionDraft } from "./PreProductionReviewModal";
 import ProjectPosterCanvas from "./ProjectPosterCanvas";
 
 interface ProjectsHomeViewProps {
@@ -162,6 +165,7 @@ export default function ProjectsHomeView({
   const [isCreatingVideo, setIsCreatingVideo] = useState(false);
   const [createStatusText, setCreateStatusText] = useState("");
   const [heroError, setHeroError] = useState<string | null>(null);
+  const [reviewDraft, setReviewDraft] = useState<PreProductionDraft | null>(null);
 
   const hasAnyByok = Object.values(byokStatus.providers).some((p) => p.configured);
   const isFootageMode = heroVisualMode === "footage";
@@ -245,25 +249,25 @@ export default function ProjectsHomeView({
 
     setHeroError(null);
     setIsCreatingVideo(true);
-    setCreateStatusText(
-      isFootageMode
-        ? "Membuat voiceover & memotong otomatis semua footage sesuai script..."
-        : "Meracik skrip & visual..."
-    );
+    setCreateStatusText("1/3 Menyusun script & 3 opsi hook...");
     try {
       const inferredFormat = inferFormatFromPrompt(trimmed);
       let projectTitle = trimmed.split(/\s+/).slice(0, 5).join(" ");
-      let hookText = trimmed.length <= 72 ? trimmed : `${trimmed.slice(0, 68)}...`;
-      let bodySegments = [
-        `Inti utamanya ada pada alur proses di balik ${projectTitle.toLowerCase()} yang sering terlewat.`,
-        "Dengan tampilan visual yang jelas dan ringkas, audiens langsung paham dalam hitungan detik.",
+      let hooks: HookOption[] = [
+        {
+          id: "h1",
+          angle: "Utama",
+          text: trimmed.length <= 72 ? trimmed : `${trimmed.slice(0, 68)}...`,
+        },
       ];
-      let ctaText = "Simpan video ini dan tulis topik berikutnya yang ingin dibahas!";
-      let rawScriptForAssemble: string | null = null;
+      let bodySegments = [
+        `Tunjukkan langsung keunggulan nyata dari ${projectTitle.toLowerCase()} secara jelas dan spesifik.`,
+        "Berikan alasan kuat kenapa penonton perlu mencobanya sekarang juga.",
+      ];
+      let ctaText = "Cek sekarang juga sebelum kehabisan!";
+      let fullScript = trimmed;
 
       if (isFootageMode) {
-        // Mode Footage: gunakan 100% script yang dilampirkan user untuk cut otomatis & voiceover!
-        rawScriptForAssemble = trimmed;
         projectTitle =
           trimmed
             .split(/[.!?\n]/)[0]
@@ -271,85 +275,93 @@ export default function ProjectsHomeView({
             .split(/\s+/)
             .slice(0, 5)
             .join(" ") || "Video Footage Auto-Cut";
+        fullScript = trimmed;
       } else if (isTauriRuntime() && hasAnyByok) {
+        const generated = await aiGenerateScript({
+          topic: trimmed,
+          format: inferredFormat,
+          tone: "santai",
+          targetDurationSec: 30,
+          visualMode: heroVisualMode,
+          styleReferenceSummary:
+            styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,
+        });
+        projectTitle = generated.projectTitle || projectTitle;
+        if (generated.hooks.length > 0) hooks = generated.hooks;
+        if (generated.bodySegments.length > 0) bodySegments = generated.bodySegments;
+        ctaText = generated.cta || ctaText;
+        fullScript = [hooks[0]?.text || "", ...bodySegments, ctaText]
+          .filter((s) => s.trim())
+          .join(" ");
+      } else {
+        fullScript = [hooks[0]?.text || "", ...bodySegments, ctaText]
+          .filter((s) => s.trim())
+          .join(" ");
+      }
+
+      // 2/3 Auto-generate dubbing voiceover sample so user can HEAR & review it BEFORE generating video!
+      setCreateStatusText("2/3 Membuat sampel suara dubbing (voiceover)...");
+      let audioRes: ProcessedAudioResult | null = null;
+      try {
+        audioRes = await generateTtsAudio({
+          text: fullScript,
+          voiceName: heroTtsEngine === "openai" ? "nova" : "Kore",
+          tone: inferredFormat === "ad_promo" ? "persuasif" : "santai",
+          engine: heroTtsEngine === "windows_offline" ? "windows_offline" : "auto",
+        });
+      } catch {
+        audioRes = null;
+      }
+
+      // 3/3 Plan micro-beat storyboard (2.5-4.5s/beat, 100% custom visual concepts — ZERO sample assets!)
+      let beats: StoryboardBeat[] = [];
+      if (!isFootageMode) {
+        setCreateStatusText("3/3 Merancang storyboard micro-beat tanpa template...");
+        const styleReference: ProjectStyleReference | null = styleRef
+          ? {
+              sourceType: styleRef.sourceType,
+              url: styleRef.url ?? undefined,
+              title: styleRef.title,
+              thumbnails: styleRef.thumbnails,
+              styleDnaSummary: styleRef.styleDnaSummary,
+              logoDataUrl: styleRef.logoDataUrl ?? null,
+              brandHeadings: styleRef.brandHeadings,
+              brandColors: styleRef.brandColors,
+              customDesign: styleRef.customDesign,
+            }
+          : null;
         try {
-          const generated = await aiGenerateScript({
-            topic: trimmed,
+          const planned = await aiPlanStoryboard({
+            projectTitle,
             format: inferredFormat,
-            tone: "santai",
-            targetDurationSec: 30,
-            visualMode: heroVisualMode,
-            styleReferenceSummary:
-              styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,
+            fullScript,
+            durationMs: audioRes?.durationMs ?? 24000,
+            words: audioRes?.words ?? [],
+            customDesign: styleRef?.customDesign ?? null,
+            styleReference,
           });
-          projectTitle = generated.projectTitle || projectTitle;
-          hookText = generated.hooks[0]?.text || hookText;
-          if (generated.bodySegments.length > 0) bodySegments = generated.bodySegments;
-          ctaText = generated.cta || ctaText;
+          beats = planned.beats;
         } catch {
-          // Graceful fallback to local script if BYOK fails transiently
+          beats = [];
         }
       }
 
-      const styleReference: ProjectStyleReference | null = styleRef
-        ? {
-            sourceType: styleRef.sourceType,
-            url: styleRef.url ?? undefined,
-            title: styleRef.title,
-            thumbnails: styleRef.thumbnails,
-            styleDnaSummary: styleRef.styleDnaSummary,
-            customDesign: styleRef.customDesign,
-          }
-        : null;
-
-      const customDesign = styleRef?.customDesign ?? null;
-      const motionTheme: AiMotionTheme = styleRef?.suggestedTheme ?? (customDesign?.isLight ? "paper" : "carbon");
-      const captionPreset = styleRef?.suggestedCaption ?? "bold_pop";
-      const accentColor = customDesign?.palette.accentPrimary ?? styleRef?.suggestedAccent ?? "#38E59D";
-
-      const assembled = await aiAssembleProject({
+      // Open Pre-Production Review Panel instead of jumping straight to video!
+      setReviewDraft({
         projectTitle,
         format: inferredFormat,
-        hookText,
-        bodySegments,
-        ctaText,
-        rawScript: rawScriptForAssemble,
-        audioPath: null,
-        audioSource: isFootageMode ? "tts" : "demo",
-        trimSilence: true,
-        durationMs: 0,
-        words: [],
-        footage: heroVisualMode === "motion" ? [] : attachedClips,
-        captionPreset,
-        accentColor,
-        motionPreset:
-          customDesign?.preferredMotion ??
-          (heroVisualMode === "motion" ? "static_clean" : "zoom_punch"),
-        transitionPreset: customDesign?.preferredTransition ?? "pop_zoom",
-        overlayMode: heroVisualMode === "motion" ? "none" : "auto",
-        bgmPreset: inferredFormat === "education" ? "lofi_education" : "tech_modern",
-        autoDucking: true,
-        autoSfx: true,
         visualMode: heroVisualMode,
-        motionTheme,
-        preferredEngines: customDesign?.preferredEngines ?? styleRef?.suggestedEngines,
-        styleReference,
-        customDesign,
-        autoGenerateVoiceover: isFootageMode || attachedClips.length > 0,
+        hooks,
+        selectedHookId: hooks[0]?.id || "h1",
+        bodySegments,
+        cta: ctaText,
+        fullScript,
+        audio: audioRes,
+        beats,
+        styleRef,
+        attachedClips,
         ttsEngine: heroTtsEngine,
-        ttsVoice: heroTtsEngine === "openai" ? "nova" : "Kore",
-        ttsTone: "santai",
       });
-
-      if (!assembled.voiceover.words || assembled.voiceover.words.length === 0) {
-        assembled.voiceover.words = rebuildWordsFromScenes(assembled);
-      }
-
-      setHeroPrompt("");
-      setStyleRef(null);
-      setAttachedClips([]);
-      setShowDesignPanel(false);
-      await onInstantProjectCreated(assembled);
     } catch (err) {
       setHeroError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -643,8 +655,7 @@ export default function ProjectsHomeView({
           <div className="mb-4 text-center">
             <h2 className="text-2xl font-bold tracking-tight">Mau bikin video apa hari ini?</h2>
             <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Tulis 1 ide singkat — Synkcut langsung meracik skrip, animasi 2D/3D, dan subtitle
-              9:16 untuk lo.
+              Tulis 1 ide — review dulu script, sampel suara dubbing, &amp; konsep tiap beat, lalu AI menulis kode motion kustom tanpa template.
             </p>
           </div>
 
@@ -953,7 +964,7 @@ export default function ProjectsHomeView({
                     </>
                   ) : (
                     <>
-                      {isFootageMode ? "Auto-Cut Footage + Suara" : "Buat Video"}
+                      {isFootageMode ? "Review Script & Suara" : "Siapkan Script & Suara"}
                       <ArrowUp className="h-3.5 w-3.5" />
                     </>
                   )}
@@ -1483,6 +1494,22 @@ export default function ProjectsHomeView({
           </div>
         </section>
       </div>
+
+      {reviewDraft && (
+        <PreProductionReviewModal
+          draft={reviewDraft}
+          byokStatus={byokStatus}
+          onClose={() => setReviewDraft(null)}
+          onProjectReady={async (project) => {
+            setReviewDraft(null);
+            setHeroPrompt("");
+            setStyleRef(null);
+            setAttachedClips([]);
+            setShowDesignPanel(false);
+            await onInstantProjectCreated(project);
+          }}
+        />
+      )}
     </div>
   );
 }

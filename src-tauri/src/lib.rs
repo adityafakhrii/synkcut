@@ -2,6 +2,7 @@ mod ai;
 mod audio;
 mod audio_pack;
 mod byok;
+mod motion_skills;
 mod projects;
 mod style_ref;
 
@@ -538,6 +539,64 @@ async fn mux_export_mp4(
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemotionExportFile {
+    relative_path: String,
+    content: String,
+}
+
+#[tauri::command]
+async fn export_remotion_project(
+    target_dir: String,
+    files: Vec<RemotionExportFile>,
+    audio_path: Option<String>,
+) -> Result<String, String> {
+    let root = PathBuf::from(target_dir.trim());
+    if target_dir.trim().is_empty() {
+        return Err("Folder tujuan export Remotion tidak boleh kosong.".to_string());
+    }
+    tokio::fs::create_dir_all(&root)
+        .await
+        .map_err(|e| format!("Gagal membuat folder Remotion: {e}"))?;
+
+    for f in files {
+        let clean_rel = f
+            .relative_path
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_string();
+        if clean_rel.contains("..") || clean_rel.is_empty() {
+            continue;
+        }
+        let dest = root.join(&clean_rel);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Gagal membuat subfolder Remotion: {e}"))?;
+        }
+        tokio::fs::write(&dest, f.content.as_bytes())
+            .await
+            .map_err(|e| format!("Gagal menulis {}: {e}", clean_rel))?;
+    }
+
+    if let Some(src_audio) = audio_path.filter(|p| !p.trim().is_empty()) {
+        let src_path = PathBuf::from(&src_audio);
+        if src_path.exists() {
+            let public_dir = root.join("public");
+            let _ = tokio::fs::create_dir_all(&public_dir).await;
+            let ext = src_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("wav");
+            let dst_audio = public_dir.join(format!("voiceover.{ext}"));
+            let _ = tokio::fs::copy(&src_path, &dst_audio).await;
+        }
+    }
+
+    Ok(root.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn reveal_in_explorer(path: String) -> Result<(), String> {
     let target = PathBuf::from(&path);
@@ -567,6 +626,7 @@ pub fn run() {
             extract_thumbnails,
             extract_footage_frames,
             mux_export_mp4,
+            export_remotion_project,
             reveal_in_explorer,
             byok::get_byok_status,
             byok::save_byok_key,
@@ -583,8 +643,16 @@ pub fn run() {
             projects::rename_project,
             projects::delete_project,
             ai::ai_generate_script,
+            ai::ai_plan_storyboard,
+            ai::ai_generate_beat_codes,
+            ai::ai_repair_beat_code,
             ai::ai_assemble_project,
             ai::ai_copilot_patch,
+            motion_skills::list_motion_skills,
+            motion_skills::toggle_motion_skill,
+            motion_skills::save_custom_motion_skill,
+            motion_skills::import_motion_skill_url,
+            motion_skills::delete_custom_motion_skill,
             style_ref::extract_youtube_style_reference,
             style_ref::analyze_style_reference,
             style_ref::analyze_design_reference,

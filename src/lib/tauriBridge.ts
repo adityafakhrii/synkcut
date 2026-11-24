@@ -8,9 +8,12 @@ import type {
   ByokStatus,
   ConnectionTestResult,
   CustomDesignDirection,
+  MotionSkillInfo,
   ProjectStyleReference,
   ProjectSummary,
+  StoryboardBeat,
   SynkcutProject,
+  WordTimestamp,
 } from "../types/scene";
 import { createDefaultAiMotion } from "../engine/aiMotionPresets";
 import { normalizeProject } from "../engine/sceneOps";
@@ -607,6 +610,9 @@ export interface StyleReferenceResult {
   suggestedAccent: string;
   suggestedEngines: string[];
   layerUsed: string;
+  logoDataUrl?: string | null;
+  brandHeadings?: string[];
+  brandColors?: string[];
   customDesign: CustomDesignDirection;
 }
 
@@ -800,8 +806,25 @@ export async function generateTtsAudio(params: {
   text: string;
   voiceName: string;
   tone: string;
-  engine: "gemini" | "openai" | "windows_offline";
+  engine: "auto" | "gemini" | "openai" | "windows_offline";
 }): Promise<ProcessedAudioResult> {
+  if (!isTauriRuntime()) {
+    const wordsRaw = params.text.trim().split(/\s+/).filter(Boolean);
+    const dur = Math.max(4000, wordsRaw.length * 380);
+    const step = dur / Math.max(1, wordsRaw.length);
+    return {
+      audioPath: "",
+      durationMs: dur,
+      transcript: params.text.trim(),
+      words: wordsRaw.map((w, i) => ({
+        word: w,
+        startMs: Math.round(i * step),
+        endMs: Math.round((i + 1) * step),
+      })),
+      providerUsed: "Browser Preview Voiceover",
+      silenceTrimmed: false,
+    };
+  }
   return invoke<ProcessedAudioResult>("generate_tts_audio", params);
 }
 
@@ -914,4 +937,166 @@ export async function aiCopilotPatch(
     ...res,
     project: normalizeProject(res.project, project),
   };
+}
+
+/* ---------------- v2.0 Freeform AI Motion, Storyboard, Motion Skills & Remotion Export ---------------- */
+
+export async function listMotionSkills(): Promise<MotionSkillInfo[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<MotionSkillInfo[]>("list_motion_skills");
+}
+
+export async function toggleMotionSkill(
+  skillId: string,
+  enabled: boolean
+): Promise<MotionSkillInfo[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<MotionSkillInfo[]>("toggle_motion_skill", { skillId, enabled });
+}
+
+export async function saveCustomMotionSkill(params: {
+  name: string;
+  category?: string | null;
+  summary?: string | null;
+  source?: string | null;
+  content: string;
+}): Promise<MotionSkillInfo[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<MotionSkillInfo[]>("save_custom_motion_skill", {
+    name: params.name,
+    category: params.category ?? null,
+    summary: params.summary ?? null,
+    source: params.source ?? null,
+    content: params.content,
+  });
+}
+
+export async function importMotionSkillUrl(url: string): Promise<MotionSkillInfo[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<MotionSkillInfo[]>("import_motion_skill_url", { url });
+}
+
+export async function deleteCustomMotionSkill(skillId: string): Promise<MotionSkillInfo[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<MotionSkillInfo[]>("delete_custom_motion_skill", { skillId });
+}
+
+export interface PlanStoryboardResponse {
+  beats: StoryboardBeat[];
+  providerUsed: string;
+}
+
+export async function aiPlanStoryboard(req: {
+  projectTitle: string;
+  format: string;
+  fullScript: string;
+  durationMs: number;
+  words: WordTimestamp[];
+  customDesign?: CustomDesignDirection | null;
+  styleReference?: ProjectStyleReference | null;
+}): Promise<PlanStoryboardResponse> {
+  if (!isTauriRuntime()) {
+    const sentences = req.fullScript
+      .split(/(?<=[.!?\n])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const list = sentences.length > 0 ? sentences : [req.fullScript.trim()];
+    const totalMs = Math.max(4000, req.durationMs || list.length * 3200);
+    const per = Math.round(totalMs / list.length);
+    return {
+      providerUsed: "browser preview",
+      beats: list.map((txt, idx) => ({
+        id: `beat_${idx + 1}`,
+        role: idx === 0 ? "hook" : idx === list.length - 1 ? "cta" : "body",
+        startMs: idx * per,
+        endMs: idx === list.length - 1 ? totalMs : (idx + 1) * per,
+        text: txt,
+        title: txt.split(/\s+/).slice(0, 4).join(" "),
+        visualConcept: `Ilustrasi & animasi kustom untuk: ${txt}`,
+        emotionalIntent: idx === 0 ? "bold" : "playful",
+        skillsUsed: ["motion-craft-physics", "procedural-illustration-svg"],
+        transitionIn: idx === 0 ? "hard_cut" : "pop_zoom",
+        sfx: idx === 0 ? "impact_boom" : "whoosh_fast",
+      })),
+    };
+  }
+  return invoke<PlanStoryboardResponse>("ai_plan_storyboard", {
+    req: {
+      projectTitle: req.projectTitle,
+      format: req.format,
+      fullScript: req.fullScript,
+      durationMs: req.durationMs,
+      words: req.words,
+      customDesign: req.customDesign ?? null,
+      styleReference: req.styleReference ?? null,
+    },
+  });
+}
+
+export async function aiGenerateBeatCodes(req: {
+  projectTitle: string;
+  format: string;
+  beats: StoryboardBeat[];
+  words: WordTimestamp[];
+  customDesign?: CustomDesignDirection | null;
+  styleReference?: ProjectStyleReference | null;
+  audioPath: string | null;
+  audioSource: "tts" | "recorded" | "demo";
+  trimSilence: boolean;
+  captionPreset: string;
+  accentColor: string;
+  bgmPreset: string;
+  autoDucking: boolean;
+  autoSfx: boolean;
+  footage: FootageInputItem[];
+  visualMode?: "motion" | "footage" | "hybrid";
+}): Promise<SynkcutProject> {
+  const raw = await invoke<SynkcutProject>("ai_generate_beat_codes", {
+    req: {
+      ...req,
+      customDesign: req.customDesign ?? null,
+      styleReference: req.styleReference ?? null,
+    },
+  });
+  return normalizeProject(raw);
+}
+
+export async function aiRepairBeatCode(req: {
+  beat: StoryboardBeat;
+  brokenCode: string;
+  errorMessage: string;
+  customDesign?: CustomDesignDirection | null;
+  hasBrandLogo: boolean;
+}): Promise<{ code: string; providerUsed: string }> {
+  return invoke<{ code: string; providerUsed: string }>("ai_repair_beat_code", {
+    req: {
+      beat: req.beat,
+      brokenCode: req.brokenCode,
+      errorMessage: req.errorMessage,
+      customDesign: req.customDesign ?? null,
+      hasBrandLogo: req.hasBrandLogo,
+    },
+  });
+}
+
+export async function pickRemotionExportFolder(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Pilih Folder Tujuan Export Proyek Remotion (.tsx)",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function exportRemotionProject(params: {
+  targetDir: string;
+  files: Array<{ relativePath: string; content: string }>;
+  audioPath?: string | null;
+}): Promise<string> {
+  return invoke<string>("export_remotion_project", {
+    targetDir: params.targetDir,
+    files: params.files,
+    audioPath: params.audioPath ?? null,
+  });
 }

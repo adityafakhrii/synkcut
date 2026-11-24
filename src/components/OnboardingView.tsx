@@ -23,6 +23,7 @@ import {
   saveProviderConfig,
   testByokConnection,
 } from "../lib/tauriBridge";
+import MotionSkillsSettings from "./MotionSkillsSettings";
 
 interface OnboardingViewProps {
   mode: "onboarding" | "settings";
@@ -164,6 +165,7 @@ export default function OnboardingView({
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [settingsTab, setSettingsTab] = useState<"providers" | "skills">("providers");
 
   const activeMeta = PROVIDER_LIST.find((p) => p.id === selected) ?? PROVIDER_LIST[0];
   const currentInfo = byokStatus.providers[selected];
@@ -816,18 +818,57 @@ export default function OnboardingView({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
-        className="flex h-14 shrink-0 items-center justify-between border-b px-6"
+        className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-6"
         style={{ backgroundColor: "var(--bg-panel)", borderColor: "var(--border-subtle)" }}
       >
         <div className="flex items-center gap-2.5">
-          <h1 className="text-base font-bold tracking-tight">Pengaturan AI (BYOK)</h1>
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <h1 className="text-base font-bold tracking-tight">Pengaturan AI &amp; Motion Skills</h1>
+          <span className="hidden text-xs sm:inline" style={{ color: "var(--text-muted)" }}>
             · Penyimpanan terenkripsi lokal
           </span>
         </div>
+
+        <div
+          className="flex items-center gap-1 rounded-lg p-0.5"
+          style={{
+            backgroundColor: "var(--bg-elevated)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setSettingsTab("providers")}
+            className="rounded-md px-3 py-1 text-xs font-semibold transition-colors cursor-pointer"
+            style={{
+              backgroundColor: settingsTab === "providers" ? "var(--bg-panel)" : "transparent",
+              color: settingsTab === "providers" ? "var(--text-primary)" : "var(--text-secondary)",
+            }}
+          >
+            Provider AI (BYOK)
+          </button>
+          <button
+            type="button"
+            onClick={() => setSettingsTab("skills")}
+            className="rounded-md px-3 py-1 text-xs font-semibold transition-colors cursor-pointer"
+            style={{
+              backgroundColor: settingsTab === "skills" ? "var(--bg-panel)" : "transparent",
+              color: settingsTab === "skills" ? "var(--text-primary)" : "var(--text-secondary)",
+            }}
+          >
+            Motion Skills
+          </button>
+        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-6">{content}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-6">
+        {settingsTab === "skills" ? (
+          <div className="w-full max-w-5xl">
+            <MotionSkillsSettings />
+          </div>
+        ) : (
+          content
+        )}
+      </div>
     </div>
   );
 }

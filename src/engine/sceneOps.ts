@@ -52,6 +52,7 @@ const VALID_TRANSITIONS: TransitionPreset[] = [
 ];
 const VALID_ROLES: SceneRole[] = ["hook", "body", "cta"];
 const VALID_ENGINES: AiMotionEngine[] = [
+  "custom_code",
   "flow_diagram",
   "motion_chart",
   "tech_cards",
@@ -203,10 +204,10 @@ export function sanitizeAiMotionSpec(
   fallbackText = "AI Motion"
 ): AiMotionSpec {
   if (!raw || typeof raw !== "object") {
-    return createDefaultAiMotion("flow_diagram", "carbon", fallbackText);
+    return createDefaultAiMotion("custom_code", "carbon", fallbackText);
   }
   const obj = raw as Record<string, unknown>;
-  const engine = pickEnum(obj.engine, VALID_ENGINES, "flow_diagram");
+  const engine = pickEnum(obj.engine, VALID_ENGINES, "custom_code");
   const theme = pickEnum(obj.theme, VALID_THEMES, "carbon");
   const base = createDefaultAiMotion(engine, theme, fallbackText);
 
@@ -222,7 +223,33 @@ export function sanitizeAiMotionSpec(
     takeaway,
   };
 
-  if (engine === "flow_diagram") {
+  if (engine === "custom_code") {
+    const rawCc = (obj.customCode && typeof obj.customCode === "object"
+      ? obj.customCode
+      : {}) as Record<string, unknown>;
+    const skillsRaw = Array.isArray(rawCc.skillsUsed) ? rawCc.skillsUsed : [];
+    const skillsUsed = skillsRaw
+      .map((s) => asStr(s, "").trim())
+      .filter(Boolean);
+    spec.customCode = {
+      code: asStr(rawCc.code, ""),
+      visualConcept:
+        asStr(rawCc.visualConcept, "").trim() ||
+        `Visual motion kustom untuk: ${title}`,
+      emotionalIntent: pickEnum(
+        rawCc.emotionalIntent,
+        ["playful", "bold", "calm", "urgent", "luxury", "editorial"] as const,
+        "bold"
+      ),
+      skillsUsed:
+        skillsUsed.length > 0
+          ? skillsUsed
+          : ["motion-craft-physics", "kinetic-typography"],
+      verified: typeof rawCc.verified === "boolean" ? rawCc.verified : false,
+      verificationNote:
+        typeof rawCc.verificationNote === "string" ? rawCc.verificationNote : undefined,
+    };
+  } else if (engine === "flow_diagram") {
     const rawFlow = (obj.flow && typeof obj.flow === "object"
       ? obj.flow
       : {}) as Record<string, unknown>;
@@ -689,11 +716,17 @@ export function normalizeProject(
     }))
     .filter((c) => c.path.length > 0);
 
+  const hasCustomCode = reflowedScenes.some((s) => s.aiMotion?.engine === "custom_code");
   const hasMotionOrCustom =
     reflowedScenes.some((s) => s.visualSource === "motion") || Boolean(customDesign);
 
   const normalized: SynkcutProject = {
-    version: hasMotionOrCustom || obj.version === "1.1" ? "1.1" : "1.0",
+    version:
+      hasCustomCode || obj.version === "2.0"
+        ? "2.0"
+        : hasMotionOrCustom || obj.version === "1.1"
+          ? "1.1"
+          : "1.0",
     meta: {
       id: asStr(rawMeta.id, fallback?.meta.id ?? `proj_${Date.now()}`),
       name: asStr(rawMeta.name, fallback?.meta.name ?? "Proyek Synkcut"),

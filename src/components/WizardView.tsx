@@ -36,7 +36,9 @@ import {
 import { AI_MOTION_ENGINES, AI_MOTION_THEMES } from "../engine/aiMotionPresets";
 import {
   aiAssembleProject,
+  aiGenerateBeatCodes,
   aiGenerateScript,
+  aiPlanStoryboard,
   extractFootageFrames,
   generateTtsAudio,
   isTauriRuntime,
@@ -50,6 +52,7 @@ import {
   type ProcessedAudioResult,
   type StyleReferenceResult,
 } from "../lib/tauriBridge";
+import { verifyAndRepairProjectBeats } from "../engine/freeformPipeline";
 import DesignReferencePanel from "./DesignReferencePanel";
 
 interface WizardViewProps {
@@ -228,6 +231,7 @@ export default function WizardView({
   const [autoDucking, setAutoDucking] = useState(true);
   const [autoSfx, setAutoSfx] = useState(true);
   const [isAssembling, setIsAssembling] = useState(false);
+  const [assembleStatus, setAssembleStatus] = useState("");
   const [assembleError, setAssembleError] = useState<string | null>(null);
 
   const selectedHookText =
@@ -470,6 +474,66 @@ export default function WizardView({
           }
         : null;
 
+      // Always guarantee dubbing voiceover exists (for Motion, Hybrid, AND Footage modes!)
+      let finalAudio = audioResult;
+      if (!finalAudio && fullScriptText.trim()) {
+        setAssembleStatus("1/3 Membuat suara dubbing (voiceover) & word timestamps...");
+        try {
+          finalAudio = await generateTtsAudio({
+            text: fullScriptText.trim(),
+            voiceName: ttsVoice,
+            tone,
+            engine: ttsEngine === "windows_offline" ? "windows_offline" : "auto",
+          });
+          setAudioResult(finalAudio);
+        } catch {
+          finalAudio = null;
+        }
+      }
+
+      // v2.0 Freeform Code Motion (Zero Template, Zero Sample Assets!) for Motion & Hybrid modes!
+      if ((visualMode === "motion" || visualMode === "hybrid") && isTauriRuntime() && hasAnyByok) {
+        setAssembleStatus("2/3 Merancang micro-beat storyboard (2.5–4.5 detik per beat)...");
+        const planned = await aiPlanStoryboard({
+          projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+          format,
+          fullScript: fullScriptText.trim(),
+          durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
+          words: finalAudio?.words ?? [],
+          customDesign: styleRefResult?.customDesign ?? null,
+          styleReference,
+        });
+
+        setAssembleStatus(
+          `3/3 Menulis kode motion baru dari nol untuk ${planned.beats.length} beat secara paralel...`
+        );
+        const rawProj = await aiGenerateBeatCodes({
+          projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+          format,
+          beats: planned.beats,
+          words: finalAudio?.words ?? [],
+          customDesign: styleRefResult?.customDesign ?? null,
+          styleReference,
+          audioPath: finalAudio?.audioPath ?? null,
+          audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
+          trimSilence,
+          captionPreset,
+          accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
+          bgmPreset,
+          autoDucking,
+          autoSfx,
+          footage: visualMode === "motion" ? [] : footageClips,
+          visualMode,
+        });
+
+        const verified = await verifyAndRepairProjectBeats(rawProj, (msg) =>
+          setAssembleStatus(msg)
+        );
+        onProjectCreated(verified.project);
+        return;
+      }
+
+      setAssembleStatus("Merakit video & memotong footage otomatis sesuai dubbing...");
       const project = await aiAssembleProject({
         projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
         format,
@@ -477,11 +541,11 @@ export default function WizardView({
         bodySegments: bodySegments.filter((s) => s.trim().length > 0),
         ctaText,
         rawScript: scriptInputMode === "raw" ? rawScript.trim() : null,
-        audioPath: audioResult?.audioPath ?? null,
-        audioSource: audioResult ? (audioTab === "tts" ? "tts" : "recorded") : visualMode === "footage" ? "tts" : "demo",
+        audioPath: finalAudio?.audioPath ?? null,
+        audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "tts",
         trimSilence,
-        durationMs: audioResult?.durationMs ?? 0,
-        words: audioResult?.words ?? [],
+        durationMs: finalAudio?.durationMs ?? 0,
+        words: finalAudio?.words ?? [],
         footage: visualMode === "motion" ? [] : footageClips,
         captionPreset,
         accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
@@ -496,7 +560,7 @@ export default function WizardView({
         preferredEngines,
         styleReference,
         customDesign: styleRefResult?.customDesign ?? null,
-        autoGenerateVoiceover: !audioResult && (visualMode === "footage" || footageClips.length > 0),
+        autoGenerateVoiceover: !finalAudio,
         ttsEngine,
         ttsVoice,
         ttsTone: tone,
@@ -506,6 +570,7 @@ export default function WizardView({
       setAssembleError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsAssembling(false);
+      setAssembleStatus("");
     }
   }
 
@@ -1833,7 +1898,7 @@ export default function WizardView({
                     {isAssembling ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        AI Director Sedang Meracik Video...
+                        {assembleStatus || "AI Director Sedang Meracik Video..."}
                       </>
                     ) : (
                       <>

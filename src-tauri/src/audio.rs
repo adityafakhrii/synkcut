@@ -151,12 +151,20 @@ pub async fn probe_audio_duration_ms(app: &AppHandle, path: &str) -> Result<u64,
 }
 
 async fn synthesize_windows_offline_wav(text: &str, out_path: &PathBuf) -> Result<(), String> {
-    let safe_text = text.replace('\'', "''").replace('\r', " ").replace('\n', " ");
+    let safe_text = text
+        .replace('\'', "''")
+        .replace('\r', " ")
+        .replace('\n', ". ");
     let out_str = out_path.to_string_lossy().replace('\'', "''");
+    // Prefer an Indonesian voice if installed on Windows (e.g. Andika/Gadis/Ardi), else best available voice
     let script = format!(
         "Add-Type -AssemblyName System.Speech; \
          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+         $voices = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled }}; \
+         $idVoice = $voices | Where-Object {{ $_.VoiceInfo.Culture.Name -like 'id*' -or $_.VoiceInfo.Name -like '*Indones*' -or $_.VoiceInfo.Name -like '*Andika*' -or $_.VoiceInfo.Name -like '*Gadis*' -or $_.VoiceInfo.Name -like '*Ardi*' }} | Select-Object -First 1; \
+         if ($idVoice) {{ $s.SelectVoice($idVoice.VoiceInfo.Name) }}; \
          $s.Rate = 1; \
+         $s.Volume = 100; \
          $s.SetOutputToWaveFile('{out_str}'); \
          $s.Speak('{safe_text}'); \
          $s.Dispose();"

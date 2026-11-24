@@ -28,11 +28,60 @@ export type SceneRole = "hook" | "body" | "cta";
 export type SceneVisualSource = "footage" | "motion";
 
 export type AiMotionEngine =
+  | "custom_code"
   | "flow_diagram"
   | "motion_chart"
   | "tech_cards"
   | "stick_figure"
   | "breakdown_3d";
+
+export type MotionEmotionalIntent =
+  | "playful"
+  | "bold"
+  | "calm"
+  | "urgent"
+  | "luxury"
+  | "editorial";
+
+export interface CustomCodeMotionConfig {
+  /** Deterministic JS function body executed as `renderBeat(ctx, state, M)` */
+  code: string;
+  /** Concrete visual concept authored by the AI Storyboard Director for this beat */
+  visualConcept: string;
+  /** Emotional intent governing spring physics, stagger, and pacing */
+  emotionalIntent?: MotionEmotionalIntent;
+  /** Motion skill IDs applied to generate this beat */
+  skillsUsed?: string[];
+  /** Whether the code passed the 4-frame offscreen sandbox verifier */
+  verified?: boolean;
+  /** Optional diagnostic note from verification / auto-repair */
+  verificationNote?: string;
+}
+
+export interface StoryboardBeat {
+  id: string;
+  role: SceneRole;
+  startMs: number;
+  endMs: number;
+  text: string;
+  title: string;
+  visualConcept: string;
+  emotionalIntent: MotionEmotionalIntent;
+  skillsUsed: string[];
+  transitionIn: TransitionPreset;
+  sfx: string;
+}
+
+export interface MotionSkillInfo {
+  id: string;
+  name: string;
+  source: string;
+  category: string;
+  summary: string;
+  enabled: boolean;
+  builtIn: boolean;
+  content: string;
+}
 
 export type AiMotionTheme = "carbon" | "paper" | "coral" | "mint" | "blue";
 
@@ -188,6 +237,7 @@ export interface AiMotionSpec {
   title: string;
   subtitle?: string;
   takeaway?: string;
+  customCode?: CustomCodeMotionConfig;
   flow?: FlowDiagramConfig;
   chart?: MotionChartConfig;
   techCards?: TechCardsConfig;
@@ -256,6 +306,9 @@ export interface ProjectStyleReference {
   title?: string;
   thumbnails: string[];
   styleDnaSummary: string;
+  logoDataUrl?: string | null;
+  brandHeadings?: string[];
+  brandColors?: string[];
   customDesign?: CustomDesignDirection | null;
 }
 
@@ -319,7 +372,7 @@ export interface SceneItem {
 }
 
 export interface SynkcutProject {
-  version: "1.0" | "1.1";
+  version: "1.0" | "1.1" | "2.0";
   meta: {
     id: string;
     name: string;

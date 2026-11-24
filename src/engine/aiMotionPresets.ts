@@ -12,6 +12,11 @@ export const AI_MOTION_ENGINES: Array<{
   shortDesc: string;
 }> = [
   {
+    id: "custom_code",
+    label: "Bebas AI (Tanpa Template)",
+    shortDesc: "Kode animasi baru 100% kustom berbasis Motion Skills & Spring SDK",
+  },
+  {
     id: "flow_diagram",
     label: "Flow & Diagram",
     shortDesc: "Alur sistem, siklus, viral spread, & perbandingan",
@@ -66,6 +71,22 @@ export function createDefaultAiMotion(
     : "";
 
   switch (engine) {
+    case "custom_code":
+      return {
+        engine: "custom_code",
+        theme,
+        title: shortSeed || "Custom AI Motion",
+        subtitle: "",
+        customCode: {
+          code: "",
+          visualConcept: shortSeed
+            ? `Visual motion kustom tanpa template untuk: ${shortSeed}`
+            : "Visual motion kustom tanpa template",
+          emotionalIntent: "bold",
+          skillsUsed: ["motion-craft-physics", "kinetic-typography"],
+          verified: true,
+        },
+      };
     case "flow_diagram":
       return {
         engine: "flow_diagram",

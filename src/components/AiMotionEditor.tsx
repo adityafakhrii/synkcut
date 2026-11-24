@@ -210,6 +210,94 @@ export default function AiMotionEditor({ spec: rawSpec, sceneText, onChange }: A
         </div>
       </div>
 
+      {/* ========== ENGINE 0: FREEFORM CUSTOM CODE MOTION (ZERO TEMPLATE) ========== */}
+      {spec.engine === "custom_code" && (
+        <div className="space-y-2.5 border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold">Mode Bebas AI (Tanpa Template)</span>
+            {spec.customCode?.verified && (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+              >
+                {spec.customCode.verificationNote || "Lolos 4-Frame Check"}
+              </span>
+            )}
+          </div>
+
+          {spec.customCode?.skillsUsed && spec.customCode.skillsUsed.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {spec.customCode.skillsUsed.map((sk) => (
+                <span
+                  key={sk}
+                  className="rounded px-1.5 py-0.5 text-[10px]"
+                  style={{ backgroundColor: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+                >
+                  {sk}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+              Konsep Visual Beat Ini
+            </label>
+            <textarea
+              rows={2}
+              value={spec.customCode?.visualConcept ?? ""}
+              onChange={(e) =>
+                onChange(
+                  {
+                    ...spec,
+                    customCode: {
+                      code: spec.customCode?.code ?? "",
+                      visualConcept: e.target.value,
+                      emotionalIntent: spec.customCode?.emotionalIntent ?? "bold",
+                      skillsUsed: spec.customCode?.skillsUsed ?? ["motion-craft-physics"],
+                      verified: spec.customCode?.verified ?? false,
+                    },
+                  },
+                  false
+                )
+              }
+              className="ui-input w-full resize-none rounded p-2 text-xs leading-relaxed"
+            />
+          </div>
+
+          <details className="rounded-md p-2" style={{ backgroundColor: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+            <summary className="cursor-pointer text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+              Inspektor Kode Motion (JS · renderBeat)
+            </summary>
+            <textarea
+              rows={8}
+              value={spec.customCode?.code ?? ""}
+              onChange={(e) =>
+                onChange(
+                  {
+                    ...spec,
+                    customCode: {
+                      code: e.target.value,
+                      visualConcept: spec.customCode?.visualConcept ?? spec.title,
+                      emotionalIntent: spec.customCode?.emotionalIntent ?? "bold",
+                      skillsUsed: spec.customCode?.skillsUsed ?? ["motion-craft-physics"],
+                      verified: false,
+                    },
+                  },
+                  false
+                )
+              }
+              className="ui-input mt-2 w-full rounded p-2 font-mono-num text-[11px] leading-relaxed"
+              placeholder="// Kosong = Tipografi Kinetik Aman. Gunakan AI Director di kiri untuk generate kode animasi kustom!"
+            />
+          </details>
+
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Tip: Ketik instruksi revisi langsung di panel <strong>AI Director</strong> di sebelah kiri (mis. &ldquo;buat animasi es kopi 3 lapis dengan es batu jatuh&rdquo;) agar AI menulis ulang kode beat ini secara instan.
+          </p>
+        </div>
+      )}
+
       {/* ========== ENGINE 1: FLOW & DIAGRAM CONTROLS ========== */}
       {spec.engine === "flow_diagram" && (
         <div className="space-y-2.5 border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>
