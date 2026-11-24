@@ -210,6 +210,66 @@ export default function AiMotionEditor({ spec: rawSpec, sceneText, onChange }: A
         </div>
       </div>
 
+      {/* ========== ENGINE 0A: 3D DIORAMA & CHARACTER ENGINE (THREE.JS PBR) ========== */}
+      {spec.engine === "diorama_3d" && (
+        <div className="space-y-2.5 border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold">3D Diorama &amp; Karakter (By-Code)</span>
+            {spec.diorama3d?.verified && (
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+              >
+                {spec.diorama3d.verificationNote || "Lolos 4-Frame WebGL"}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 text-[10px]" style={{ color: "var(--text-secondary)" }}>
+            <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
+              World: {spec.diorama3d?.worldPreset || "ground_cutaway"}
+            </span>
+            <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
+              Three.js PBR · 0 Kredit Video AI
+            </span>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+              Konsep Visual Beat 3D Ini
+            </label>
+            <textarea
+              rows={2}
+              value={spec.diorama3d?.visualConcept ?? ""}
+              onChange={(e) =>
+                onChange(
+                  {
+                    ...spec,
+                    diorama3d: {
+                      ...spec.diorama3d,
+                      visualConcept: e.target.value,
+                      worldPreset: spec.diorama3d?.worldPreset || "ground_cutaway",
+                      skillsUsed: spec.diorama3d?.skillsUsed || ["3d-diorama-storytelling"],
+                    },
+                  },
+                  false
+                )
+              }
+              className="ui-input w-full resize-none rounded p-2 text-xs leading-relaxed"
+            />
+          </div>
+
+          {spec.diorama3d?.cameraNote && (
+            <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+              Arah Kamera: {spec.diorama3d.cameraNote}
+            </p>
+          )}
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Tips: Chat AI Director di kiri untuk ubah aksi karakter 3D, objek diorama, sudut kamera, atau gaya subtitle tengah.
+          </p>
+        </div>
+      )}
+
       {/* ========== ENGINE 0: FREEFORM CUSTOM CODE MOTION (ZERO TEMPLATE) ========== */}
       {spec.engine === "custom_code" && (
         <div className="space-y-2.5 border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>

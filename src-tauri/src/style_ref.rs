@@ -55,6 +55,32 @@ pub struct CustomDesignDirection {
     pub preferred_motion: String,
     pub preferred_transition: String,
     pub preferred_engines: Vec<String>,
+    #[serde(default = "default_render_medium")]
+    pub render_medium: String,
+    #[serde(default = "default_world_preset")]
+    pub world_preset: String,
+    #[serde(default = "default_caption_placement")]
+    pub caption_placement: String,
+    #[serde(default)]
+    pub hud_elements: Vec<String>,
+    #[serde(default = "default_recommended_bgm")]
+    pub recommended_bgm: String,
+}
+
+fn default_render_medium() -> String {
+    "2d_freeform".to_string()
+}
+
+fn default_world_preset() -> String {
+    "auto".to_string()
+}
+
+fn default_caption_placement() -> String {
+    "bottom_safe".to_string()
+}
+
+fn default_recommended_bgm() -> String {
+    "upbeat_promo".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -198,6 +224,8 @@ fn sanitize_caption(val: Option<&str>) -> String {
 
 fn sanitize_engines(arr: Option<&Vec<Value>>) -> Vec<String> {
     let valid = [
+        "diorama_3d",
+        "custom_code",
         "flow_diagram",
         "motion_chart",
         "tech_cards",
@@ -215,9 +243,130 @@ fn sanitize_engines(arr: Option<&Vec<Value>>) -> Vec<String> {
         })
         .unwrap_or_default();
     if out.is_empty() {
-        out = vec!["flow_diagram".to_string(), "tech_cards".to_string()];
+        out = vec!["custom_code".to_string()];
     }
     out
+}
+
+pub fn detect_3d_diorama_cues(lower: &str) -> bool {
+    let cues = [
+        "diorama",
+        "akutahu",
+        "aku tahu",
+        "kenapa yaaa",
+        "kenapa ya",
+        "how come",
+        "zack d",
+        "zackdfilms",
+        "blender",
+        "cutaway",
+        "karakter 3d",
+        "animasi 3d",
+        "3d explainer",
+        "3d character",
+        "3d storytelling",
+        "anjungan",
+        "laut",
+        "lubang tanah",
+        "stadion",
+        "bangunan",
+        "gedung",
+        "arsitek",
+        "bawah tanah",
+        "dasar laut",
+        "miniatur",
+        "3d model",
+        "3d shorts",
+    ];
+    cues.iter().any(|c| lower.contains(c))
+}
+
+pub fn infer_world_preset(lower: &str) -> &'static str {
+    if lower.contains("laut")
+        || lower.contains("samudra")
+        || lower.contains("ocean")
+        || lower.contains("kapal")
+        || lower.contains("anjungan")
+        || lower.contains("minyak")
+        || lower.contains("ikan")
+        || lower.contains("selam")
+        || lower.contains("sea")
+        || lower.contains("lele")
+        || lower.contains("kolam")
+    {
+        "ocean_cross_section"
+    } else if lower.contains("gurun")
+        || lower.contains("desert")
+        || lower.contains("pasir")
+        || lower.contains("tunisia")
+        || lower.contains("lubang")
+        || lower.contains("bawah tanah")
+        || lower.contains("underground")
+        || lower.contains("gua")
+    {
+        "desert_cutaway"
+    } else if lower.contains("kamar")
+        || lower.contains("ruang")
+        || lower.contains("kantor")
+        || lower.contains("kafe")
+        || lower.contains("kopi")
+        || lower.contains("dapur")
+        || lower.contains("rumah")
+        || lower.contains("stadion")
+        || lower.contains("room")
+        || lower.contains("studio")
+        || lower.contains("pabrik")
+    {
+        "room_cutaway"
+    } else if lower.contains("ternak")
+        || lower.contains("kebun")
+        || lower.contains("sawah")
+        || lower.contains("desa")
+        || lower.contains("farm")
+        || lower.contains("taman")
+        || lower.contains("hutan")
+    {
+        "outdoor_farm"
+    } else {
+        "ground_cutaway"
+    }
+}
+
+fn sanitize_render_medium(val: Option<&str>, fallback: &str) -> String {
+    match val.unwrap_or(fallback) {
+        valid @ ("3d_diorama" | "2d_freeform" | "footage_montage") => valid.to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn sanitize_world_preset(val: Option<&str>, fallback: &str) -> String {
+    match val.unwrap_or(fallback) {
+        valid
+        @ ("ocean_cross_section"
+        | "ground_cutaway"
+        | "desert_cutaway"
+        | "room_cutaway"
+        | "outdoor_farm"
+        | "studio_stage"
+        | "auto") => valid.to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn sanitize_caption_placement(val: Option<&str>, fallback: &str) -> String {
+    match val.unwrap_or(fallback) {
+        valid @ ("center_middle" | "bottom_safe") => valid.to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
+fn sanitize_recommended_bgm(val: Option<&str>, fallback: &str) -> String {
+    match val.unwrap_or(fallback) {
+        valid @ ("upbeat_promo" | "lofi_chill" | "cinematic_pulse" | "minimal_tech" | "none") => {
+            valid.to_string()
+        }
+        _ => fallback.to_string(),
+    }
 }
 
 fn build_fallback_custom_design(
@@ -318,7 +467,84 @@ fn build_fallback_custom_design(
             pacing: "balanced".to_string(),
             preferred_motion: "zoom_punch".to_string(),
             preferred_transition: "pop_zoom".to_string(),
-            preferred_engines: vec!["flow_diagram".to_string(), "tech_cards".to_string(), "motion_chart".to_string()],
+            preferred_engines: if detect_3d_diorama_cues(&lower) {
+                vec!["diorama_3d".to_string()]
+            } else {
+                vec!["custom_code".to_string()]
+            },
+            render_medium: if detect_3d_diorama_cues(&lower) {
+                "3d_diorama".to_string()
+            } else {
+                "2d_freeform".to_string()
+            },
+            world_preset: infer_world_preset(&lower).to_string(),
+            caption_placement: if detect_3d_diorama_cues(&lower) {
+                "center_middle".to_string()
+            } else {
+                "bottom_safe".to_string()
+            },
+            hud_elements: if detect_3d_diorama_cues(&lower) {
+                vec!["popup_title".to_string(), "badge_3d".to_string()]
+            } else {
+                Vec::new()
+            },
+            recommended_bgm: if is_light {
+                "lofi_chill".to_string()
+            } else {
+                "upbeat_promo".to_string()
+            },
+        };
+    }
+
+    // 3D Explainer / Diorama Shorts style (AkuTahu, Kenapa Yaaa?, How Come?, Zack D. Films)
+    if detect_3d_diorama_cues(&lower) {
+        let wp = infer_world_preset(&lower);
+        let is_ocean = wp == "ocean_cross_section";
+        return CustomDesignDirection {
+            name: "3D Explainer Diorama".to_string(),
+            summary: "Gaya edukasi 3D diorama ala Shorts viral dengan pencahayaan siang lembut, potongan cutaway, kamera 3D mulus, dan subtitle tengah yang tegas.".to_string(),
+            art_direction_notes: "Bangun dunia 3D PBR siang hari dengan karakter 3D berpose ekspresif, kamera dolly sinematik antar beat, badge penunjuk 3D, dan caption di tengah layar.".to_string(),
+            is_light: true,
+            palette: DesignPalette {
+                bg_top: if is_ocean { "#7EC8E3".to_string() } else { "#9AD4F5".to_string() },
+                bg_bottom: if is_ocean { "#166996".to_string() } else { "#E6D5B8".to_string() },
+                surface_bg: "rgba(12, 16, 24, 0.88)".to_string(),
+                surface_border: "rgba(255, 255, 255, 0.22)".to_string(),
+                text_primary: "#FFFFFF".to_string(),
+                text_secondary: "#E2E8F0".to_string(),
+                accent_primary: "#FACC15".to_string(),
+                accent_secondary: "#38BDF8".to_string(),
+                accent_ink: "#111827".to_string(),
+            },
+            typography: DesignTypography {
+                heading_font: "sans".to_string(),
+                body_font: "sans".to_string(),
+                caption_font: "sans".to_string(),
+                caption_uppercase: false,
+            },
+            visual_style: DesignVisualStyle {
+                background_pattern: "minimal".to_string(),
+                card_style: "solid".to_string(),
+                corner_style: "rounded".to_string(),
+                caption_look: if is_ocean {
+                    "black_pill".to_string()
+                } else {
+                    "outline_bold".to_string()
+                },
+            },
+            pacing: "snappy".to_string(),
+            preferred_motion: "static_clean".to_string(),
+            preferred_transition: "smooth_crossfade".to_string(),
+            preferred_engines: vec!["diorama_3d".to_string()],
+            render_medium: "3d_diorama".to_string(),
+            world_preset: wp.to_string(),
+            caption_placement: "center_middle".to_string(),
+            hud_elements: if is_ocean {
+                vec!["depth_ruler".to_string(), "question_badge".to_string(), "popup_title".to_string()]
+            } else {
+                vec!["popup_title".to_string(), "badge_3d".to_string()]
+            },
+            recommended_bgm: "cinematic_pulse".to_string(),
         };
     }
 
@@ -355,7 +581,12 @@ fn build_fallback_custom_design(
             pacing: "snappy".to_string(),
             preferred_motion: "shake_impact".to_string(),
             preferred_transition: "whip_pan".to_string(),
-            preferred_engines: vec!["tech_cards".to_string(), "motion_chart".to_string(), "flow_diagram".to_string()],
+            preferred_engines: vec!["custom_code".to_string()],
+            render_medium: "2d_freeform".to_string(),
+            world_preset: "auto".to_string(),
+            caption_placement: "bottom_safe".to_string(),
+            hud_elements: Vec::new(),
+            recommended_bgm: "upbeat_promo".to_string(),
         }
     } else if lower.contains("luxury") || lower.contains("editorial") || lower.contains("mewah") || lower.contains("vogue") || lower.contains("elegan") || lower.contains("serif") {
         CustomDesignDirection {
@@ -389,7 +620,12 @@ fn build_fallback_custom_design(
             pacing: "cinematic".to_string(),
             preferred_motion: "smooth_ken_burns".to_string(),
             preferred_transition: "smooth_crossfade".to_string(),
-            preferred_engines: vec!["tech_cards".to_string(), "flow_diagram".to_string(), "breakdown_3d".to_string()],
+            preferred_engines: vec!["custom_code".to_string()],
+            render_medium: "2d_freeform".to_string(),
+            world_preset: "auto".to_string(),
+            caption_placement: "bottom_safe".to_string(),
+            hud_elements: Vec::new(),
+            recommended_bgm: "cinematic_pulse".to_string(),
         }
     } else if lower.contains("pastel") || lower.contains("korea") || lower.contains("estetik") || lower.contains("aesthetic") || lower.contains("minimalis") || lower.contains("apple") || lower.contains("clean") || lower.contains("terang") {
         CustomDesignDirection {
@@ -423,7 +659,12 @@ fn build_fallback_custom_design(
             pacing: "balanced".to_string(),
             preferred_motion: "smooth_ken_burns".to_string(),
             preferred_transition: "smooth_crossfade".to_string(),
-            preferred_engines: vec!["flow_diagram".to_string(), "motion_chart".to_string(), "stick_figure".to_string()],
+            preferred_engines: vec!["custom_code".to_string()],
+            render_medium: "2d_freeform".to_string(),
+            world_preset: "auto".to_string(),
+            caption_placement: "bottom_safe".to_string(),
+            hud_elements: Vec::new(),
+            recommended_bgm: "lofi_chill".to_string(),
         }
     } else if lower.contains("cyber") || lower.contains("neon") || lower.contains("gaming") || lower.contains("3d") || lower.contains("iphone") || lower.contains("tech") || lower.contains("ai") {
         CustomDesignDirection {
@@ -457,7 +698,12 @@ fn build_fallback_custom_design(
             pacing: "snappy".to_string(),
             preferred_motion: "zoom_punch".to_string(),
             preferred_transition: "glitch_flash".to_string(),
-            preferred_engines: vec!["breakdown_3d".to_string(), "motion_chart".to_string(), "tech_cards".to_string()],
+            preferred_engines: vec!["custom_code".to_string()],
+            render_medium: "2d_freeform".to_string(),
+            world_preset: "auto".to_string(),
+            caption_placement: "bottom_safe".to_string(),
+            hud_elements: Vec::new(),
+            recommended_bgm: "minimal_tech".to_string(),
         }
     } else {
         CustomDesignDirection {
@@ -491,7 +737,12 @@ fn build_fallback_custom_design(
             pacing: "balanced".to_string(),
             preferred_motion: "zoom_punch".to_string(),
             preferred_transition: "pop_zoom".to_string(),
-            preferred_engines: vec!["flow_diagram".to_string(), "tech_cards".to_string(), "motion_chart".to_string()],
+            preferred_engines: vec!["custom_code".to_string()],
+            render_medium: "2d_freeform".to_string(),
+            world_preset: "auto".to_string(),
+            caption_placement: "bottom_safe".to_string(),
+            hud_elements: Vec::new(),
+            recommended_bgm: "upbeat_promo".to_string(),
         }
     }
 }
@@ -608,11 +859,15 @@ pub fn sanitize_custom_design_value(
     };
 
     let caption_look = match vis.and_then(|v| v["captionLook"].as_str()).unwrap_or(&fb.visual_style.caption_look) {
-        "bold_outline" | "custom_pill" | "editorial_bar" | "glass_tag" | "minimal_clean" => {
-            vis.and_then(|v| v["captionLook"].as_str())
-                .unwrap_or(&fb.visual_style.caption_look)
-                .to_string()
-        }
+        valid
+        @ ("bold_outline"
+        | "black_pill"
+        | "outline_bold"
+        | "clean_shadow"
+        | "custom_pill"
+        | "editorial_bar"
+        | "glass_tag"
+        | "minimal_clean") => valid.to_string(),
         _ => fb.visual_style.caption_look.clone(),
     };
 
@@ -660,6 +915,46 @@ pub fn sanitize_custom_design_value(
             .or_else(|| val["suggestedEngines"].as_array()),
     );
 
+    let render_medium = sanitize_render_medium(
+        cd["renderMedium"]
+            .as_str()
+            .or_else(|| val["renderMedium"].as_str()),
+        &fb.render_medium,
+    );
+    let world_preset = sanitize_world_preset(
+        cd["worldPreset"]
+            .as_str()
+            .or_else(|| val["worldPreset"].as_str()),
+        &fb.world_preset,
+    );
+    let caption_placement = sanitize_caption_placement(
+        cd["captionPlacement"]
+            .as_str()
+            .or_else(|| val["captionPlacement"].as_str()),
+        if render_medium == "3d_diorama" {
+            "center_middle"
+        } else {
+            &fb.caption_placement
+        },
+    );
+    let hud_elements: Vec<String> = cd["hudElements"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .take(6)
+                .collect()
+        })
+        .unwrap_or_else(|| fb.hud_elements.clone());
+    let recommended_bgm = sanitize_recommended_bgm(
+        cd["recommendedBgm"]
+            .as_str()
+            .or_else(|| val["recommendedBgm"].as_str()),
+        &fb.recommended_bgm,
+    );
+
     let _ = is_light; // luminance check is authoritative for readability
 
     CustomDesignDirection {
@@ -696,6 +991,11 @@ pub fn sanitize_custom_design_value(
         preferred_motion,
         preferred_transition,
         preferred_engines,
+        render_medium,
+        world_preset,
+        caption_placement,
+        hud_elements,
+        recommended_bgm,
     }
 }
 
@@ -1310,8 +1610,11 @@ async fn fetch_webpage_design_context(url: &str) -> WebpageBrandContext {
 
 fn design_system_prompt() -> &'static str {
     "Kamu adalah Art Director & Motion Systems Designer kelas dunia untuk Synkcut. \
-    Tugasmu menghasilkan ARAHAN DESAIN CUSTOM (Custom Design System) yang UNIK sesuai referensi gambar, URL, atau brief user — BUKAN mengikuti template kaku! \
-    Ekstrak warna asli (kode hex akurat #RRGGBB), mood terang/gelap, karakter pola latar, bentuk kartu, sudut, tipografi, gaya subtitle, serta pacing yang paling otentik terhadap referensi. \
+    Tugasmu menghasilkan ARAHAN DESAIN CUSTOM (Custom Design System) yang UNIK dan AKURAT meniru medium + gaya referensi gambar, YouTube Shorts, URL, atau brief user — BUKAN mengikuti template kaku! \
+    DETEKSI MEDIUM VISUAL DENGAN TELITI: \
+    - Jika gambar referensi menampilkan animasi 3D diorama, cutaway laut/tanah/ruangan, karakter 3D bergaya Blender/Clay/Zack D. Films/AkuTahu/Kenapa Yaaa?/How Come?, SET `renderMedium: \"3d_diorama\"`, pilih `worldPreset` yang cocok, dan set `captionPlacement: \"center_middle\"` bila subtitle berada di tengah layar! \
+    - Jika referensi menampilkan desain grafis 2D, website UI, tipografi kinetik, poster, atau ilustrasi datar, SET `renderMedium: \"2d_freeform\"`. \
+    - Deteksi gaya subtitle asli referensi secara tepat: \"black_pill\" (kotak hitam bundar teks putih ala AkuTahu), \"outline_bold\" (teks putih tebal + garis tepi hitam + kata sorotan kuning ala Kenapa Yaaa?), \"clean_shadow\" (teks putih bersih bershadow halus ala How Come?), atau gaya lain. \
     Pastikan textPrimary kontras jelas terhadap bgTop/bgBottom agar selalu mudah dibaca. \
     Balas HANYA dalam JSON valid tanpa teks luar."
 }
@@ -1330,15 +1633,20 @@ fn design_user_prompt(context_desc: &str, sampled_colors: &[String], img_count: 
         "Konteks referensi desain:\n{context_desc}\nJumlah gambar referensi terlampir: {img_count}.{color_hint}\n\n\
         Buat Arahan Desain Custom dalam JSON persis seperti ini:\n\
         {{\n\
-          \"styleDnaSummary\": \"Ringkasan 1-2 kalimat Bahasa Indonesia tentang karakter visual, palet warna, tipografi, dan pacing desain custom ini\",\n\
+          \"styleDnaSummary\": \"Ringkasan 1-2 kalimat Bahasa Indonesia tentang medium visual (3D Diorama atau 2D Motion), palet warna, gaya karakter/objek, gaya subtitle, dan pacing desain ini\",\n\
           \"suggestedTheme\": \"carbon|paper|coral|mint|blue\",\n\
           \"suggestedCaption\": \"bold_pop|clean_minimal|kinetic_punch|luxury_editorial|neon_tech\",\n\
           \"suggestedAccent\": \"#HEX warna aksen utama\",\n\
-          \"suggestedEngines\": [\"flow_diagram\", \"motion_chart\", \"tech_cards\", \"stick_figure\", \"breakdown_3d\"],\n\
+          \"suggestedEngines\": [\"diorama_3d\", \"custom_code\"],\n\
           \"customDesign\": {{\n\
-            \"name\": \"Nama gaya desain custom 2-4 kata (mis. Brutalist Warm Zine / Neon Glass Tech / Editorial Espresso)\",\n\
+            \"name\": \"Nama gaya desain custom 2-4 kata (mis. 3D Ocean Diorama / 3D Story Character / Neo-Brutalist Zine)\",\n\
             \"summary\": \"Penjelasan singkat karakter desain custom ini\",\n\
-            \"artDirectionNotes\": \"Instruksi konkret untuk AI Director (komposisi, suasana, kontras, ritme cut)\",\n\
+            \"artDirectionNotes\": \"Instruksi konkret untuk AI Director (medium 3D/2D, sudut kamera, pencahayaan, HUD/badge, gaya subtitle, ritme cut)\",\n\
+            \"renderMedium\": \"3d_diorama|2d_freeform|footage_montage\",\n\
+            \"worldPreset\": \"ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage|auto\",\n\
+            \"captionPlacement\": \"center_middle|bottom_safe\",\n\
+            \"hudElements\": [\"depth_ruler\", \"question_badge\", \"popup_title\"],\n\
+            \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech|none\",\n\
             \"isLight\": false,\n\
             \"palette\": {{\n\
               \"bgTop\": \"#HEX\",\n\
@@ -1355,18 +1663,18 @@ fn design_user_prompt(context_desc: &str, sampled_colors: &[String], img_count: 
               \"headingFont\": \"sans|serif|mono|display\",\n\
               \"bodyFont\": \"sans|serif|mono\",\n\
               \"captionFont\": \"sans|serif|mono|display\",\n\
-              \"captionUppercase\": true\n\
+              \"captionUppercase\": false\n\
             }},\n\
             \"visualStyle\": {{\n\
               \"backgroundPattern\": \"grid|dots|diagonal|aurora|paper_grain|minimal\",\n\
               \"cardStyle\": \"glass|solid|brutalist|hairline|neon\",\n\
               \"cornerStyle\": \"sharp|rounded|pill\",\n\
-              \"captionLook\": \"bold_outline|custom_pill|editorial_bar|glass_tag|minimal_clean\"\n\
+              \"captionLook\": \"black_pill|outline_bold|clean_shadow|bold_outline|custom_pill|editorial_bar|glass_tag|minimal_clean\"\n\
             }},\n\
             \"pacing\": \"snappy|balanced|cinematic\",\n\
             \"preferredMotion\": \"zoom_punch|smooth_ken_burns|shake_impact|slide_reveal|static_clean\",\n\
             \"preferredTransition\": \"hard_cut|whip_pan|pop_zoom|glitch_flash|smooth_crossfade\",\n\
-            \"preferredEngines\": [\"flow_diagram\", \"tech_cards\", \"motion_chart\"]\n\
+            \"preferredEngines\": [\"diorama_3d\", \"custom_code\"]\n\
           }}\n\
         }}"
     )
@@ -1571,50 +1879,94 @@ async fn try_yt_dlp_frame_sampler(app: &AppHandle, canonical_url: &str) -> Optio
     }
 }
 
-async fn fetch_youtube_oembed_and_thumb(
+async fn fetch_yt_image_data_url(client: &reqwest::Client, url: &str) -> Option<String> {
+    let res = client.get(url).send().await.ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let bytes = res.bytes().await.ok()?;
+    // Skip tiny placeholder/error stubs (< 1.5KB)
+    if bytes.len() < 1500 {
+        return None;
+    }
+    Some(format!("data:image/jpeg;base64,{}", BASE64.encode(bytes)))
+}
+
+async fn fetch_youtube_oembed_and_frames(
     canonical_url: &str,
     video_id: &str,
-) -> (String, Option<String>) {
+) -> (String, String, Vec<String>) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
     {
         Ok(c) => c,
-        Err(_) => return (format!("YouTube ({video_id})"), None),
+        Err(_) => return (format!("YouTube ({video_id})"), String::new(), Vec::new()),
     };
 
     let encoded_url = percent_encode_url_component(canonical_url);
     let oembed_url = format!("https://www.youtube.com/oembed?url={encoded_url}&format=json");
-    let mut title = format!("YouTube ({video_id})");
-    if let Ok(res) = client.get(&oembed_url).send().await {
-        if res.status().is_success() {
-            if let Ok(val) = crate::ai::decode_llm_http_body(res).await {
-                if let Some(t) = val["title"].as_str().filter(|s| !s.trim().is_empty()) {
-                    title = t.trim().to_string();
-                }
-            }
-        }
-    }
 
-    let mut thumb_data_url: Option<String> = None;
-    for thumb_url in [
-        format!("https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"),
-        format!("https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"),
-    ] {
-        if let Ok(res) = client.get(&thumb_url).send().await {
+    // Fetch oEmbed + 4 distinct moments of the YouTube/Shorts video concurrently via tokio::spawn (zero yt-dlp required!)
+    let c0 = client.clone();
+    let oembed_handle = tokio::spawn(async move {
+        let mut title = format!("YouTube ({})", oembed_url.len());
+        let mut author = String::new();
+        if let Ok(res) = c0.get(&oembed_url).send().await {
             if res.status().is_success() {
-                if let Ok(bytes) = res.bytes().await {
-                    if !bytes.is_empty() {
-                        thumb_data_url =
-                            Some(format!("data:image/jpeg;base64,{}", BASE64.encode(bytes)));
-                        break;
+                if let Ok(val) = crate::ai::decode_llm_http_body(res).await {
+                    if let Some(t) = val["title"].as_str().filter(|s| !s.trim().is_empty()) {
+                        title = t.trim().to_string();
+                    }
+                    if let Some(a) = val["author_name"].as_str().filter(|s| !s.trim().is_empty()) {
+                        author = a.trim().to_string();
                     }
                 }
             }
         }
+        (title, author)
+    });
+
+    let c1 = client.clone();
+    let vid_cover = video_id.to_string();
+    let cover_handle = tokio::spawn(async move {
+        let primary = format!("https://i.ytimg.com/vi/{vid_cover}/maxresdefault.jpg");
+        if let Some(img) = fetch_yt_image_data_url(&c1, &primary).await {
+            return Some(img);
+        }
+        let fallback = format!("https://i.ytimg.com/vi/{vid_cover}/hqdefault.jpg");
+        fetch_yt_image_data_url(&c1, &fallback).await
+    });
+
+    let c2 = client.clone();
+    let u1 = format!("https://i.ytimg.com/vi/{video_id}/1.jpg");
+    let f1_handle = tokio::spawn(async move { fetch_yt_image_data_url(&c2, &u1).await });
+
+    let c3 = client.clone();
+    let u2 = format!("https://i.ytimg.com/vi/{video_id}/2.jpg");
+    let f2_handle = tokio::spawn(async move { fetch_yt_image_data_url(&c3, &u2).await });
+
+    let c4 = client.clone();
+    let u3 = format!("https://i.ytimg.com/vi/{video_id}/3.jpg");
+    let f3_handle = tokio::spawn(async move { fetch_yt_image_data_url(&c4, &u3).await });
+
+    let (mut title, author) = oembed_handle
+        .await
+        .unwrap_or_else(|_| (format!("YouTube ({video_id})"), String::new()));
+    if title.starts_with("YouTube (") && !title.contains(video_id) {
+        title = format!("YouTube ({video_id})");
+    }
+    let cover = cover_handle.await.ok().flatten();
+    let f1 = f1_handle.await.ok().flatten();
+    let f2 = f2_handle.await.ok().flatten();
+    let f3 = f3_handle.await.ok().flatten();
+
+    let mut frames = Vec::new();
+    for item in [cover, f1, f2, f3].into_iter().flatten() {
+        frames.push(item);
     }
 
-    (title, thumb_data_url)
+    (title, author, frames)
 }
 
 fn build_style_result(
@@ -1719,11 +2071,19 @@ pub async fn analyze_design_reference(
         }
         let normalized = normalize_url_input(raw_url);
 
-        // 2A. YouTube / Shorts path
+        // 2A. YouTube / Shorts path (instant 4-frame visual extraction!)
         if let Some(video_id) = extract_youtube_video_id(&normalized) {
             let canonical_url = format!("https://www.youtube.com/watch?v={video_id}");
-            let (title, oembed_thumb) = fetch_youtube_oembed_and_thumb(&canonical_url, &video_id).await;
-            let ctx_desc = format!("Video YouTube: \"{title}\". Catatan user: {notes}");
+            let (title, author, yt_frames) =
+                fetch_youtube_oembed_and_frames(&canonical_url, &video_id).await;
+            let author_note = if author.is_empty() {
+                String::new()
+            } else {
+                format!(" oleh channel \"{author}\"")
+            };
+            let ctx_desc = format!(
+                "Video YouTube Shorts/Referensi: \"{title}\"{author_note}. URL: {normalized}. Catatan user: {notes}"
+            );
 
             if let Some(frames) = try_yt_dlp_frame_sampler(&app, &canonical_url).await {
                 let ai_dna = analyze_with_byok(&app, &ctx_desc, &frames, &req.sampled_colors).await;
@@ -1739,14 +2099,36 @@ pub async fn analyze_design_reference(
                 ));
             }
 
-            let fallback_thumbs: Vec<String> = oembed_thumb.into_iter().collect();
+            if !yt_frames.is_empty() {
+                let ai_dna =
+                    analyze_with_byok(&app, &ctx_desc, &yt_frames, &req.sampled_colors).await;
+                let layer = if ai_dna.is_some() {
+                    if yt_frames.len() >= 2 {
+                        "yt_4frames"
+                    } else {
+                        "oembed_thumbnail"
+                    }
+                } else {
+                    "local_fallback"
+                };
+                return Ok(build_style_result(
+                    "youtube",
+                    Some(canonical_url),
+                    title,
+                    yt_frames,
+                    ai_dna,
+                    layer,
+                    &ctx_desc,
+                    &req.sampled_colors,
+                ));
+            }
 
             if let Some(ai_dna) = analyze_youtube_via_gemini_direct(&app, &canonical_url, &title).await {
                 return Ok(build_style_result(
                     "youtube",
                     Some(canonical_url),
                     title,
-                    fallback_thumbs,
+                    yt_frames,
                     Some(ai_dna),
                     "gemini_direct",
                     &ctx_desc,
@@ -1754,12 +2136,12 @@ pub async fn analyze_design_reference(
                 ));
             }
 
-            let ai_dna = analyze_with_byok(&app, &ctx_desc, &fallback_thumbs, &req.sampled_colors).await;
+            let ai_dna = analyze_with_byok(&app, &ctx_desc, &yt_frames, &req.sampled_colors).await;
             return Ok(build_style_result(
                 "youtube",
                 Some(canonical_url),
                 title,
-                fallback_thumbs,
+                yt_frames,
                 ai_dna,
                 "oembed_thumbnail",
                 &ctx_desc,
@@ -2041,5 +2423,34 @@ mod tests {
         let headings = extract_html_headings(html);
         assert_eq!(headings[0], "Belajar Coding Anak Seru");
         assert_eq!(headings[1], "Mulai dari Scratch hingga Game Sendiri");
+    }
+
+    #[test]
+    fn test_3d_diorama_detection_and_viral_shorts_caption_sanitization() {
+        assert!(detect_3d_diorama_cues("anjungan minyak laut ternyata ngapung @akutahu_id"));
+        assert_eq!(infer_world_preset("anjungan minyak di tengah laut"), "ocean_cross_section");
+        assert_eq!(infer_world_preset("rumah di dalam lubang tanah gurun"), "desert_cutaway");
+        assert_eq!(infer_world_preset("arsitek membangun atap stadion gbk"), "room_cutaway");
+
+        let val = json!({
+            "customDesign": {
+                "name": "3D Ocean Explainer",
+                "renderMedium": "3d_diorama",
+                "worldPreset": "ocean_cross_section",
+                "captionPlacement": "center_middle",
+                "recommendedBgm": "cinematic_pulse",
+                "hudElements": ["depth_ruler", "question_badge"],
+                "visualStyle": {
+                    "captionLook": "black_pill"
+                }
+            }
+        });
+        let sanitized = sanitize_custom_design_value(&val, "Anjungan minyak laut", &[]);
+        assert_eq!(sanitized.render_medium, "3d_diorama");
+        assert_eq!(sanitized.world_preset, "ocean_cross_section");
+        assert_eq!(sanitized.caption_placement, "center_middle");
+        assert_eq!(sanitized.visual_style.caption_look, "black_pill");
+        assert_eq!(sanitized.recommended_bgm, "cinematic_pulse");
+        assert_eq!(sanitized.hud_elements, vec!["depth_ruler", "question_badge"]);
     }
 }

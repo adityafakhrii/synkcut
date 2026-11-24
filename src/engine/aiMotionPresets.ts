@@ -12,9 +12,14 @@ export const AI_MOTION_ENGINES: Array<{
   shortDesc: string;
 }> = [
   {
+    id: "diorama_3d",
+    label: "3D Diorama & Karakter (By-Code)",
+    shortDesc: "Dunia 3D cutaway PBR siang hari + karakter berpose + kamera 3D kontinu",
+  },
+  {
     id: "custom_code",
-    label: "Bebas AI (Tanpa Template)",
-    shortDesc: "Kode animasi baru 100% kustom berbasis Motion Skills & Spring SDK",
+    label: "2D Motion Bebas AI (Tanpa Template)",
+    shortDesc: "Kode animasi 2D baru 100% kustom berbasis Motion Skills & Spring SDK",
   },
   {
     id: "flow_diagram",
@@ -71,6 +76,21 @@ export function createDefaultAiMotion(
     : "";
 
   switch (engine) {
+    case "diorama_3d":
+      return {
+        engine: "diorama_3d",
+        theme: "paper",
+        title: shortSeed || "3D Diorama",
+        subtitle: "",
+        diorama3d: {
+          visualConcept: shortSeed
+            ? `Dunia 3D Diorama & karakter untuk: ${shortSeed}`
+            : "Dunia 3D Diorama & karakter ekspresif",
+          worldPreset: "ground_cutaway",
+          skillsUsed: ["3d-diorama-storytelling"],
+          verified: true,
+        },
+      };
     case "custom_code":
       return {
         engine: "custom_code",

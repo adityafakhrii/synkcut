@@ -117,6 +117,20 @@ const BUILTIN_SKILLS: &[BuiltinSkillDef] = &[
 - Impact moments: tiny 120ms camera recoil shake (`shake: 6 * u * decay`) synchronized with slam/stamp events.
 - Exit (last 0.18s): subtle scale/drift momentum carrying energy cleanly into the next beat."#,
     },
+    BuiltinSkillDef {
+        id: "3d-diorama-storytelling",
+        name: "3D Diorama & Character Storytelling",
+        source: "Synkcut 3D Engine (Zack D. / AkuTahu / Kenapa Yaaa? style)",
+        category: "3D Diorama & Karakter",
+        summary: "Dunia 3D cutaway PBR siang hari, karakter 3D berpose ekspresif, kamera 3D kontinu antar beat, dan HUD terikat koordinat 3D.",
+        content: r#"# Skill: 3D Diorama & Character Storytelling (100% By-Code Three.js PBR)
+- Build ONE cohesive 3D miniature world in `setupWorld(world, D3)` with bright Blender-style daylight (`D3.setupDaylight` + `D3.addClouds`), soft shadows, and tactile clay/matte PBR surfaces (`roughness: 0.65-0.88`).
+- Choose the matching cutaway world builder (`D3.buildOceanCutaway`, `D3.buildGroundCutaway`, `D3.buildRoomCutaway`, or `D3.buildStudioStage`) so the environment visually explains the topic immediately — NEVER leave an empty dark void.
+- Populate with bespoke 3D props built from `D3.box`, `D3.roundedBox`, `D3.cylinder`, `D3.sphere`, `D3.cone`, `D3.torus`, `D3.tube`, `D3.lathe`, `D3.truss`, `D3.tree`, `D3.table`, `D3.particles3D` AND stylized articulated 3D humans via `D3.createCharacter(...)`.
+- Drive expressive acting in `animateFrame(world, state, D3)` with `D3.poseCharacter(char, { action, phase, headTurn })` synced to `state.beatIndex` and `state.beatProgress` (`idle`, `point`, `wave`, `handshake`, `walk`, `think`, `surprised`, `sit`, `sleep`, `talk`).
+- Choreograph CONTINUOUS 3D camera movement across beats using `D3.lerpCamera(world, keyframes, state.globalProgress)`: wide establishing -> dramatic dive/push-in -> side cutaway reveal -> character close-up -> grand pullback finale!
+- Layer crisp 3D-tracked HUD graphics (`D3.drawRuler`, `D3.drawBadgeAt3D`, `D3.drawPopupTitle`, `D3.drawCalloutAt3D`) while keeping the vertical center-middle zone (y = 0.54..0.64) clear for viral Shorts captions."#,
+    },
 ];
 
 fn skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -485,5 +499,14 @@ mod tests {
     #[test]
     fn test_sanitize_skill_id() {
         assert_eq!(sanitize_skill_id("LottieFiles Motion Craft!"), "lottiefiles-motion-craft");
+    }
+
+    #[test]
+    fn test_builtin_skills_include_3d_diorama_storytelling() {
+        assert!(
+            BUILTIN_SKILLS.iter().any(|s| s.id == "3d-diorama-storytelling"),
+            "3d-diorama-storytelling skill must be bundled offline"
+        );
+        assert_eq!(BUILTIN_SKILLS.len(), 7);
     }
 }

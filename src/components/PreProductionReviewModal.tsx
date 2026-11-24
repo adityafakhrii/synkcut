@@ -21,12 +21,14 @@ import type {
 } from "../types/scene";
 import {
   aiAssembleProject,
+  aiGenerate3dDiorama,
   aiGenerateBeatCodes,
   aiPlanStoryboard,
   generateTtsAudio,
   isTauriRuntime,
   pickLocalAudio,
   processUserAudio,
+  resolveAutoRenderMedium,
   toAssetUrl,
   type FootageInputItem,
   type HookOption,
@@ -97,9 +99,16 @@ export default function PreProductionReviewModal({
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
 
-  // Storyboard Micro-Beats State
+  // Storyboard Micro-Beats & Visual Medium Auto-Director State
   const [beats, setBeats] = useState<StoryboardBeat[]>(draft.beats);
   const [isPlanningBeats, setIsPlanningBeats] = useState(false);
+  const [mediumChoice, setMediumChoice] = useState<"auto" | "3d_diorama" | "2d_freeform">("auto");
+
+  const resolvedMedium = resolveAutoRenderMedium({
+    preference: mediumChoice,
+    styleRef: draft.styleRef,
+    topicOrScript: `${projectTitle} ${fullScript}`,
+  });
 
   // Final Video Generation State
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
@@ -313,7 +322,7 @@ export default function PreProductionReviewModal({
         return;
       }
 
-      // 2B. AI Motion / Hybrid Freeform Mode (ZERO Sample Assets, 100% Fresh Code per Beat!)
+      // 2B. AI 3D Diorama (100% By-Code Three.js PBR) OR 2D Freeform Motion!
       let activeBeats = beats;
       if (activeBeats.length === 0) {
         setProgressText("Merancang micro-beat storyboard (2.5–4.5 detik per beat)...");
@@ -330,27 +339,52 @@ export default function PreProductionReviewModal({
         setBeats(activeBeats);
       }
 
-      setProgressText(
-        `Menulis kode motion baru dari nol untuk ${activeBeats.length} beat secara paralel (tanpa template)...`
-      );
-      const rawProject = await aiGenerateBeatCodes({
-        projectTitle: projectTitle.trim() || "Video AI Motion",
-        format: draft.format,
-        beats: activeBeats,
-        words: activeAudio.words,
-        customDesign,
-        styleReference,
-        audioPath: activeAudio.audioPath || null,
-        audioSource: activeAudio.audioPath ? "tts" : "demo",
-        trimSilence: true,
-        captionPreset,
-        accentColor,
-        bgmPreset,
-        autoDucking: true,
-        autoSfx: true,
-        footage: draft.visualMode === "hybrid" ? draft.attachedClips : [],
-        visualMode: draft.visualMode,
-      });
+      const targetBgm = customDesign?.recommendedBgm || bgmPreset;
+
+      let rawProject: SynkcutProject;
+      if (resolvedMedium === "3d_diorama" && draft.visualMode !== "hybrid") {
+        setProgressText(
+          `Membangun dunia 3D Diorama & karakter (by-code Three.js) untuk ${activeBeats.length} beat...`
+        );
+        rawProject = await aiGenerate3dDiorama({
+          projectTitle: projectTitle.trim() || "3D Diorama",
+          format: draft.format,
+          beats: activeBeats,
+          words: activeAudio.words,
+          customDesign,
+          styleReference,
+          audioPath: activeAudio.audioPath || null,
+          audioSource: activeAudio.audioPath ? "tts" : "demo",
+          trimSilence: true,
+          captionPreset,
+          accentColor,
+          bgmPreset: targetBgm,
+          autoDucking: true,
+          autoSfx: true,
+        });
+      } else {
+        setProgressText(
+          `Menulis kode motion baru dari nol untuk ${activeBeats.length} beat secara paralel (tanpa template)...`
+        );
+        rawProject = await aiGenerateBeatCodes({
+          projectTitle: projectTitle.trim() || "Video AI Motion",
+          format: draft.format,
+          beats: activeBeats,
+          words: activeAudio.words,
+          customDesign,
+          styleReference,
+          audioPath: activeAudio.audioPath || null,
+          audioSource: activeAudio.audioPath ? "tts" : "demo",
+          trimSilence: true,
+          captionPreset,
+          accentColor,
+          bgmPreset: targetBgm,
+          autoDucking: true,
+          autoSfx: true,
+          footage: draft.visualMode === "hybrid" ? draft.attachedClips : [],
+          visualMode: draft.visualMode,
+        });
+      }
 
       // 3. Deliver-and-Verify: 4-frame offscreen sandbox check + automatic AI repair!
       const verified = await verifyAndRepairProjectBeats(rawProject, (msg) =>
@@ -643,25 +677,79 @@ export default function PreProductionReviewModal({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
-                    3. Rencana Visual Tanpa Template ({beats.length} Micro-Beat)
+                    3. Arahan Otomatis AI Director ({beats.length} Micro-Beat)
                   </h3>
                   <p className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    Tiap beat (2.5–4.5 dtk) akan digenerate sebagai <strong>kode motion baru dari nol</strong> — tanpa template & tanpa aset contoh nyasar. Kamu bisa edit konsep visual tiap beat sebelum render.
+                    AI memilih medium, subtitle, &amp; backsound terbaik sesuai prompt/referensi lo — 100% by-code tanpa template &amp; tanpa kredit video AI.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled={isPlanningBeats || !fullScript.trim()}
-                  onClick={() => handleReplanStoryboard()}
-                  className="ui-btn-secondary inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <div
+                    className="inline-flex rounded-md p-0.5"
+                    style={{
+                      backgroundColor: "var(--bg-panel)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    {[
+                      { id: "auto" as const, label: "Otomatis AI" },
+                      { id: "3d_diorama" as const, label: "3D Diorama" },
+                      { id: "2d_freeform" as const, label: "2D Motion" },
+                    ].map((opt) => {
+                      const active = mediumChoice === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setMediumChoice(opt.id)}
+                          className="rounded px-2 py-1 text-[10px] font-semibold cursor-pointer"
+                          style={{
+                            backgroundColor: active ? "var(--accent-soft)" : "transparent",
+                            color: active ? "var(--accent)" : "var(--text-muted)",
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isPlanningBeats || !fullScript.trim()}
+                    onClick={() => handleReplanStoryboard()}
+                    className="ui-btn-secondary inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
+                  >
+                    {isPlanningBeats ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-3 w-3" />
+                    )}
+                    Rancang Ulang
+                  </button>
+                </div>
+              </div>
+
+              <div
+                className="flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-[11px]"
+                style={{
+                  backgroundColor: "var(--bg-panel)",
+                  border: "1px solid var(--border-subtle)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span
+                  className="rounded-full px-2 py-0.5 font-semibold"
+                  style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
                 >
-                  {isPlanningBeats ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Wand2 className="h-3 w-3" />
-                  )}
-                  Rancang Ulang Storyboard
-                </button>
+                  {resolvedMedium === "3d_diorama"
+                    ? "Aktif: 3D Diorama & Karakter (Three.js)"
+                    : "Aktif: 2D Motion Bebas (Canvas + SVG)"}
+                </span>
+                <span>
+                  {resolvedMedium === "3d_diorama"
+                    ? "Pencahayaan siang PBR · kamera 3D kontinu · subtitle tengah Shorts · BGM & SFX otomatis"
+                    : "Kode animasi baru tiap beat · palet & tipografi kustom · BGM & SFX otomatis"}
+                </span>
               </div>
 
               <div className="space-y-2">

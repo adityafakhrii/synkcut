@@ -1372,14 +1372,19 @@ export default function StudioView({
             words: rebuildWordsFromScenes(safePatched),
           },
         };
-        // Auto-verify & auto-repair any newly authored `custom_code` beats so Studio NEVER goes blank!
+        // Auto-verify & auto-repair any newly authored `custom_code` OR `world3d` 3D Diorama so Studio NEVER goes blank!
         const hasUpdatedCustomCode = patched.scenes.some((s, i) => {
           if (s.visualSource !== "motion" || s.aiMotion?.engine !== "custom_code") return false;
           const prevCode = before.scenes[i]?.aiMotion?.customCode?.code ?? "";
           const nextCode = s.aiMotion.customCode?.code ?? "";
           return nextCode.trim().length > 0 && (nextCode !== prevCode || !s.aiMotion.customCode?.verified);
         });
-        if (hasUpdatedCustomCode) {
+        const hasUpdatedWorld3d =
+          Boolean(patched.world3d) &&
+          (patched.world3d?.setupCode !== before.world3d?.setupCode ||
+            patched.world3d?.animateCode !== before.world3d?.animateCode ||
+            !patched.world3d?.verified);
+        if (hasUpdatedCustomCode || hasUpdatedWorld3d) {
           const verified = await verifyAndRepairProjectBeats(patched);
           patched = verified.project;
         }

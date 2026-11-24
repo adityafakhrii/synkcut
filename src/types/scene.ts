@@ -28,12 +28,56 @@ export type SceneRole = "hook" | "body" | "cta";
 export type SceneVisualSource = "footage" | "motion";
 
 export type AiMotionEngine =
+  | "diorama_3d"
   | "custom_code"
   | "flow_diagram"
   | "motion_chart"
   | "tech_cards"
   | "stick_figure"
   | "breakdown_3d";
+
+export type RenderMedium = "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
+
+export type Diorama3DWorldPreset =
+  | "ocean_cross_section"
+  | "ground_cutaway"
+  | "desert_cutaway"
+  | "room_cutaway"
+  | "outdoor_farm"
+  | "studio_stage"
+  | "auto";
+
+export interface Diorama3DMotionConfig {
+  /** Pure JS body of `setupWorld(world, D3)` creating the 3D scene/props/characters once */
+  setupCode?: string;
+  /** Pure JS body of `animateFrame(world, state, D3)` animating camera/actors/HUD deterministically */
+  animateCode?: string;
+  /** Concrete visual beat direction for this beat inside the 3D world */
+  visualConcept: string;
+  /** World archetype used for lighting & cutaway backdrop */
+  worldPreset?: Diorama3DWorldPreset | string;
+  /** Optional vertical scale/depth ruler HUD (e.g. 0m -> 1500m) */
+  hudRuler?: { minLabel: string; maxLabel: string } | null;
+  /** Camera cue description for Studio editing */
+  cameraNote?: string;
+  /** Motion skill IDs applied */
+  skillsUsed?: string[];
+  /** Whether the 3D world passed the 4-frame offscreen WebGL verifier */
+  verified?: boolean;
+  /** Optional diagnostic note */
+  verificationNote?: string;
+}
+
+export interface World3DConfig {
+  /** Pure JS body of `setupWorld(world, D3)` shared smoothly across all 3D beats */
+  setupCode: string;
+  /** Pure JS body of `animateFrame(world, state, D3)` receiving continuous global + beat progress */
+  animateCode: string;
+  worldPreset: Diorama3DWorldPreset | string;
+  summary: string;
+  verified?: boolean;
+  verificationNote?: string;
+}
 
 export type MotionEmotionalIntent =
   | "playful"
@@ -237,6 +281,7 @@ export interface AiMotionSpec {
   title: string;
   subtitle?: string;
   takeaway?: string;
+  diorama3d?: Diorama3DMotionConfig;
   customCode?: CustomCodeMotionConfig;
   flow?: FlowDiagramConfig;
   chart?: MotionChartConfig;
@@ -261,6 +306,9 @@ export type DesignFontFamily = "sans" | "serif" | "mono" | "display";
 
 export type DesignCaptionLook =
   | "bold_outline"
+  | "black_pill"
+  | "outline_bold"
+  | "clean_shadow"
   | "custom_pill"
   | "editorial_bar"
   | "glass_tag"
@@ -298,6 +346,16 @@ export interface CustomDesignDirection {
   preferredMotion: MotionPreset;
   preferredTransition: TransitionPreset;
   preferredEngines: AiMotionEngine[];
+  /** v2.1 Auto-Director medium detection ("3d_diorama" | "2d_freeform" | "footage_montage") */
+  renderMedium?: "3d_diorama" | "2d_freeform" | "footage_montage";
+  /** v2.1 3D cutaway world archetype */
+  worldPreset?: Diorama3DWorldPreset | string;
+  /** v2.1 Viral Shorts caption vertical placement */
+  captionPlacement?: "center_middle" | "bottom_safe";
+  /** v2.1 Optional 3D-tracked HUD widgets detected from reference (e.g. "depth_ruler", "question_badge") */
+  hudElements?: string[];
+  /** v2.1 AI-recommended BGM preset */
+  recommendedBgm?: string;
 }
 
 export interface ProjectStyleReference {
@@ -372,7 +430,7 @@ export interface SceneItem {
 }
 
 export interface SynkcutProject {
-  version: "1.0" | "1.1" | "2.0";
+  version: "1.0" | "1.1" | "2.0" | "2.1";
   meta: {
     id: string;
     name: string;
@@ -384,6 +442,8 @@ export interface SynkcutProject {
   };
   styleReference?: ProjectStyleReference | null;
   footageLibrary?: FootageLibraryItem[];
+  /** Unified 3D Diorama world (Three.js PBR) rendered continuously across diorama_3d beats */
+  world3d?: World3DConfig | null;
   globalStyle: {
     captionPreset: CaptionPreset;
     accentColor: string;

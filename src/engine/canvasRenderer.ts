@@ -10,6 +10,7 @@ import { getProjectDurationMs } from "./sampleProject";
 import { isLightAiMotionTheme } from "./aiMotionPresets";
 import { renderAiMotionScene } from "./aiMotionRenderer";
 import { buildBeatRenderState, renderFreeformBeat } from "./freeformMotionRenderer";
+import { renderDiorama3DFrame } from "./diorama3dRenderer";
 
 export interface RenderFrameOptions {
   videoElement?: HTMLVideoElement | null;
@@ -345,7 +346,21 @@ function drawFootageWithMotion(
   if (isAiMotion && scene.aiMotion) {
     const durSec = Math.max(0.8, (scene.endMs - scene.startMs) / 1000);
     try {
-      if (scene.aiMotion.engine === "custom_code") {
+      if (scene.aiMotion.engine === "diorama_3d") {
+        const beatProgress = settledPreview ? 0.52 : progress;
+        const effectiveGlobalMs = settledPreview
+          ? scene.startMs + (scene.endMs - scene.startMs) * 0.52
+          : scene.startMs + sceneLocalMs;
+        renderDiorama3DFrame({
+          ctx,
+          width,
+          height,
+          project,
+          scene,
+          globalTimeMs: effectiveGlobalMs,
+          sceneProgress: beatProgress,
+        });
+      } else if (scene.aiMotion.engine === "custom_code") {
         const beatProgress = settledPreview ? 0.68 : progress;
         const beatState = buildBeatRenderState({
           width,
@@ -697,8 +712,18 @@ function drawKineticCaptions(
   const accent =
     custom?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
 
+  const isDioramaScene = scene.aiMotion?.engine === "diorama_3d";
+  const captionPlacement =
+    custom?.captionPlacement || (isDioramaScene ? "center_middle" : "bottom_safe");
+  const captionLook =
+    custom?.visualStyle.captionLook ?? (isDioramaScene ? "outline_bold" : null);
+
   const chunkSize =
-    preset === "kinetic_punch" || custom?.pacing === "snappy" ? 2 : 3;
+    captionPlacement === "center_middle" ||
+    preset === "kinetic_punch" ||
+    custom?.pacing === "snappy"
+      ? 2
+      : 3;
   const chunks: WordTimestamp[][] = [];
   for (let i = 0; i < sceneWords.length; i += chunkSize) {
     chunks.push(sceneWords.slice(i, i + chunkSize));
@@ -709,30 +734,49 @@ function drawKineticCaptions(
     chunks[chunks.length - 1];
   if (!activeChunk || activeChunk.length === 0) return;
 
-  const baseY = height * 0.67;
+  // Viral Shorts (AkuTahu, Kenapa Yaaa?, How Come?) center captions right in the sweet spot!
+  const baseY = captionPlacement === "center_middle" ? height * 0.585 : height * 0.67;
 
-  const captionLook = custom?.visualStyle.captionLook ?? null;
-  const useUppercase = custom
-    ? custom.typography.captionUppercase
-    : preset === "bold_pop" || preset === "kinetic_punch";
+  const isViralShortsLook =
+    captionLook === "black_pill" ||
+    captionLook === "outline_bold" ||
+    captionLook === "clean_shadow";
+
+  const useUppercase = isViralShortsLook
+    ? false
+    : custom
+      ? custom.typography.captionUppercase
+      : preset === "bold_pop" || preset === "kinetic_punch";
 
   const baseFontSize =
-    preset === "kinetic_punch"
-      ? 84
-      : captionLook === "editorial_bar" || preset === "luxury_editorial"
-        ? 58
-        : captionLook === "minimal_clean" || preset === "clean_minimal"
-          ? 54
-          : 66;
+    captionLook === "black_pill"
+      ? 56
+      : captionLook === "outline_bold"
+        ? 72
+        : captionLook === "clean_shadow"
+          ? 64
+          : preset === "kinetic_punch"
+            ? 84
+            : captionLook === "editorial_bar" || preset === "luxury_editorial"
+              ? 58
+              : captionLook === "minimal_clean" || preset === "clean_minimal"
+                ? 54
+                : 66;
 
-  const fontFamily = custom
-    ? resolveFont(custom.typography.captionFont)
-    : preset === "luxury_editorial"
-      ? FONT_STACKS.serif
-      : FONT_STACKS.sans;
+  const fontFamily = isViralShortsLook
+    ? FONT_STACKS.sans
+    : custom
+      ? resolveFont(custom.typography.captionFont)
+      : preset === "luxury_editorial"
+        ? FONT_STACKS.serif
+        : FONT_STACKS.sans;
 
   const fontWeight =
-    custom?.typography.captionFont === "serif" || preset === "luxury_editorial" ? "700" : "800";
+    captionLook === "outline_bold"
+      ? "900"
+      : custom?.typography.captionFont === "serif" || preset === "luxury_editorial"
+        ? "700"
+        : "800";
 
   ctx.save();
   ctx.textBaseline = "middle";
@@ -748,7 +792,11 @@ function drawKineticCaptions(
       const wordDur = Math.max(80, w.endMs - w.startMs);
       const wordProg = isActive ? Math.min(1, (timeMs - w.startMs) / Math.min(140, wordDur)) : 0;
       const springBoost =
-        isActive && (preset === "bold_pop" || preset === "kinetic_punch" || captionLook === "bold_outline")
+        isActive &&
+        (preset === "bold_pop" ||
+          preset === "kinetic_punch" ||
+          captionLook === "bold_outline" ||
+          captionLook === "outline_bold")
           ? 1 + 0.12 * easeOutCubic(wordProg)
           : 1;
       return {
@@ -773,47 +821,65 @@ function drawKineticCaptions(
   }
   const { items, spaceW, totalW } = layout;
 
-  const isLightMotionBg = custom
-    ? custom.isLight && scene.visualSource === "motion"
-    : scene.visualSource === "motion" &&
-      Boolean(scene.aiMotion) &&
-      isLightAiMotionTheme(scene.aiMotion!.theme);
+  const isLightMotionBg = isDioramaScene
+    ? false
+    : custom
+      ? custom.isLight && scene.visualSource === "motion"
+      : scene.visualSource === "motion" &&
+        Boolean(scene.aiMotion) &&
+        isLightAiMotionTheme(scene.aiMotion!.theme);
 
-  const needsPillBg = custom
-    ? captionLook === "custom_pill" ||
-      captionLook === "glass_tag" ||
-      captionLook === "editorial_bar" ||
-      (isLightMotionBg && captionLook !== "bold_outline")
-    : preset === "clean_minimal" ||
-      (isLightMotionBg && preset !== "bold_pop" && preset !== "kinetic_punch");
+  const needsPillBg =
+    captionLook === "black_pill"
+      ? true
+      : captionLook === "outline_bold" || captionLook === "clean_shadow"
+        ? false
+        : custom
+          ? captionLook === "custom_pill" ||
+            captionLook === "glass_tag" ||
+            captionLook === "editorial_bar" ||
+            (isLightMotionBg && captionLook !== "bold_outline")
+          : preset === "clean_minimal" ||
+            (isLightMotionBg && preset !== "bold_pop" && preset !== "kinetic_punch");
 
   if (needsPillBg) {
-    const padX = 36;
-    const padY = 22;
+    const padX = captionLook === "black_pill" ? 30 : 36;
+    const padY = captionLook === "black_pill" ? 18 : 22;
     const bx = (width - totalW) / 2 - padX;
     const by = baseY - fontSize / 2 - padY;
     const bw = totalW + padX * 2;
     const bh = fontSize + padY * 2;
     const rad =
-      captionLook === "editorial_bar"
-        ? 8
-        : cornerRadiusFor(custom, 24);
+      captionLook === "black_pill"
+        ? 18
+        : captionLook === "editorial_bar"
+          ? 8
+          : cornerRadiusFor(custom, 24);
 
-    if (custom?.visualStyle.cardStyle === "brutalist") {
+    if (captionLook !== "black_pill" && custom?.visualStyle.cardStyle === "brutalist") {
       ctx.fillStyle = accent;
       roundRectPath(ctx, bx + 7, by + 7, bw, bh, rad);
       ctx.fill();
     }
 
-    ctx.fillStyle = custom
-      ? custom.isLight
-        ? "rgba(15, 18, 26, 0.90)"
-        : custom.palette.surfaceBg
-      : "rgba(13, 15, 18, 0.84)";
+    ctx.fillStyle =
+      captionLook === "black_pill"
+        ? "rgba(8, 10, 14, 0.90)"
+        : custom
+          ? custom.isLight
+            ? "rgba(15, 18, 26, 0.90)"
+            : custom.palette.surfaceBg
+          : "rgba(13, 15, 18, 0.84)";
     roundRectPath(ctx, bx, by, bw, bh, rad);
     ctx.fill();
 
-    if (custom && (captionLook === "glass_tag" || captionLook === "editorial_bar" || custom.visualStyle.cardStyle === "brutalist")) {
+    if (
+      captionLook !== "black_pill" &&
+      custom &&
+      (captionLook === "glass_tag" ||
+        captionLook === "editorial_bar" ||
+        custom.visualStyle.cardStyle === "brutalist")
+    ) {
       ctx.strokeStyle = captionLook === "editorial_bar" ? accent : custom.palette.surfaceBorder;
       ctx.lineWidth = captionLook === "editorial_bar" ? 3 : 2;
       ctx.stroke();
@@ -832,23 +898,42 @@ function drawKineticCaptions(
 
     ctx.textAlign = "center";
 
-    const useOutline = custom
-      ? captionLook === "bold_outline" || (!needsPillBg && !isLightMotionBg)
-      : preset === "bold_pop" || preset === "kinetic_punch";
+    const useOutline =
+      captionLook === "outline_bold"
+        ? true
+        : captionLook === "clean_shadow" || captionLook === "black_pill"
+          ? false
+          : custom
+            ? captionLook === "bold_outline" || (!needsPillBg && !isLightMotionBg)
+            : preset === "bold_pop" || preset === "kinetic_punch";
 
     if (useOutline) {
-      ctx.lineWidth = 14;
+      ctx.lineWidth = captionLook === "outline_bold" ? 16 : 14;
       ctx.lineJoin = "round";
-      ctx.strokeStyle = "rgba(10, 12, 16, 0.92)";
+      ctx.strokeStyle = "rgba(8, 10, 14, 0.95)";
       ctx.strokeText(item.label, 0, 0);
+    } else if (captionLook === "clean_shadow") {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+      ctx.shadowBlur = 18;
+      ctx.shadowOffsetY = 5;
     } else if ((preset === "neon_tech" || custom?.visualStyle.cardStyle === "neon") && item.isActive) {
       ctx.shadowColor = accent;
       ctx.shadowBlur = 24;
     }
 
     const inactiveColor =
-      custom && !needsPillBg && isLightMotionBg ? custom.palette.textPrimary : "#ffffff";
-    ctx.fillStyle = item.isActive ? accent : inactiveColor;
+      custom && !needsPillBg && isLightMotionBg && !isViralShortsLook
+        ? custom.palette.textPrimary
+        : "#ffffff";
+    const activeColor =
+      captionLook === "black_pill"
+        ? "#FACC15"
+        : captionLook === "clean_shadow"
+          ? "#FFFFFF"
+          : captionLook === "outline_bold"
+            ? "#FACC15"
+            : accent;
+    ctx.fillStyle = item.isActive ? activeColor : inactiveColor;
     ctx.fillText(item.label, 0, 0);
     ctx.restore();
 

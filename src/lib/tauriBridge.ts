@@ -1079,6 +1079,156 @@ export async function aiRepairBeatCode(req: {
   });
 }
 
+export async function aiGenerate3dDiorama(req: {
+  projectTitle: string;
+  format: string;
+  beats: StoryboardBeat[];
+  words: WordTimestamp[];
+  customDesign?: CustomDesignDirection | null;
+  styleReference?: ProjectStyleReference | null;
+  audioPath: string | null;
+  audioSource: "tts" | "recorded" | "demo";
+  trimSilence: boolean;
+  captionPreset: string;
+  accentColor: string;
+  bgmPreset: string;
+  autoDucking: boolean;
+  autoSfx: boolean;
+}): Promise<SynkcutProject> {
+  if (!isTauriRuntime()) {
+    const now = new Date().toISOString();
+    return normalizeProject({
+      version: "2.1",
+      meta: {
+        id: `proj_${Date.now()}`,
+        name: req.projectTitle || "3D Diorama",
+        format: req.format as SynkcutProject["meta"]["format"],
+        aspectRatio: "9:16",
+        fps: 30,
+        createdAt: now,
+        updatedAt: now,
+      },
+      styleReference: req.styleReference ?? null,
+      footageLibrary: [],
+      world3d: {
+        setupCode: "",
+        animateCode: "",
+        worldPreset: req.customDesign?.worldPreset || "ground_cutaway",
+        summary: `Dunia 3D Diorama: ${req.projectTitle}`,
+        verified: true,
+      },
+      globalStyle: {
+        captionPreset: req.captionPreset as SynkcutProject["globalStyle"]["captionPreset"],
+        accentColor: req.accentColor || "#FACC15",
+        showProgressBar: true,
+        customDesign: req.customDesign ?? null,
+        bgm: {
+          preset: req.bgmPreset === "auto" ? "cinematic_pulse" : req.bgmPreset,
+          volume: 0.22,
+          autoDucking: req.autoDucking,
+        },
+        safeZone: "tiktok_reels",
+      },
+      voiceover: {
+        source: req.audioSource,
+        audioPath: req.audioPath,
+        trimSilence: req.trimSilence,
+        words: req.words,
+      },
+      scenes: req.beats.map((b) => ({
+        id: b.id,
+        role: b.role,
+        startMs: b.startMs,
+        endMs: b.endMs,
+        text: b.text,
+        visualSource: "motion",
+        aiMotion: {
+          engine: "diorama_3d",
+          theme: "paper",
+          title: b.title,
+          subtitle: req.projectTitle,
+          diorama3d: {
+            visualConcept: b.visualConcept,
+            worldPreset: req.customDesign?.worldPreset || "ground_cutaway",
+            skillsUsed: ["3d-diorama-storytelling"],
+            verified: true,
+          },
+        },
+        media: { path: null, secondaryPath: null, trimStartMs: 0, fit: "cover" },
+        motion: { preset: "static_clean", intensity: 0.2 },
+        transitionIn: { preset: "hard_cut", durationMs: 0 },
+        sfx: req.autoSfx && b.sfx !== "none" ? [{ preset: b.sfx, offsetMs: 0, volume: 0.62 }] : [],
+        overlays: [],
+      })),
+    });
+  }
+  const raw = await invoke<SynkcutProject>("ai_generate_3d_diorama", {
+    req: {
+      ...req,
+      customDesign: req.customDesign ?? null,
+      styleReference: req.styleReference ?? null,
+    },
+  });
+  return normalizeProject(raw);
+}
+
+export async function aiRepair3dDiorama(req: {
+  projectTitle: string;
+  worldPreset: string;
+  brokenSetupCode: string;
+  brokenAnimateCode: string;
+  errorMessage: string;
+  beatsSummary: string;
+}): Promise<{ setupCode: string; animateCode: string; providerUsed: string }> {
+  return invoke<{ setupCode: string; animateCode: string; providerUsed: string }>(
+    "ai_repair_3d_diorama",
+    { req }
+  );
+}
+
+/**
+ * AI Auto-Director helper: resolves whether the video should render as a 3D Diorama
+ * or 2D Freeform Motion based on user override, attached reference DNA, and topic cues.
+ */
+export function resolveAutoRenderMedium(params: {
+  preference: "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
+  styleRef?: StyleReferenceResult | null;
+  topicOrScript: string;
+}): "3d_diorama" | "2d_freeform" {
+  if (params.preference === "3d_diorama") return "3d_diorama";
+  if (params.preference === "2d_freeform") return "2d_freeform";
+  const refMed = params.styleRef?.customDesign?.renderMedium;
+  if (refMed === "3d_diorama") return "3d_diorama";
+  if (refMed === "2d_freeform") return "2d_freeform";
+
+  const lower = `${params.topicOrScript} ${params.styleRef?.title ?? ""} ${params.styleRef?.styleDnaSummary ?? ""}`.toLowerCase();
+  const cues3d = [
+    "3d",
+    "diorama",
+    "akutahu",
+    "kenapa",
+    "how come",
+    "zack",
+    "cutaway",
+    "blender",
+    "karakter",
+    "laut",
+    "anjungan",
+    "lubang tanah",
+    "stadion",
+    "bangunan",
+    "gedung",
+    "arsitek",
+    "bawah tanah",
+    "ternak",
+    "kolam",
+    "sejarah",
+    "cerita",
+    "eksperimen",
+  ];
+  return cues3d.some((k) => lower.includes(k)) ? "3d_diorama" : "2d_freeform";
+}
+
 export async function pickRemotionExportFolder(): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const selected = await open({

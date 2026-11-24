@@ -1,6 +1,7 @@
 import type { StoryboardBeat, SynkcutProject } from "../types/scene";
-import { aiRepairBeatCode, isTauriRuntime } from "../lib/tauriBridge";
+import { aiRepair3dDiorama, aiRepairBeatCode, isTauriRuntime } from "../lib/tauriBridge";
 import { verifyBeatCodeOffscreen } from "./freeformMotionRenderer";
+import { verifyDiorama3DOffscreen } from "./diorama3dRenderer";
 
 export interface VerifyRepairResult {
   project: SynkcutProject;
@@ -10,9 +11,9 @@ export interface VerifyRepairResult {
 }
 
 /**
- * Runs the 4-frame offscreen sandbox verifier on every `custom_code` beat in a project.
- * Any beat that throws an error, triggers loop-guard, or renders blank/flat is automatically
- * sent to `ai_repair_beat_code` (up to 2 attempts) before falling back to pure brand kinetic typography.
+ * Runs the 4-frame offscreen sandbox verifier on:
+ * - Unified `world3d` / `diorama_3d` scenes (WebGL PBR verifier + auto-repair via `ai_repair_3d_diorama`)
+ * - Every `custom_code` 2D beat (Canvas 2D verifier + auto-repair via `ai_repair_beat_code`)
  */
 export async function verifyAndRepairProjectBeats(
   project: SynkcutProject,
@@ -28,8 +29,121 @@ export async function verifyAndRepairProjectBeats(
   let repairedCount = 0;
   let fallbackCount = 0;
 
+  let nextWorld3d = project.world3d ? { ...project.world3d } : null;
   const nextScenes = [...project.scenes];
 
+  // 1. Verify unified 3D Diorama world if present
+  const hasDioramaScenes = nextScenes.some(
+    (s) => s.visualSource === "motion" && s.aiMotion?.engine === "diorama_3d"
+  );
+  if (hasDioramaScenes && nextWorld3d) {
+    let setupCode = (nextWorld3d.setupCode || "").trim();
+    let animateCode = (nextWorld3d.animateCode || "").trim();
+    const worldPreset = nextWorld3d.worldPreset || "ground_cutaway";
+    const beatsSummary = nextScenes
+      .map((s, idx) => `#${idx + 1}: ${s.aiMotion?.title || s.text.slice(0, 48)}`)
+      .join(" | ");
+
+    onProgress?.("Memvalidasi 4 frame WebGL 3D Diorama...");
+
+    let passed3d = false;
+    let lastErr3d = "";
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!setupCode || !animateCode) {
+        lastErr3d = "Kode 3D Diorama belum lengkap.";
+      } else {
+        const check = verifyDiorama3DOffscreen({
+          setupCode,
+          animateCode,
+          worldPreset,
+          project,
+        });
+        if (check.ok) {
+          passed3d = true;
+          verifiedCount++;
+          if (attempt > 0) repairedCount++;
+          const note =
+            attempt > 0
+              ? "3D Diorama diperbaiki otomatis & lolos cek 4 frame WebGL"
+              : check.warning || "Lolos cek 4 frame WebGL 3D";
+          nextWorld3d = {
+            ...nextWorld3d,
+            setupCode,
+            animateCode,
+            verified: true,
+            verificationNote: note,
+          };
+          for (let i = 0; i < nextScenes.length; i++) {
+            if (nextScenes[i].aiMotion?.engine === "diorama_3d") {
+              nextScenes[i] = {
+                ...nextScenes[i],
+                aiMotion: {
+                  ...nextScenes[i].aiMotion!,
+                  diorama3d: {
+                    ...nextScenes[i].aiMotion!.diorama3d!,
+                    verified: true,
+                    verificationNote: note,
+                  },
+                },
+              };
+            }
+          }
+          break;
+        }
+        lastErr3d = check.error || "Gagal validasi 4 frame WebGL.";
+      }
+
+      if (attempt < 2 && isTauriRuntime()) {
+        onProgress?.(`Auto-repair 3D Diorama (percobaan ${attempt + 1}/2)...`);
+        try {
+          const repaired = await aiRepair3dDiorama({
+            projectTitle: project.meta.name,
+            worldPreset,
+            brokenSetupCode: setupCode || "// empty",
+            brokenAnimateCode: animateCode || "// empty",
+            errorMessage: lastErr3d,
+            beatsSummary,
+          });
+          setupCode = repaired.setupCode;
+          animateCode = repaired.animateCode;
+        } catch {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+
+    if (!passed3d) {
+      fallbackCount++;
+      const note = `Fallback Diorama 3D Kontekstual (${lastErr3d.slice(0, 72)})`;
+      nextWorld3d = {
+        ...nextWorld3d,
+        setupCode: "",
+        animateCode: "",
+        verified: true,
+        verificationNote: note,
+      };
+      for (let i = 0; i < nextScenes.length; i++) {
+        if (nextScenes[i].aiMotion?.engine === "diorama_3d") {
+          nextScenes[i] = {
+            ...nextScenes[i],
+            aiMotion: {
+              ...nextScenes[i].aiMotion!,
+              diorama3d: {
+                ...nextScenes[i].aiMotion!.diorama3d!,
+                verified: true,
+                verificationNote: note,
+              },
+            },
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Verify every 2D `custom_code` beat
   for (let i = 0; i < nextScenes.length; i++) {
     const scene = nextScenes[i];
     if (scene.visualSource !== "motion" || scene.aiMotion?.engine !== "custom_code") {
@@ -140,7 +254,8 @@ export async function verifyAndRepairProjectBeats(
   return {
     project: {
       ...project,
-      version: "2.0",
+      version: hasDioramaScenes || nextWorld3d ? "2.1" : "2.0",
+      world3d: nextWorld3d,
       scenes: nextScenes,
     },
     verifiedCount,

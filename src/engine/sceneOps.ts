@@ -52,6 +52,7 @@ const VALID_TRANSITIONS: TransitionPreset[] = [
 ];
 const VALID_ROLES: SceneRole[] = ["hook", "body", "cta"];
 const VALID_ENGINES: AiMotionEngine[] = [
+  "diorama_3d",
   "custom_code",
   "flow_diagram",
   "motion_chart",
@@ -99,6 +100,9 @@ const VALID_CORNERS: DesignCornerStyle[] = ["sharp", "rounded", "pill"];
 const VALID_FONTS: DesignFontFamily[] = ["sans", "serif", "mono", "display"];
 const VALID_CAPTION_LOOKS: DesignCaptionLook[] = [
   "bold_outline",
+  "black_pill",
+  "outline_bold",
+  "clean_shadow",
   "custom_pill",
   "editorial_bar",
   "glass_tag",
@@ -195,7 +199,22 @@ export function sanitizeCustomDesign(raw: unknown): CustomDesignDirection | null
     preferredMotion: pickEnum(obj.preferredMotion, VALID_MOTIONS, "zoom_punch"),
     preferredTransition: pickEnum(obj.preferredTransition, VALID_TRANSITIONS, "pop_zoom"),
     preferredEngines:
-      preferredEngines.length > 0 ? preferredEngines : ["flow_diagram", "tech_cards", "motion_chart"],
+      preferredEngines.length > 0 ? preferredEngines : ["custom_code"],
+    renderMedium: pickEnum(
+      obj.renderMedium,
+      ["3d_diorama", "2d_freeform", "footage_montage"] as const,
+      "2d_freeform"
+    ),
+    worldPreset: typeof obj.worldPreset === "string" ? obj.worldPreset : "auto",
+    captionPlacement: pickEnum(
+      obj.captionPlacement,
+      ["center_middle", "bottom_safe"] as const,
+      "bottom_safe"
+    ),
+    hudElements: Array.isArray(obj.hudElements)
+      ? obj.hudElements.map((x) => asStr(x, "").trim()).filter(Boolean)
+      : [],
+    recommendedBgm: typeof obj.recommendedBgm === "string" ? obj.recommendedBgm : "upbeat_promo",
   };
 }
 
@@ -223,7 +242,28 @@ export function sanitizeAiMotionSpec(
     takeaway,
   };
 
-  if (engine === "custom_code") {
+  if (engine === "diorama_3d") {
+    const rawD3 = (obj.diorama3d && typeof obj.diorama3d === "object"
+      ? obj.diorama3d
+      : {}) as Record<string, unknown>;
+    const skillsRaw = Array.isArray(rawD3.skillsUsed) ? rawD3.skillsUsed : [];
+    const skillsUsed = skillsRaw
+      .map((s) => asStr(s, "").trim())
+      .filter(Boolean);
+    spec.diorama3d = {
+      setupCode: typeof rawD3.setupCode === "string" ? rawD3.setupCode : undefined,
+      animateCode: typeof rawD3.animateCode === "string" ? rawD3.animateCode : undefined,
+      visualConcept:
+        asStr(rawD3.visualConcept, "").trim() ||
+        `Visual 3D Diorama untuk: ${title}`,
+      worldPreset: asStr(rawD3.worldPreset, "ground_cutaway"),
+      cameraNote: typeof rawD3.cameraNote === "string" ? rawD3.cameraNote : undefined,
+      skillsUsed: skillsUsed.length > 0 ? skillsUsed : ["3d-diorama-storytelling"],
+      verified: typeof rawD3.verified === "boolean" ? rawD3.verified : false,
+      verificationNote:
+        typeof rawD3.verificationNote === "string" ? rawD3.verificationNote : undefined,
+    };
+  } else if (engine === "custom_code") {
     const rawCc = (obj.customCode && typeof obj.customCode === "object"
       ? obj.customCode
       : {}) as Record<string, unknown>;
@@ -716,17 +756,41 @@ export function normalizeProject(
     }))
     .filter((c) => c.path.length > 0);
 
+  const rawWorld3d =
+    obj.world3d === null
+      ? null
+      : obj.world3d && typeof obj.world3d === "object"
+        ? (obj.world3d as Record<string, unknown>)
+        : null;
+  const world3d = rawWorld3d
+    ? {
+        setupCode: asStr(rawWorld3d.setupCode, ""),
+        animateCode: asStr(rawWorld3d.animateCode, ""),
+        worldPreset: asStr(rawWorld3d.worldPreset, "ground_cutaway"),
+        summary: asStr(rawWorld3d.summary, "3D Diorama World"),
+        verified: typeof rawWorld3d.verified === "boolean" ? rawWorld3d.verified : false,
+        verificationNote:
+          typeof rawWorld3d.verificationNote === "string"
+            ? rawWorld3d.verificationNote
+            : undefined,
+      }
+    : fallback?.world3d ?? null;
+
+  const hasDiorama =
+    Boolean(world3d) || reflowedScenes.some((s) => s.aiMotion?.engine === "diorama_3d");
   const hasCustomCode = reflowedScenes.some((s) => s.aiMotion?.engine === "custom_code");
   const hasMotionOrCustom =
     reflowedScenes.some((s) => s.visualSource === "motion") || Boolean(customDesign);
 
   const normalized: SynkcutProject = {
     version:
-      hasCustomCode || obj.version === "2.0"
-        ? "2.0"
-        : hasMotionOrCustom || obj.version === "1.1"
-          ? "1.1"
-          : "1.0",
+      hasDiorama || obj.version === "2.1"
+        ? "2.1"
+        : hasCustomCode || obj.version === "2.0"
+          ? "2.0"
+          : hasMotionOrCustom || obj.version === "1.1"
+            ? "1.1"
+            : "1.0",
     meta: {
       id: asStr(rawMeta.id, fallback?.meta.id ?? `proj_${Date.now()}`),
       name: asStr(rawMeta.name, fallback?.meta.name ?? "Proyek Synkcut"),
@@ -741,6 +805,7 @@ export function normalizeProject(
         ? (obj.styleReference as SynkcutProject["styleReference"])
         : fallback?.styleReference ?? null,
     footageLibrary,
+    world3d,
     globalStyle: {
       captionPreset: pickEnum(
         rawStyle.captionPreset,

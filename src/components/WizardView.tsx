@@ -9,10 +9,10 @@ import {
   Film,
   Layers,
   Loader2,
-  Lock,
   Mic,
   Palette,
   Plus,
+  Settings2,
   Shapes,
   Sparkles,
   Square,
@@ -23,8 +23,6 @@ import {
 } from "lucide-react";
 import {
   CONTENT_FORMAT_LABELS,
-  type AiMotionEngine,
-  type AiMotionTheme,
   type ByokStatus,
   type CaptionPreset,
   type ContentFormat,
@@ -33,9 +31,9 @@ import {
   type SynkcutProject,
   type TransitionPreset,
 } from "../types/scene";
-import { AI_MOTION_ENGINES, AI_MOTION_THEMES } from "../engine/aiMotionPresets";
 import {
   aiAssembleProject,
+  aiGenerate3dDiorama,
   aiGenerateBeatCodes,
   aiGenerateScript,
   aiPlanStoryboard,
@@ -46,6 +44,7 @@ import {
   pickLocalVideos,
   probeMedia,
   processUserAudio,
+  resolveAutoRenderMedium,
   toAssetUrl,
   type FootageInputItem,
   type HookOption,
@@ -135,19 +134,13 @@ export default function WizardView({
   onSkipToBlank,
   onProjectCreated,
 }: WizardViewProps) {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2>(1);
 
   // Step 1: Visual Mode, Optional Custom Design Reference, Brief & Script
   const [visualMode, setVisualMode] = useState<"motion" | "footage" | "hybrid">(
     initialFormat === "education" ? "motion" : "hybrid"
   );
-  const [motionTheme, setMotionTheme] = useState<AiMotionTheme>("carbon");
-  const [preferredEngines, setPreferredEngines] = useState<AiMotionEngine[]>([
-    "flow_diagram",
-    "motion_chart",
-    "tech_cards",
-    "stick_figure",
-  ]);
+  const [mediumChoice, setMediumChoice] = useState<"auto" | "3d_diorama" | "2d_freeform">("auto");
   const [showRefPanel, setShowRefPanel] = useState(false);
   const [styleRefResult, setStyleRefResult] = useState<StyleReferenceResult | null>(null);
   const [scriptInputMode, setScriptInputMode] = useState<"structured" | "raw">("structured");
@@ -213,21 +206,13 @@ export default function WizardView({
   const recordChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<number | null>(null);
 
-  // Step 3: Click-to-Style Presets & Assemble
+  // Optional Advanced Manual Overrides (Hidden inside collapsed accordion by default — AI Auto-Director handles everything!)
   const [captionPreset, setCaptionPreset] = useState<CaptionPreset>("bold_pop");
   const [accentColor, setAccentColor] = useState("#38E59D");
   const [motionPreset, setMotionPreset] = useState<MotionPreset>("zoom_punch");
-  const [transitionPreset, setTransitionPreset] = useState<TransitionPreset>("whip_pan");
-  const [overlayMode, setOverlayMode] = useState<
-    | "auto"
-    | "hook_headline"
-    | "notification_banner"
-    | "promo_badge"
-    | "doodle_highlight"
-    | "split_screen"
-    | "none"
-  >("auto");
-  const [bgmPreset, setBgmPreset] = useState("upbeat_promo");
+  const [transitionPreset, setTransitionPreset] = useState<TransitionPreset>("pop_zoom");
+  const overlayMode = "auto" as const;
+  const [bgmPreset, setBgmPreset] = useState("auto");
   const [autoDucking, setAutoDucking] = useState(true);
   const [autoSfx, setAutoSfx] = useState(true);
   const [isAssembling, setIsAssembling] = useState(false);
@@ -243,6 +228,12 @@ export default function WizardView({
 
   const fullScriptText =
     scriptInputMode === "raw" ? rawScript.trim() : structuredScriptText;
+
+  const resolvedMedium = resolveAutoRenderMedium({
+    preference: mediumChoice,
+    styleRef: styleRefResult,
+    topicOrScript: `${topic} ${projectTitle} ${fullScriptText}`,
+  });
 
   const hasAnyByok = Object.values(byokStatus.providers).some((p) => p.configured);
   const isFootageMandatoryMissing = visualMode === "footage" && footageClips.length === 0;
@@ -260,7 +251,6 @@ export default function WizardView({
   function applyStyleSuggestions(res: StyleReferenceResult | null) {
     setStyleRefResult(res);
     if (!res) return;
-    setMotionTheme(res.suggestedTheme);
     setCaptionPreset(res.suggestedCaption);
     setAccentColor(res.customDesign?.palette.accentPrimary || res.suggestedAccent);
     if (res.customDesign?.preferredMotion) {
@@ -269,22 +259,9 @@ export default function WizardView({
     if (res.customDesign?.preferredTransition) {
       setTransitionPreset(res.customDesign.preferredTransition);
     }
-    const validEng = (res.customDesign?.preferredEngines || res.suggestedEngines).filter(
-      (e): e is AiMotionEngine =>
-        ["flow_diagram", "motion_chart", "tech_cards", "stick_figure", "breakdown_3d"].includes(e)
-    );
-    if (validEng.length > 0) {
-      setPreferredEngines(validEng);
+    if (res.customDesign?.recommendedBgm) {
+      setBgmPreset(res.customDesign.recommendedBgm);
     }
-  }
-
-  function togglePreferredEngine(engine: AiMotionEngine) {
-    setPreferredEngines((prev) => {
-      if (prev.includes(engine)) {
-        return prev.length > 1 ? prev.filter((e) => e !== engine) : prev;
-      }
-      return [...prev, engine];
-    });
   }
 
   async function handleGenerateScript() {
@@ -491,7 +468,13 @@ export default function WizardView({
         }
       }
 
-      // v2.0 Freeform Code Motion (Zero Template, Zero Sample Assets!) for Motion & Hybrid modes!
+      const resolvedBgm =
+        bgmPreset === "auto"
+          ? styleRefResult?.customDesign?.recommendedBgm ||
+            (format === "education" ? "lofi_education" : "upbeat_promo")
+          : bgmPreset;
+
+      // v2.1 Sat-Set AI Auto-Director: 3D Diorama (By-Code Three.js) OR 2D Freeform Motion!
       if ((visualMode === "motion" || visualMode === "hybrid") && isTauriRuntime() && hasAnyByok) {
         setAssembleStatus("2/3 Merancang micro-beat storyboard (2.5–4.5 detik per beat)...");
         const planned = await aiPlanStoryboard({
@@ -504,27 +487,50 @@ export default function WizardView({
           styleReference,
         });
 
-        setAssembleStatus(
-          `3/3 Menulis kode motion baru dari nol untuk ${planned.beats.length} beat secara paralel...`
-        );
-        const rawProj = await aiGenerateBeatCodes({
-          projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
-          format,
-          beats: planned.beats,
-          words: finalAudio?.words ?? [],
-          customDesign: styleRefResult?.customDesign ?? null,
-          styleReference,
-          audioPath: finalAudio?.audioPath ?? null,
-          audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
-          trimSilence,
-          captionPreset,
-          accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
-          bgmPreset,
-          autoDucking,
-          autoSfx,
-          footage: visualMode === "motion" ? [] : footageClips,
-          visualMode,
-        });
+        let rawProj: SynkcutProject;
+        if (resolvedMedium === "3d_diorama" && (visualMode === "motion" || footageClips.length === 0)) {
+          setAssembleStatus(
+            `3/3 Membangun dunia 3D Diorama & karakter (Three.js) untuk ${planned.beats.length} beat...`
+          );
+          rawProj = await aiGenerate3dDiorama({
+            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Diorama",
+            format,
+            beats: planned.beats,
+            words: finalAudio?.words ?? [],
+            customDesign: styleRefResult?.customDesign ?? null,
+            styleReference,
+            audioPath: finalAudio?.audioPath ?? null,
+            audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
+            trimSilence,
+            captionPreset,
+            accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
+            bgmPreset: resolvedBgm,
+            autoDucking,
+            autoSfx,
+          });
+        } else {
+          setAssembleStatus(
+            `3/3 Menulis kode motion baru dari nol untuk ${planned.beats.length} beat secara paralel...`
+          );
+          rawProj = await aiGenerateBeatCodes({
+            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+            format,
+            beats: planned.beats,
+            words: finalAudio?.words ?? [],
+            customDesign: styleRefResult?.customDesign ?? null,
+            styleReference,
+            audioPath: finalAudio?.audioPath ?? null,
+            audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
+            trimSilence,
+            captionPreset,
+            accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
+            bgmPreset: resolvedBgm,
+            autoDucking,
+            autoSfx,
+            footage: visualMode === "motion" ? [] : footageClips,
+            visualMode,
+          });
+        }
 
         const verified = await verifyAndRepairProjectBeats(rawProj, (msg) =>
           setAssembleStatus(msg)
@@ -552,12 +558,12 @@ export default function WizardView({
         motionPreset,
         transitionPreset,
         overlayMode,
-        bgmPreset,
+        bgmPreset: resolvedBgm,
         autoDucking,
         autoSfx,
         visualMode,
-        motionTheme,
-        preferredEngines,
+        motionTheme: styleRefResult?.suggestedTheme ?? "carbon",
+        preferredEngines: ["custom_code"],
         styleReference,
         customDesign: styleRefResult?.customDesign ?? null,
         autoGenerateVoiceover: !finalAudio,
@@ -593,12 +599,11 @@ export default function WizardView({
           <h1 className="text-base font-bold tracking-tight">Wizard Racik Konten</h1>
         </div>
 
-        {/* Clean 3-Step Progress */}
+        {/* Clean 2-Step Sat-Set Progress */}
         <div className="hidden items-center gap-2 md:flex">
           {[
-            { num: 1 as const, label: "Ide & Script" },
-            { num: 2 as const, label: "Visual & Suara" },
-            { num: 3 as const, label: "Gaya & Racik" },
+            { num: 1 as const, label: "Ide, Referensi & Script" },
+            { num: 2 as const, label: "Suara & Rencana AI" },
           ].map((s, idx) => {
             const active = step === s.num;
             const done = step > s.num;
@@ -633,8 +638,8 @@ export default function WizardView({
                   </span>
                   {s.label}
                 </button>
-                {idx < 2 && (
-                  <span className="h-[1px] w-5" style={{ backgroundColor: "var(--border-subtle)" }} />
+                {idx < 1 && (
+                  <span className="h-[1px] w-6" style={{ backgroundColor: "var(--border-subtle)" }} />
                 )}
               </div>
             );
@@ -1162,7 +1167,7 @@ export default function WizardView({
                     onClick={() => setStep(2)}
                     className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-45 cursor-pointer"
                   >
-                    Lanjut: Visual & Suara
+                    Lanjut: Suara &amp; Rencana AI
                     <ArrowRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -1170,187 +1175,268 @@ export default function WizardView({
             </div>
           )}
 
-          {/* ==================== STEP 2: VISUAL & SUARA AUTO-SYNC ==================== */}
+          {/* ==================== STEP 2 (FINAL SAT-SET): SUARA & RENCANA OTOMATIS AI ==================== */}
           {step === 2 && (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-              {/* Left: Adaptive Visual Setup (AI Motion / Local Footage / Hybrid) */}
-              <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
-                {visualMode === "motion" ? (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <h2 className="text-sm font-bold">Pengaturan AI Motion (Tanpa Footage)</h2>
-                        <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          AI Director otomatis membuat animasi native 2D & 3D untuk tiap scene —
-                          100% lokal tanpa video mentah.
-                        </p>
-                      </div>
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                {/* Left Column: Voiceover Dubbing (+ Multi-Footage Uploader when Footage/Hybrid) */}
+                <div className="space-y-4 lg:col-span-6">
+                  {/* Voiceover Card */}
+                  <div className="ui-panel rounded-xl p-5 space-y-4">
+                    <div>
+                      <h2 className="text-sm font-bold">1. Suara Dubbing (Voiceover)</h2>
+                      <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                        Dengarkan sampel suaranya dulu, atau langsung klik Buat Video agar AI membuat suara otomatis.
+                      </p>
+                    </div>
+
+                    <div
+                      className="grid grid-cols-2 rounded-lg p-1"
+                      style={{
+                        backgroundColor: "var(--bg-elevated)",
+                        border: "1px solid var(--border-subtle)",
+                      }}
+                    >
                       <button
                         type="button"
-                        onClick={() => setVisualMode("hybrid")}
-                        className="ui-btn-secondary shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer"
-                      >
-                        + Campur Klip
-                      </button>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold">
-                        Tema Kanvas Motion Utama
-                      </label>
-                      <div className="grid grid-cols-5 gap-1.5">
-                        {AI_MOTION_THEMES.map((th) => {
-                          const active = motionTheme === th.id;
-                          return (
-                            <button
-                              key={th.id}
-                              type="button"
-                              onClick={() => setMotionTheme(th.id)}
-                              className="flex flex-col items-center gap-1 rounded-md py-2 text-[11px] font-semibold cursor-pointer"
-                              style={{
-                                backgroundColor: active ? "var(--bg-hover)" : "var(--bg-elevated)",
-                                border: active
-                                  ? "1px solid var(--accent)"
-                                  : "1px solid var(--border-subtle)",
-                              }}
-                            >
-                              <span
-                                className="h-5 w-5 rounded-full"
-                                style={{
-                                  backgroundColor: th.bgHex,
-                                  border: `2px solid ${th.accentHex}`,
-                                }}
-                              />
-                              <span>{th.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold">
-                        Engine AI Motion yang Diprioritaskan (5 Engine)
-                      </label>
-                      <div className="space-y-1.5">
-                        {AI_MOTION_ENGINES.map((eng) => {
-                          const selected = preferredEngines.includes(eng.id);
-                          return (
-                            <button
-                              key={eng.id}
-                              type="button"
-                              onClick={() => togglePreferredEngine(eng.id)}
-                              className="ui-row flex w-full items-center justify-between rounded-lg px-3 py-2 text-left cursor-pointer"
-                              style={{
-                                backgroundColor: selected
-                                  ? "var(--accent-soft)"
-                                  : "var(--bg-elevated)",
-                                border: selected
-                                  ? "1px solid var(--accent)"
-                                  : "1px solid var(--border-subtle)",
-                              }}
-                            >
-                              <div>
-                                <div className="text-xs font-semibold">{eng.label}</div>
-                                <div
-                                  className="text-[11px]"
-                                  style={{ color: "var(--text-secondary)" }}
-                                >
-                                  {eng.shortDesc}
-                                </div>
-                              </div>
-                              <span
-                                className="flex h-4 w-4 shrink-0 items-center justify-center rounded"
-                                style={{
-                                  backgroundColor: selected ? "var(--accent)" : "var(--bg-panel)",
-                                  color: "#ffffff",
-                                  border: selected
-                                    ? "1px solid var(--accent)"
-                                    : "1px solid var(--border-strong)",
-                                }}
-                              >
-                                {selected && <Check className="h-3 w-3" />}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-sm font-bold">
-                          {visualMode === "hybrid"
-                            ? "Footage Lokal + AI Motion (Campur)"
-                            : "Footage Lokal Multi-Klip (*Wajib min. 1 video)"}
-                        </h2>
-                        <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          AI Multimodal melihat 4 frame bertimestamp dari setiap klip untuk membuat cut
-                          otomatis menjadi 1 video utuh sesuai script
-                          {visualMode === "hybrid"
-                            ? ", lalu melengkapi sisanya dengan AI Motion."
-                            : "."}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={isLoadingFootage || !isTauriRuntime()}
-                        onClick={handleAddFootage}
-                        className="ui-btn-primary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                      >
-                        {isLoadingFootage ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Upload className="h-3.5 w-3.5" />
-                        )}
-                        Tambah Video
-                      </button>
-                    </div>
-
-                    {footageClips.length === 0 ? (
-                      <div
-                        className="rounded-lg p-6 text-center text-xs"
+                        onClick={() => setAudioTab("tts")}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold cursor-pointer"
                         style={{
-                          backgroundColor: "var(--bg-elevated)",
-                          border: "1px dashed var(--border-strong)",
-                          color: "var(--text-secondary)",
+                          backgroundColor: audioTab === "tts" ? "var(--bg-panel)" : "transparent",
+                          color: audioTab === "tts" ? "var(--text-primary)" : "var(--text-muted)",
                         }}
                       >
-                        <Film className="mx-auto mb-2 h-6 w-6" style={{ color: "var(--text-muted)" }} />
-                        Belum ada footage lokal ditambahkan. Kamu bisa tambah 1–5 klip MP4/MOV
-                        sekarang, atau lanjut{" "}
-                        {visualMode === "hybrid"
-                          ? "agar AI mengisi scene dengan AI Motion."
-                          : "memakai backdrop studio dulu."}
+                        <Volume2 className="h-3.5 w-3.5" />
+                        TTS AI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAudioTab("recorded")}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold cursor-pointer"
+                        style={{
+                          backgroundColor: audioTab === "recorded" ? "var(--bg-panel)" : "transparent",
+                          color: audioTab === "recorded" ? "var(--text-primary)" : "var(--text-muted)",
+                        }}
+                      >
+                        <Mic className="h-3.5 w-3.5" />
+                        Suara Sendiri
+                      </button>
+                    </div>
+
+                    {audioTab === "tts" ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold">Mesin TTS</label>
+                            <select
+                              value={ttsEngine}
+                              onChange={(e) => {
+                                const next = e.target.value as "gemini" | "openai" | "windows_offline";
+                                setTtsEngine(next);
+                                if (next === "gemini") setTtsVoice("Kore");
+                                if (next === "openai") setTtsVoice("nova");
+                              }}
+                              className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
+                            >
+                              <option value="gemini">Gemini Native TTS</option>
+                              <option value="openai">OpenAI TTS</option>
+                              <option value="windows_offline">Windows Offline (Gratis)</option>
+                            </select>
+                          </div>
+                          {ttsEngine !== "windows_offline" && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold">Karakter Suara</label>
+                              <select
+                                value={ttsVoice}
+                                onChange={(e) => setTtsVoice(e.target.value)}
+                                className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
+                              >
+                                {(ttsEngine === "gemini" ? GEMINI_VOICES : OPENAI_VOICES).map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={isProcessingAudio || !isTauriRuntime()}
+                          onClick={handleGenerateTts}
+                          className="ui-btn-secondary flex h-9 w-full items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                        >
+                          {isProcessingAudio ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Membuat Sampel Suara &amp; Sinkronisasi Kata...
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="h-3.5 w-3.5" />
+                              {audioResult ? "Generate Ulang Sampel Suara" : "Buat & Dengarkan Sampel Suara"}
+                            </>
+                          )}
+                        </button>
                       </div>
                     ) : (
-                      <div className="space-y-2.5">
-                        {footageClips.map((clip) => (
-                          <div
-                            key={clip.path}
-                            className="rounded-lg p-3"
+                      <div className="space-y-3">
+                        <label
+                          className="flex items-center justify-between rounded-lg px-3 py-2 text-xs cursor-pointer"
+                          style={{
+                            backgroundColor: "var(--bg-elevated)",
+                            border: "1px solid var(--border-subtle)",
+                          }}
+                        >
+                          <span>Potong Jeda Kosong Otomatis (&gt;0,4 dtk)</span>
+                          <input
+                            type="checkbox"
+                            checked={trimSilence}
+                            onChange={(e) => setTrimSilence(e.target.checked)}
+                          />
+                        </label>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            disabled={isProcessingAudio || !isTauriRuntime()}
+                            onClick={handleToggleRecording}
+                            className="flex h-9 items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
                             style={{
-                              backgroundColor: "var(--bg-elevated)",
-                              border: "1px solid var(--border-subtle)",
+                              backgroundColor: isRecording ? "var(--danger)" : "var(--cta-bg)",
+                              color: isRecording ? "#ffffff" : "var(--cta-fg)",
                             }}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="truncate text-xs font-semibold">{clip.fileName}</span>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span
-                                  className="font-mono-num text-[11px]"
-                                  style={{ color: "var(--text-muted)" }}
-                                >
+                            {isRecording ? (
+                              <>
+                                <Square className="h-3.5 w-3.5 fill-current" />
+                                Stop ({recordSeconds}s)
+                              </>
+                            ) : (
+                              <>
+                                <Mic className="h-3.5 w-3.5" />
+                                Rekam Mic
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isProcessingAudio || isRecording || !isTauriRuntime()}
+                            onClick={handleUploadUserAudio}
+                            className="ui-btn-secondary flex h-9 items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            Upload MP3/WAV
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {audioError && (
+                      <div
+                        className="rounded-md p-3 text-xs"
+                        style={{
+                          backgroundColor: "var(--danger-soft)",
+                          border: "1px solid var(--danger)",
+                          color: "var(--danger)",
+                        }}
+                      >
+                        {audioError}
+                      </div>
+                    )}
+
+                    {audioResult && (
+                      <div
+                        className="rounded-lg p-3 space-y-2"
+                        style={{
+                          backgroundColor: "var(--bg-elevated)",
+                          border: "1px solid var(--accent)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between text-xs">
+                          <span
+                            className="inline-flex items-center gap-1.5 font-semibold"
+                            style={{ color: "var(--success)" }}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Suara Siap · {audioResult.providerUsed}
+                          </span>
+                          <span className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                            {formatSec(audioResult.durationMs)} · {audioResult.words.length} kata
+                          </span>
+                        </div>
+                        <audio
+                          controls
+                          src={toAssetUrl(audioResult.audioPath)}
+                          className="h-8 w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Local Footage Card (ONLY when Footage or Hybrid mode is active!) */}
+                  {visualMode !== "motion" && (
+                    <div className="ui-panel rounded-xl p-5 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <h2 className="text-sm font-bold">
+                            {visualMode === "hybrid"
+                              ? "Klip Footage Lokal (Opsional)"
+                              : "Klip Footage Lokal (*Wajib min. 1)"}
+                          </h2>
+                          <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                            AI memotong dan menyusun klip secara otomatis sinkron dengan suara dubbing.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isLoadingFootage || !isTauriRuntime()}
+                          onClick={handleAddFootage}
+                          className="ui-btn-primary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                        >
+                          {isLoadingFootage ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="h-3.5 w-3.5" />
+                          )}
+                          Tambah Video
+                        </button>
+                      </div>
+
+                      {footageClips.length === 0 ? (
+                        <div
+                          className="rounded-lg p-4 text-center text-xs"
+                          style={{
+                            backgroundColor: "var(--bg-elevated)",
+                            border: "1px dashed var(--border-strong)",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          Belum ada klip footage ditambahkan.
+                          {visualMode === "hybrid" && " Jika kosong, AI akan mengisi penuh dengan AI Motion."}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {footageClips.map((clip) => (
+                            <div
+                              key={clip.path}
+                              className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
+                              style={{
+                                backgroundColor: "var(--bg-elevated)",
+                                border: "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <span className="truncate font-semibold">{clip.fileName}</span>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className="font-mono-num text-[11px]" style={{ color: "var(--text-muted)" }}>
                                   {formatSec(clip.durationMs)}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setFootageClips((prev) =>
-                                      prev.filter((c) => c.path !== clip.path)
-                                    )
+                                    setFootageClips((prev) => prev.filter((c) => c.path !== clip.path))
                                   }
                                   className="p-1 cursor-pointer"
                                   style={{ color: "var(--danger)" }}
@@ -1360,505 +1446,243 @@ export default function WizardView({
                                 </button>
                               </div>
                             </div>
-
-                            {clip.thumbnails.length > 0 && (
-                              <div className="mt-2 grid grid-cols-2 gap-2">
-                                {clip.thumbnails.map((src, i) => (
-                                  <img
-                                    key={i}
-                                    src={src}
-                                    alt={`Thumbnail ${i + 1}`}
-                                    className="h-16 w-full rounded object-cover"
-                                    style={{ border: "1px solid var(--border-subtle)" }}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {visualMode === "hybrid" && (
-                      <div className="border-t pt-3" style={{ borderColor: "var(--border-subtle)" }}>
-                        <label className="mb-1.5 block text-xs font-semibold">
-                          Tema Kanvas untuk Scene AI Motion
-                        </label>
-                        <div className="grid grid-cols-5 gap-1.5">
-                          {AI_MOTION_THEMES.map((th) => {
-                            const active = motionTheme === th.id;
-                            return (
-                              <button
-                                key={th.id}
-                                type="button"
-                                onClick={() => setMotionTheme(th.id)}
-                                className="flex flex-col items-center gap-1 rounded-md py-1.5 text-[11px] font-medium cursor-pointer"
-                                style={{
-                                  backgroundColor: active
-                                    ? "var(--bg-hover)"
-                                    : "var(--bg-elevated)",
-                                  border: active
-                                    ? "1px solid var(--accent)"
-                                    : "1px solid var(--border-subtle)",
-                                }}
-                              >
-                                <span
-                                  className="h-4 w-4 rounded-full"
-                                  style={{
-                                    backgroundColor: th.bgHex,
-                                    border: `2px solid ${th.accentHex}`,
-                                  }}
-                                />
-                                <span>{th.label}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Coming Soon Slot: Google Flow / Seedance */}
-                    <div
-                      className="flex items-center justify-between rounded-lg px-3.5 py-2.5 text-xs opacity-65"
-                      style={{
-                        backgroundColor: "var(--bg-elevated)",
-                        border: "1px dashed var(--border-strong)",
-                      }}
-                    >
-                      <span
-                        className="inline-flex items-center gap-2"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
-                        <Lock className="h-3.5 w-3.5" />
-                        Generate AI Footage (Google Flow / Seedance)
-                      </span>
-                      <span
-                        className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
-                        style={{ backgroundColor: "var(--bg-panel)", color: "var(--text-muted)" }}
-                      >
-                        Coming Soon
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Right: Voiceover (TTS vs Suara Sendiri Auto-Sync) */}
-              <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
-                <div>
-                  <h2 className="text-sm font-bold">Voiceover & Auto-Sync</h2>
-                  <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                    Audio diproses dulu agar durasi scene & subtitle kinetik terkunci 100% akurat ke suara.
-                  </p>
-                </div>
-
-                {/* Tab Switch */}
-                <div
-                  className="grid grid-cols-2 rounded-lg p-1"
-                  style={{
-                    backgroundColor: "var(--bg-elevated)",
-                    border: "1px solid var(--border-subtle)",
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setAudioTab("tts")}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold cursor-pointer"
-                    style={{
-                      backgroundColor: audioTab === "tts" ? "var(--bg-panel)" : "transparent",
-                      color: audioTab === "tts" ? "var(--text-primary)" : "var(--text-muted)",
-                    }}
-                  >
-                    <Volume2 className="h-3.5 w-3.5" />
-                    TTS AI
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAudioTab("recorded")}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-semibold cursor-pointer"
-                    style={{
-                      backgroundColor: audioTab === "recorded" ? "var(--bg-panel)" : "transparent",
-                      color: audioTab === "recorded" ? "var(--text-primary)" : "var(--text-muted)",
-                    }}
-                  >
-                    <Mic className="h-3.5 w-3.5" />
-                    Suara Sendiri
-                  </button>
-                </div>
-
-                {audioTab === "tts" ? (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold">Mesin TTS</label>
-                      <select
-                        value={ttsEngine}
-                        onChange={(e) => {
-                          const next = e.target.value as "gemini" | "openai" | "windows_offline";
-                          setTtsEngine(next);
-                          if (next === "gemini") setTtsVoice("Kore");
-                          if (next === "openai") setTtsVoice("nova");
-                        }}
-                        className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                      >
-                        <option value="gemini">Gemini Native TTS (BYOK · Disarankan)</option>
-                        <option value="openai">OpenAI TTS (BYOK)</option>
-                        <option value="windows_offline">Windows Offline TTS (Gratis Tanpa Key)</option>
-                      </select>
-                    </div>
-
-                    {ttsEngine !== "windows_offline" && (
-                      <div>
-                        <label className="mb-1.5 block text-xs font-semibold">Karakter Suara</label>
-                        <select
-                          value={ttsVoice}
-                          onChange={(e) => setTtsVoice(e.target.value)}
-                          className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                        >
-                          {(ttsEngine === "gemini" ? GEMINI_VOICES : OPENAI_VOICES).map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.label}
-                            </option>
                           ))}
-                        </select>
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      disabled={isProcessingAudio || !isTauriRuntime()}
-                      onClick={handleGenerateTts}
-                      className="ui-btn-primary flex h-9 w-full items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                    >
-                      {isProcessingAudio ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Membuat Suara & Sinkronisasi Kata...
-                        </>
-                      ) : (
-                        <>
-                          <Volume2 className="h-3.5 w-3.5" />
-                          Generate Suara TTS & Auto-Sync
-                        </>
+                        </div>
                       )}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <label
-                      className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
-                      style={{
-                        backgroundColor: "var(--bg-elevated)",
-                        border: "1px solid var(--border-subtle)",
-                      }}
-                    >
-                      <span>Potong Jeda Kosong Otomatis (&gt;0,4 dtk)</span>
-                      <input
-                        type="checkbox"
-                        checked={trimSilence}
-                        onChange={(e) => setTrimSilence(e.target.checked)}
-                      />
-                    </label>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <button
-                        type="button"
-                        disabled={isProcessingAudio || !isTauriRuntime()}
-                        onClick={handleToggleRecording}
-                        className="flex h-10 items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                        style={{
-                          backgroundColor: isRecording ? "var(--danger)" : "var(--cta-bg)",
-                          color: isRecording ? "#ffffff" : "var(--cta-fg)",
-                        }}
-                      >
-                        {isRecording ? (
-                          <>
-                            <Square className="h-3.5 w-3.5 fill-current" />
-                            Stop ({recordSeconds}s)
-                          </>
-                        ) : (
-                          <>
-                            <Mic className="h-3.5 w-3.5" />
-                            Rekam Mic
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={isProcessingAudio || isRecording || !isTauriRuntime()}
-                        onClick={handleUploadUserAudio}
-                        className="ui-btn-secondary flex h-10 items-center justify-center gap-2 rounded-md text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                      >
-                        <Upload className="h-3.5 w-3.5" />
-                        Upload MP3/WAV
-                      </button>
                     </div>
+                  )}
+                </div>
 
-                    {isProcessingAudio && (
+                {/* Right Column: Zero-Friction AI Auto-Director Card ("Terima Jadi") */}
+                <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                        style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        AI Auto-Director · Terima Jadi
+                      </span>
+                      <h2 className="mt-1.5 text-sm font-bold">2. Rencana Otomatis AI</h2>
+                      <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                        Semua gaya visual, transisi, subtitle, dan backsound sudah dipilihkan AI sesuai prompt &amp; referensi lo — tanpa perlu pusing atur template.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Simple 1-Row Medium Switch (ONLY for Motion/Hybrid!) */}
+                  {visualMode !== "footage" && (
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-semibold">Gaya Visual Utama</label>
                       <div
-                        className="flex items-center gap-2 rounded-md p-3 text-xs"
+                        className="grid grid-cols-3 gap-1 rounded-lg p-1"
                         style={{
                           backgroundColor: "var(--bg-elevated)",
-                          color: "var(--text-secondary)",
+                          border: "1px solid var(--border-subtle)",
                         }}
                       >
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        Memotong jeda & mengambil timestamp kata otomatis...
+                        {[
+                          { id: "auto" as const, label: "✨ Otomatis AI" },
+                          { id: "3d_diorama" as const, label: "🧊 3D Diorama" },
+                          { id: "2d_freeform" as const, label: "🎨 2D Motion" },
+                        ].map((opt) => {
+                          const active = mediumChoice === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setMediumChoice(opt.id)}
+                              className="rounded-md py-2 text-xs font-semibold transition-colors cursor-pointer"
+                              style={{
+                                backgroundColor: active ? "var(--bg-panel)" : "transparent",
+                                color: active ? "var(--accent)" : "var(--text-muted)",
+                                border: active ? "1px solid var(--accent)" : "1px solid transparent",
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
 
-                {audioError && (
+                  {/* Plain-Indonesian Auto-Director Summary */}
                   <div
-                    className="rounded-md p-3 text-xs"
-                    style={{
-                      backgroundColor: "var(--danger-soft)",
-                      border: "1px solid var(--danger)",
-                      color: "var(--danger)",
-                    }}
-                  >
-                    {audioError}
-                  </div>
-                )}
-
-                {audioResult && (
-                  <div
-                    className="rounded-lg p-3.5 space-y-2.5"
+                    className="rounded-lg p-3.5 space-y-2.5 text-xs"
                     style={{
                       backgroundColor: "var(--bg-elevated)",
-                      border: "1px solid var(--accent)",
+                      border: "1px solid var(--border-subtle)",
                     }}
                   >
-                    <div className="flex items-center justify-between text-xs">
-                      <span
-                        className="inline-flex items-center gap-1.5 font-semibold"
-                        style={{ color: "var(--success)" }}
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Suara Siap · {audioResult.providerUsed}
-                      </span>
-                      <span className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                        {formatSec(audioResult.durationMs)} · {audioResult.words.length} kata
+                    <div className="flex items-start justify-between gap-2">
+                      <span style={{ color: "var(--text-muted)" }}>Medium Visual</span>
+                      <span className="text-right font-semibold">
+                        {visualMode === "footage"
+                          ? `Auto-Cut ${footageClips.length} Klip Footage`
+                          : resolvedMedium === "3d_diorama"
+                            ? "3D Diorama & Karakter (Three.js · 0 Kredit Video)"
+                            : "2D Motion Bebas AI (Tanpa Template)"}
                       </span>
                     </div>
-                    <audio
-                      controls
-                      src={toAssetUrl(audioResult.audioPath)}
-                      className="h-8 w-full"
-                    />
+                    <div className="flex items-start justify-between gap-2">
+                      <span style={{ color: "var(--text-muted)" }}>Arahan Gaya</span>
+                      <span className="text-right font-semibold">
+                        {styleRefResult?.customDesign?.name
+                          ? `Meniru "${styleRefResult.customDesign.name}"`
+                          : "Dirancang otomatis dari topik & script"}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-2">
+                      <span style={{ color: "var(--text-muted)" }}>Subtitle &amp; Audio</span>
+                      <span className="text-right font-semibold">
+                        {resolvedMedium === "3d_diorama"
+                          ? "Subtitle Tengah Shorts · BGM & SFX Otomatis"
+                          : "Subtitle Kinetik Sinkron · BGM & SFX Otomatis"}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-2">
+                      <span style={{ color: "var(--text-muted)" }}>Verifikasi Kualitas</span>
+                      <span className="text-right font-semibold" style={{ color: "var(--accent)" }}>
+                        Cek 4 Frame + Auto-Repair Aktif
+                      </span>
+                    </div>
                   </div>
-                )}
 
-                <div
-                  className="flex items-center justify-between border-t pt-4"
-                  style={{ borderColor: "var(--border-subtle)" }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="ui-btn-secondary inline-flex h-9 items-center gap-1.5 rounded-md px-3.5 text-xs font-medium cursor-pointer"
+                  {/* Hidden Collapsed Accordion for Optional Power-User Overrides */}
+                  <details
+                    className="rounded-lg"
+                    style={{
+                      backgroundColor: "var(--bg-elevated)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
                   >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    Kembali
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isFootageMandatoryMissing}
-                    onClick={() => setStep(3)}
-                    className="ui-btn-primary inline-flex h-9 items-center gap-1.5 rounded-md px-4 text-xs font-semibold disabled:opacity-45 cursor-pointer"
-                    title={
-                      isFootageMandatoryMissing
-                        ? "Mode Footage wajib mengunggah minimal 1 klip video lokal"
-                        : undefined
-                    }
-                  >
-                    {isFootageMandatoryMissing
-                      ? "Pilih Min. 1 Footage Dulu"
-                      : audioResult
-                        ? "Lanjut: Pilih Gaya"
-                        : visualMode === "footage"
-                          ? "Lanjut (Suara Auto-Generate)"
-                          : "Lanjut (Audio Demo Dulu)"}
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+                    <summary
+                      className="flex cursor-pointer items-center justify-between px-3.5 py-2.5 text-xs font-semibold select-none"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <Settings2 className="h-3.5 w-3.5" />
+                        Sesuaikan Manual (Opsional)
+                      </span>
+                      <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                        Subtitle · BGM · SFX
+                      </span>
+                    </summary>
 
-          {/* ==================== STEP 3: KLIK-KLIK PRESET & RACIK ==================== */}
-          {step === 3 && (
-            <div className="space-y-5">
-              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-                {/* Left: Caption Style & Accent */}
-                <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
-                  <h2 className="text-sm font-bold">Style Kinetic Caption & Warna</h2>
-                  <div className="space-y-1.5">
-                    {CAPTION_PRESETS.map((p) => {
-                      const active = captionPreset === p.id;
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => setCaptionPreset(p.id)}
-                          className="ui-row flex w-full items-center justify-between rounded-lg px-3.5 py-2.5 text-left cursor-pointer"
-                          style={{
-                            backgroundColor: active ? "var(--bg-hover)" : "var(--bg-elevated)",
-                            border: active
-                              ? "1px solid var(--border-strong)"
-                              : "1px solid var(--border-subtle)",
-                          }}
-                        >
-                          <div>
-                            <div className="text-xs font-semibold">{p.label}</div>
-                            <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
-                              {p.desc}
-                            </div>
-                          </div>
-                          {active && (
-                            <span
-                              className="h-2 w-2 rounded-full"
-                              style={{ backgroundColor: "var(--accent)" }}
+                    <div
+                      className="space-y-3 border-t p-3.5 text-xs"
+                      style={{ borderColor: "var(--border-subtle)" }}
+                    >
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold">Style Subtitle</label>
+                          <select
+                            value={captionPreset}
+                            onChange={(e) => setCaptionPreset(e.target.value as CaptionPreset)}
+                            className="ui-input w-full rounded-md px-2 py-1.5 text-xs"
+                          >
+                            {CAPTION_PRESETS.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-semibold">Backsound (BGM)</label>
+                          <select
+                            value={bgmPreset}
+                            onChange={(e) => setBgmPreset(e.target.value)}
+                            className="ui-input w-full rounded-md px-2 py-1.5 text-xs"
+                          >
+                            <option value="auto">Otomatis Dipilihkan AI</option>
+                            <option value="none">Tanpa BGM</option>
+                            {BGM_PRESETS.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[11px] font-semibold">Warna Sorotan</label>
+                        <div className="flex items-center gap-2">
+                          {ACCENT_SWATCHES.map((hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              onClick={() => setAccentColor(hex)}
+                              className="h-6 w-6 rounded-full cursor-pointer"
+                              style={{
+                                backgroundColor: hex,
+                                border:
+                                  accentColor === hex
+                                    ? "2px solid var(--text-primary)"
+                                    : "1px solid var(--border-strong)",
+                              }}
+                              aria-label={`Pilih warna ${hex}`}
                             />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                          ))}
+                        </div>
+                      </div>
 
-                  <div>
-                    <div className="mb-2 text-xs font-semibold">Warna Sorotan Kata</div>
-                    <div className="flex items-center gap-2.5">
-                      {ACCENT_SWATCHES.map((hex) => (
-                        <button
-                          key={hex}
-                          type="button"
-                          onClick={() => setAccentColor(hex)}
-                          className="h-7 w-7 rounded-full cursor-pointer"
-                          style={{
-                            backgroundColor: hex,
-                            border:
-                              accentColor === hex
-                                ? "2px solid var(--text-primary)"
-                                : "1px solid var(--border-strong)",
-                          }}
-                          aria-label={`Pilih warna ${hex}`}
-                        />
-                      ))}
+                      {visualMode === "footage" && (
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold">Motion Klip</label>
+                            <select
+                              value={motionPreset}
+                              onChange={(e) => setMotionPreset(e.target.value as MotionPreset)}
+                              className="ui-input w-full rounded-md px-2 py-1.5 text-xs"
+                            >
+                              {MOTION_PRESETS.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold">Transisi</label>
+                            <select
+                              value={transitionPreset}
+                              onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
+                              className="ui-input w-full rounded-md px-2 py-1.5 text-xs"
+                            >
+                              {TRANSITION_PRESETS.map((tr) => (
+                                <option key={tr.id} value={tr.id}>
+                                  {tr.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center justify-between rounded px-2.5 py-1.5 text-[11px] cursor-pointer" style={{ backgroundColor: "var(--bg-panel)" }}>
+                          <span>Auto-Ducking BGM</span>
+                          <input
+                            type="checkbox"
+                            checked={autoDucking}
+                            onChange={(e) => setAutoDucking(e.target.checked)}
+                          />
+                        </label>
+                        <label className="flex items-center justify-between rounded px-2.5 py-1.5 text-[11px] cursor-pointer" style={{ backgroundColor: "var(--bg-panel)" }}>
+                          <span>Auto SFX Transisi</span>
+                          <input
+                            type="checkbox"
+                            checked={autoSfx}
+                            onChange={(e) => setAutoSfx(e.target.checked)}
+                          />
+                        </label>
+                      </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Right: Motion, Transition, Overlay, Audio Pack */}
-                <div className="ui-panel rounded-xl p-5 lg:col-span-6 space-y-4">
-                  <h2 className="text-sm font-bold">Motion, Overlay & Audio Pack</h2>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold">Motion Utama</label>
-                      <select
-                        value={motionPreset}
-                        onChange={(e) => setMotionPreset(e.target.value as MotionPreset)}
-                        className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                      >
-                        {MOTION_PRESETS.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold">Transisi Antar Scene</label>
-                      <select
-                        value={transitionPreset}
-                        onChange={(e) => setTransitionPreset(e.target.value as TransitionPreset)}
-                        className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                      >
-                        {TRANSITION_PRESETS.map((tr) => (
-                          <option key={tr.id} value={tr.id}>
-                            {tr.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold">Visual Overlay</label>
-                    <select
-                      value={overlayMode}
-                      onChange={(e) =>
-                        setOverlayMode(
-                          e.target.value as
-                            | "auto"
-                            | "hook_headline"
-                            | "notification_banner"
-                            | "promo_badge"
-                            | "doodle_highlight"
-                            | "split_screen"
-                            | "none"
-                        )
-                      }
-                      className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                    >
-                      <option value="auto">Otomatis Dipilihkan AI Director (Disarankan)</option>
-                      <option value="hook_headline">Hook Headline Card (3 Detik Awal)</option>
-                      <option value="notification_banner">Native Notification Banner</option>
-                      <option value="promo_badge">Promo / Callout Badge</option>
-                      <option value="doodle_highlight">Doodle Marker Highlight</option>
-                      <option value="split_screen">Split-Screen / B-Roll Comparison</option>
-                      <option value="none">Tanpa Overlay Tambahan</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold">Mood Backsound (BGM)</label>
-                    <select
-                      value={bgmPreset}
-                      onChange={(e) => setBgmPreset(e.target.value)}
-                      className="ui-input w-full rounded-md px-2.5 py-2 text-xs font-medium"
-                    >
-                      <option value="none">Tanpa BGM</option>
-                      {BGM_PRESETS.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <label
-                      className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
-                      style={{
-                        backgroundColor: "var(--bg-elevated)",
-                        border: "1px solid var(--border-subtle)",
-                      }}
-                    >
-                      <span>Auto-Ducking BGM</span>
-                      <input
-                        type="checkbox"
-                        checked={autoDucking}
-                        onChange={(e) => setAutoDucking(e.target.checked)}
-                      />
-                    </label>
-                    <label
-                      className="flex items-center justify-between rounded-lg px-3 py-2.5 text-xs cursor-pointer"
-                      style={{
-                        backgroundColor: "var(--bg-elevated)",
-                        border: "1px solid var(--border-subtle)",
-                      }}
-                    >
-                      <span>Auto SFX Transisi</span>
-                      <input
-                        type="checkbox"
-                        checked={autoSfx}
-                        onChange={(e) => setAutoSfx(e.target.checked)}
-                      />
-                    </label>
-                  </div>
+                  </details>
                 </div>
               </div>
 
@@ -1875,22 +1699,21 @@ export default function WizardView({
                 </div>
               )}
 
-              {/* Final Assemble Action Strip */}
+              {/* Final Sat-Set Action Strip */}
               <div className="ui-panel flex flex-wrap items-center justify-between gap-4 rounded-xl px-5 py-4">
                 <div className="space-y-0.5 text-xs">
                   <div className="font-bold">{projectTitle || "Konten Baru"}</div>
                   <div className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                    Mode:{" "}
-                    {visualMode === "motion"
-                      ? `AI Motion (${motionTheme})`
-                      : visualMode === "hybrid"
-                        ? `Campur (${footageClips.length} klip + Motion)`
-                        : `Footage (${footageClips.length} klip)`}{" "}
-                    · {1 + bodySegments.filter((s) => s.trim()).length + 1} scene ·{" "}
+                    {visualMode === "footage"
+                      ? `Footage (${footageClips.length} klip)`
+                      : resolvedMedium === "3d_diorama"
+                        ? "3D Diorama (By-Code)"
+                        : "2D Motion Bebas AI"}
+                    {" · "}
                     {audioResult
-                      ? `suara tersinkron (${formatSec(audioResult.durationMs)})`
-                      : "audio demo"}
-                    {styleRefResult ? " · Referensi Gaya aktif" : ""}
+                      ? `Suara tersinkron (${formatSec(audioResult.durationMs)})`
+                      : "Suara dubbing otomatis"}
+                    {styleRefResult ? ` · Ref: ${styleRefResult.customDesign.name}` : ""}
                   </div>
                 </div>
 
@@ -1898,7 +1721,7 @@ export default function WizardView({
                   <button
                     type="button"
                     disabled={isAssembling}
-                    onClick={() => setStep(2)}
+                    onClick={() => setStep(1)}
                     className="ui-btn-secondary inline-flex h-9 items-center gap-1.5 rounded-md px-3.5 text-xs font-medium cursor-pointer"
                   >
                     <ArrowLeft className="h-3.5 w-3.5" />
@@ -1906,19 +1729,24 @@ export default function WizardView({
                   </button>
                   <button
                     type="button"
-                    disabled={isAssembling}
+                    disabled={isAssembling || isFootageMandatoryMissing}
                     onClick={handleAssembleProject}
-                    className="ui-btn-primary inline-flex h-9 items-center gap-2 rounded-md px-5 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                    className="ui-btn-primary inline-flex h-10 items-center gap-2 rounded-md px-5 text-xs font-bold disabled:opacity-50 cursor-pointer"
                   >
                     {isAssembling ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
                         {assembleStatus || "AI Director Sedang Meracik Video..."}
                       </>
+                    ) : isFootageMandatoryMissing ? (
+                      <>
+                        <Upload className="h-4 w-4" />
+                        Pilih Min. 1 Footage Dulu
+                      </>
                     ) : (
                       <>
                         <Wand2 className="h-4 w-4" />
-                        Racik Video dengan AI Director
+                        Buat Video Sekarang
                       </>
                     )}
                   </button>

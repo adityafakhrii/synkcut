@@ -26,6 +26,7 @@ export interface DesignReferencePanelProps {
 }
 
 const LAYER_LABELS: Record<string, string> = {
+  yt_4frames: "YouTube · 4 Frame Vision",
   yt_dlp: "yt-dlp · 4 frame",
   gemini_direct: "Gemini Video",
   oembed_thumbnail: "YouTube + Custom AI",
@@ -34,23 +35,6 @@ const LAYER_LABELS: Record<string, string> = {
   vision_ai: "Vision AI Custom",
   custom_ai: "Custom Art Direction AI",
   local_fallback: "Analisis Warna Lokal",
-};
-
-const PATTERN_LABELS: Record<string, string> = {
-  grid: "Grid",
-  dots: "Polka Dots",
-  diagonal: "Garis Diagonal",
-  aurora: "Aurora Glow",
-  paper_grain: "Paper Grain",
-  minimal: "Minimal Polos",
-};
-
-const CARD_LABELS: Record<string, string> = {
-  glass: "Glass",
-  solid: "Solid Clean",
-  brutalist: "Brutalist Offset",
-  hairline: "Editorial Hairline",
-  neon: "Neon Outline",
 };
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -639,18 +623,30 @@ export default function DesignReferencePanel({
 
           {/* Style Character Tokens */}
           <div className="flex flex-wrap gap-1 text-[10px]" style={{ color: "var(--text-muted)" }}>
+            <span
+              className="rounded px-1.5 py-0.5 font-semibold"
+              style={{
+                backgroundColor:
+                  value.customDesign.renderMedium === "3d_diorama"
+                    ? "var(--accent-soft)"
+                    : "var(--bg-elevated)",
+                color:
+                  value.customDesign.renderMedium === "3d_diorama"
+                    ? "var(--accent)"
+                    : "var(--text-primary)",
+              }}
+            >
+              {value.customDesign.renderMedium === "3d_diorama"
+                ? "Medium: 3D Diorama"
+                : "Medium: 2D Motion"}
+            </span>
+            {value.customDesign.captionPlacement === "center_middle" && (
+              <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
+                Subtitle: Tengah Shorts
+              </span>
+            )}
             <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
               Font: {value.customDesign.typography.headingFont}
-            </span>
-            <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
-              Latar:{" "}
-              {PATTERN_LABELS[value.customDesign.visualStyle.backgroundPattern] ||
-                value.customDesign.visualStyle.backgroundPattern}
-            </span>
-            <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
-              Kartu:{" "}
-              {CARD_LABELS[value.customDesign.visualStyle.cardStyle] ||
-                value.customDesign.visualStyle.cardStyle}
             </span>
             <span className="rounded px-1.5 py-0.5" style={{ backgroundColor: "var(--bg-elevated)" }}>
               Pacing: {value.customDesign.pacing}

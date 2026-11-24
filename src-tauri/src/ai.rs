@@ -1252,7 +1252,13 @@ pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme:
         .filter(|e| {
             matches!(
                 *e,
-                "custom_code" | "flow_diagram" | "motion_chart" | "tech_cards" | "stick_figure" | "breakdown_3d"
+                "diorama_3d"
+                    | "custom_code"
+                    | "flow_diagram"
+                    | "motion_chart"
+                    | "tech_cards"
+                    | "stick_figure"
+                    | "breakdown_3d"
             )
         })
         .unwrap_or("custom_code");
@@ -1282,6 +1288,50 @@ pub fn sanitize_ai_motion_value(raw: &Value, fallback_text: &str, default_theme:
     let takeaway = raw["takeaway"].as_str().unwrap_or("").to_string();
 
     match eng {
+        "diorama_3d" => {
+            let d3 = raw.get("diorama3d").filter(|v| v.is_object());
+            let setup_code = d3
+                .and_then(|v| v["setupCode"].as_str())
+                .map(clean_js_code_output)
+                .unwrap_or_default();
+            let animate_code = d3
+                .and_then(|v| v["animateCode"].as_str())
+                .map(clean_js_code_output)
+                .unwrap_or_default();
+            let visual_concept = d3
+                .and_then(|v| v["visualConcept"].as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| format!("Visual 3D Diorama untuk: {title}"));
+            let world_preset = d3
+                .and_then(|v| v["worldPreset"].as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("ground_cutaway");
+            let skills_used: Vec<String> = d3
+                .and_then(|v| v["skillsUsed"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(ToString::to_string))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["3d-diorama-storytelling".to_string()]);
+            json!({
+                "engine": "diorama_3d",
+                "theme": theme,
+                "title": title,
+                "subtitle": subtitle,
+                "takeaway": takeaway,
+                "diorama3d": {
+                    "setupCode": setup_code,
+                    "animateCode": animate_code,
+                    "visualConcept": visual_concept,
+                    "worldPreset": world_preset,
+                    "cameraNote": d3.and_then(|v| v["cameraNote"].as_str()).unwrap_or(""),
+                    "skillsUsed": skills_used,
+                    "verified": d3.and_then(|v| v["verified"].as_bool()).unwrap_or(false)
+                }
+            })
+        }
         "custom_code" => {
             let cc = raw.get("customCode").filter(|v| v.is_object());
             let code = cc
@@ -2577,6 +2627,57 @@ fn merge_and_sanitize_copilot_patch(
         }
     }
 
+    // 1.5. Deep-merge unified `world3d` if AI Copilot edited 3D Diorama setup/animation
+    if let Some(new_w3) = patch.get("world3d") {
+        if new_w3.is_null() {
+            updated["world3d"] = Value::Null;
+        } else if let Some(w3_obj) = new_w3.as_object() {
+            let orig_w3 = original.get("world3d").and_then(Value::as_object);
+            let raw_setup = w3_obj
+                .get("setupCode")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty() && *s != "[3d-world-setup-preserved]")
+                .map(clean_js_code_output)
+                .or_else(|| {
+                    orig_w3
+                        .and_then(|o| o.get("setupCode").and_then(Value::as_str))
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_default();
+            let raw_anim = w3_obj
+                .get("animateCode")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty() && *s != "[3d-world-animate-preserved]")
+                .map(clean_js_code_output)
+                .or_else(|| {
+                    orig_w3
+                        .and_then(|o| o.get("animateCode").and_then(Value::as_str))
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_default();
+            let world_preset = w3_obj
+                .get("worldPreset")
+                .and_then(Value::as_str)
+                .or_else(|| orig_w3.and_then(|o| o.get("worldPreset").and_then(Value::as_str)))
+                .unwrap_or("ground_cutaway")
+                .to_string();
+            let summary = w3_obj
+                .get("summary")
+                .and_then(Value::as_str)
+                .or_else(|| orig_w3.and_then(|o| o.get("summary").and_then(Value::as_str)))
+                .unwrap_or("3D Diorama World")
+                .to_string();
+            updated["world3d"] = json!({
+                "setupCode": raw_setup,
+                "animateCode": raw_anim,
+                "worldPreset": world_preset,
+                "summary": summary,
+                "verified": false
+            });
+            updated["version"] = json!("2.1");
+        }
+    }
+
     // 2. Merge scenes safely (handling BOTH full-array patches AND partial single-scene patches!)
     let footage_library: Vec<Value> = original
         .get("footageLibrary")
@@ -2674,7 +2775,14 @@ fn merge_and_sanitize_copilot_patch(
             }
 
             if !reflowed.is_empty() {
-                if reflowed.iter().any(|s| s["visualSource"] == "motion") {
+                let has_diorama = reflowed.iter().any(|s| s["aiMotion"]["engine"] == "diorama_3d")
+                    || updated.get("world3d").is_some_and(Value::is_object);
+                let has_custom = reflowed.iter().any(|s| s["aiMotion"]["engine"] == "custom_code");
+                if has_diorama {
+                    updated["version"] = json!("2.1");
+                } else if has_custom {
+                    updated["version"] = json!("2.0");
+                } else if reflowed.iter().any(|s| s["visualSource"] == "motion") {
                     updated["version"] = json!("1.1");
                 }
                 updated["scenes"] = Value::Array(reflowed);
@@ -2724,15 +2832,31 @@ pub async fn ai_copilot_patch(
         }
     }
 
+    let has_3d_world = project.get("world3d").is_some_and(Value::is_object)
+        || instruction.to_lowercase().contains("3d")
+        || instruction.to_lowercase().contains("diorama")
+        || instruction.to_lowercase().contains("karakter")
+        || instruction.to_lowercase().contains("kamera");
+
     let active_skills_text = motion_skills::build_active_skills_prompt(
         &app,
         &[
-            "motion-craft-physics".to_string(),
+            if has_3d_world {
+                "3d-diorama-storytelling".to_string()
+            } else {
+                "motion-craft-physics".to_string()
+            },
             "procedural-illustration-svg".to_string(),
             "kinetic-typography".to_string(),
             "product-ui-brand-storytelling".to_string(),
         ],
     );
+
+    let extra_3d_ref = if has_3d_world {
+        format!("\n\n{DIORAMA_3D_SDK_REFERENCE}")
+    } else {
+        String::new()
+    };
 
     let footage_hint = project
         .get("footageLibrary")
@@ -2759,12 +2883,13 @@ pub async fn ai_copilot_patch(
         .unwrap_or_default();
 
     let system_prompt = format!(
-        "Kamu adalah AI Video & Freeform Motion Director di aplikasi Synkcut v2.0.\n\
+        "Kamu adalah AI Video, 3D Diorama & Freeform Motion Director di aplikasi Synkcut v2.1.\n\
         Tugasmu menerapkan revisi kreatif user ke JSON proyek Synkcut secara presisi tanpa merusak path media lokal atau field wajib.\n\
         ATURAN KERAS:\n\
         1. Selalu kembalikan SEMUA scene proyek di array `scenes` (atau hanya scene target jika edit 1 scene), JANGAN hapus scene lain kecuali user minta menghapus.\n\
         2. JANGAN PERNAH memakai aset contoh / placeholder generik (seperti smartphone untuk topik kopi, atau label 'Masukan/Proses Inti').\n\
-        3. Untuk mengubah visual AI Motion secara BEBAS / CUSTOM (tanpa template!), set `visualSource: \"motion\"` dan `aiMotion`: {{\n\
+        3. Untuk mengubah dunia 3D Diorama (Three.js PBR), kembalikan field root `world3d`: {{\"setupCode\": \"...\", \"animateCode\": \"...\", \"worldPreset\": \"...\", \"summary\": \"...\"}} dan pastikan scene memakai `aiMotion.engine: \"diorama_3d\"`.\n\
+        4. Untuk mengubah visual AI Motion 2D secara BEBAS / CUSTOM (tanpa template!), set `visualSource: \"motion\"` dan `aiMotion`: {{\n\
            \"engine\": \"custom_code\", \"theme\": \"carbon|paper\", \"title\": \"...\",\n\
            \"customCode\": {{\n\
              \"visualConcept\": \"deskripsi singkat visual baru\",\n\
@@ -2773,15 +2898,15 @@ pub async fn ai_copilot_patch(
              \"code\": \"// Pure JS body of renderBeat(ctx, state, M) — lihat Motion SDK M di bawah!\"\n\
            }}\n\
         }}\n\
-        4. Jika scene lain tidak diubah dan kode-nya bertuliskan \"[custom-motion-code-preserved]\", biarkan saja atau jangan ubah scene itu (backend otomatis mempertahankan kode aslinya!).\n\
-        5. Untuk mengganti klip footage/cut: ubah `footageIndex` (atau `media.path`) dan `media.trimStartMs`.\n\
-        6. Untuk mengubah arahan desain custom: ubah `globalStyle.customDesign`.\n\
-        7. Nilai captionPreset: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech.\n\
-        8. Nilai transitionIn.preset: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade.\n\
-        9. Nilai sfx[].preset: whoosh_fast, whoosh_soft, pop_text, ding_notif, impact_boom, riser, camera_shutter, keyboard_click, cash_register, vinyl_scratch, glitch_zap, swoosh_reverse.\n\n\
-        {sdk_ref}\n\n\
+        5. Jika scene lain tidak diubah dan kode-nya bertuliskan \"[custom-motion-code-preserved]\", biarkan saja atau jangan ubah scene itu (backend otomatis mempertahankan kode aslinya!).\n\
+        6. Untuk mengganti klip footage/cut: ubah `footageIndex` (atau `media.path`) dan `media.trimStartMs`.\n\
+        7. Untuk mengubah arahan desain custom / gaya subtitle (termasuk \"black_pill\", \"outline_bold\", \"clean_shadow\", `captionPlacement: \"center_middle\"`): ubah `globalStyle.customDesign`.\n\
+        8. Nilai captionPreset: bold_pop, clean_minimal, kinetic_punch, luxury_editorial, neon_tech.\n\
+        9. Nilai transitionIn.preset: hard_cut, whip_pan, pop_zoom, glitch_flash, smooth_crossfade.\n\
+        10. Nilai sfx[].preset: whoosh_fast, whoosh_soft, pop_text, ding_notif, impact_boom, riser, camera_shutter, keyboard_click, cash_register, vinyl_scratch, glitch_zap, swoosh_reverse.\n\n\
+        {sdk_ref}{extra_3d_ref}\n\n\
         {active_skills_text}\n\n\
-        Balas HANYA dalam JSON: {{\"reply\":\"ringkasan singkat Bahasa Indonesia apa yang diubah\",\"globalStyle\":{{...}},\"scenes\":[...]}}",
+        Balas HANYA dalam JSON: {{\"reply\":\"ringkasan singkat Bahasa Indonesia apa yang diubah\",\"world3d\":{{...opsional jika 3D...}},\"globalStyle\":{{...}},\"scenes\":[...]}}",
         sdk_ref = MOTION_SDK_COMPACT_REFERENCE
     );
 
@@ -3049,13 +3174,16 @@ pub fn clean_js_code_output(raw: &str) -> String {
         trimmed
     };
     let mut s = unfenced.trim().to_string();
-    // If LLM wrapped the body inside `function renderBeat(ctx, state, M) { ... }`, unwrap cleanly
-    if let Some(fn_pos) = s.find("function renderBeat") {
-        if let Some(open_brace) = s[fn_pos..].find('{') {
-            if let Some(close_brace) = s.rfind('}') {
-                let inner_start = fn_pos + open_brace + 1;
-                if close_brace > inner_start {
-                    s = s[inner_start..close_brace].trim().to_string();
+    // If LLM wrapped the body inside `function renderBeat(...) { ... }`, `setupWorld(...) { ... }`, or `animateFrame(...) { ... }`, unwrap cleanly
+    for fn_sig in ["function renderBeat", "function setupWorld", "function animateFrame"] {
+        if let Some(fn_pos) = s.find(fn_sig) {
+            if let Some(open_brace) = s[fn_pos..].find('{') {
+                if let Some(close_brace) = s.rfind('}') {
+                    let inner_start = fn_pos + open_brace + 1;
+                    if close_brace > inner_start {
+                        s = s[inner_start..close_brace].trim().to_string();
+                        break;
+                    }
                 }
             }
         }
@@ -3594,6 +3722,421 @@ pub async fn ai_repair_beat_code(
     })
 }
 
+/* ==================== V2.1 BY-CODE 3D DIORAMA & CHARACTER ENGINE ==================== */
+
+const DIORAMA_3D_SDK_REFERENCE: &str = r#"=== SYNKCUT 3D DIORAMA SDK `D3` (100% By-Code Three.js PBR) ===
+You write TWO deterministic pure JS function bodies (NO window/document/fetch/eval/setTimeout/imports):
+1) `setupCode` — body of `function setupWorld(world, D3) { ... }` (called ONCE to build the entire miniature 3D world, props, & characters!)
+2) `animateCode` — body of `function animateFrame(world, state, D3) { ... }` (called every frame 30-60fps for smooth continuous camera choreography, character acting, object motion, & 3D-tracked HUD!)
+
+`world` handle:
+- `world.objects[name]` -> stored THREE.Object3D props
+- `world.characters[name]` -> stored CharacterRig actors
+- `world.data` -> plain object to store custom parameters/references
+
+`state` fields in `animateFrame`:
+- `globalTimeMs`, `totalDurationMs`, `globalProgress` (0..1 across entire video!)
+- `beatIndex` (0..beatCount-1), `beatCount`, `beatProgress` (0..1 inside current beat), `beatTimeMs`, `beatDurationMs`
+- `title`, `text`, `role` ("hook"|"body"|"cta"), `width`, `height`, `u`, `design`
+
+`D3` World & Lighting Builders (call ONE in `setupCode`):
+- `D3.setupDaylight(world, { skyTop?, skyMid?, skyBottom?, sunColor?, sunIntensity?, sunPos? })`
+- `D3.addClouds(world, { count=6, y=10 })` + in animate: `D3.animateClouds(world, tSec)`
+- `D3.buildOceanCutaway(world, { width=22, depth=16, waterHeight=11, surfaceColor?, deepColor?, seabedColor?, fishCount=7 })` + in animate: `D3.animateOcean(world, tSec)`
+- `D3.buildGroundCutaway(world, { style:'desert'|'grass'|'farm'|'urban', width=22, depth=22, thickness=4.5, withPit=false, pitRadius=3.6, withPond=false, treeCount=5 })`
+- `D3.buildRoomCutaway(world, { width=13, depth=11, height=6.8, wallColor?, floorColor?, trimColor? })`
+- `D3.buildStudioStage(world, { bgTop?, bgBottom?, stageColor?, radius=8.5 })`
+
+`D3` Stylized Articulated 3D Characters (Kenapa Yaaa? / How Come? / Zack D. style):
+- `const hero = D3.createCharacter(world, { name:'hero', pos:[x,y,z], rotY:0, scale:1, skin:'#F2C39B', outfitColor:'#2563EB', pantsColor:'#1E293B', hat:'hair'|'peci'|'cap'|'turban'|'helmet'|'none', glasses:false, mustache:false })`
+- In `animateCode`: `D3.poseCharacter(world.characters.hero, { action:'idle'|'point'|'wave'|'handshake'|'walk'|'think'|'surprised'|'sit'|'sleep'|'talk'|'cheer', phase: tSec, headTurn?: 0 })`
+
+`D3` 3D Prop Primitives (pass `world` OR a parent THREE.Group as 1st arg!):
+- `D3.group(world, { name?, pos?, rot?, scale? })`
+- `D3.box(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, emissiveIntensity?, pos?, rot?, scale? })`
+- `D3.cylinder(parent, { name?, radius?, rTop?, rBottom?, height, color, roughness?, metalness?, pos?, rot? })`
+- `D3.sphere(parent, { name?, radius, color, roughness?, metalness?, opacity?, emissive?, pos?, rot?, scale? })`
+- `D3.cone(parent, { name?, radius, height, color, pos?, rot? })`
+- `D3.torus(parent, { name?, radius, tube, color, pos?, rot? })`
+- `D3.tube(parent, [[x,y,z], [x2,y2,z2], ...], { name?, radius=0.12, color, metalness? })` (pipes, anchor cables, arches, wires!)
+- `D3.truss(parent, { name?, height=4.5, baseWidth=1.4, topWidth=0.55, levels=4, color, pos? })` (towers, rigs, cranes, stadiums!)
+- `D3.table(parent, { name?, size:[w,h,d], color?, pos?, rotY? })`
+- `D3.tree({ style:'palm'|'round'|'pine', scale=1, pos:[x,y,z] })` (add via `world.root.add(...)`)
+- `D3.fish({ color, scale, pos })` (add via `world.root.add(...)`)
+- `D3.particles3D(world, { name?, count=24, area:[6,5,6], center:[0,2,0], color:'#FFFFFF', radius:0.09 })`
+
+`D3` Continuous 3D Camera Choreography (CRITICAL for viral Shorts flow!):
+- `D3.setCamera(world, [x,y,z], [lx,ly,lz], fov=38)`
+- `D3.lerpCamera(world, [{ t:0, pos:[...], lookAt:[...], fov:38 }, { t:0.35, ... }, { t:0.7, ... }, { t:1, ... }], state.globalProgress)`
+
+`D3` 3D-Tracked 2D HUD Overlays (call in `animateCode` AFTER camera update):
+- `D3.drawPopupTitle(world, 'JUDUL PENDEK', { yRatio:0.18, accentWord:'KATA', color:'#FFFFFF', accentColor:'#FACC15', progress })` (use on Beat 0 hook!)
+- `D3.drawRuler(world, { minLabel:'0 m', maxLabel:'1500 m', progress: state.globalProgress, accent:'#FACC15' })` (great for depth/height topics!)
+- `D3.drawBadgeAt3D(world, [x,y,z], { text:'?', bg:'#FACC15', textColor:'#111827', scale:1, pulse: Math.sin(tSec*5) })`
+- `D3.drawCalloutAt3D(world, [x,y,z], 'Label Singkat', { color:'#FACC15', side:'right', progress:1 })`
+- Math helpers: `D3.clamp`, `D3.lerp`, `D3.ease`, `D3.spring`, `D3.interpolate`, `D3.rng(seed)`, `D3.THREE`."#;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Generate3DDioramaRequest {
+    pub project_title: String,
+    pub format: String,
+    pub beats: Vec<StoryboardBeat>,
+    #[serde(default)]
+    pub words: Vec<WordTimestamp>,
+    #[serde(default)]
+    pub custom_design: Option<Value>,
+    #[serde(default)]
+    pub style_reference: Option<Value>,
+    pub audio_path: Option<String>,
+    pub audio_source: String,
+    pub trim_silence: bool,
+    pub caption_preset: String,
+    pub accent_color: String,
+    pub bgm_preset: String,
+    pub auto_ducking: bool,
+    pub auto_sfx: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repair3DDioramaRequest {
+    pub project_title: String,
+    pub world_preset: String,
+    pub broken_setup_code: String,
+    pub broken_animate_code: String,
+    pub error_message: String,
+    pub beats_summary: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repair3DDioramaResponse {
+    pub setup_code: String,
+    pub animate_code: String,
+    pub provider_used: String,
+}
+
+#[tauri::command]
+pub async fn ai_generate_3d_diorama(
+    app: AppHandle,
+    req: Generate3DDioramaRequest,
+) -> Result<Value, String> {
+    if req.beats.is_empty() {
+        return Err("Storyboard beat kosong.".to_string());
+    }
+
+    let resolved = byok::resolve_active_provider(&app)?;
+    let full_text_context = format!(
+        "{} {}",
+        req.project_title,
+        req.beats
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let inferred_preset = crate::style_ref::infer_world_preset(&full_text_context.to_lowercase());
+
+    let raw_custom_design = req.custom_design.as_ref().or_else(|| {
+        req.style_reference
+            .as_ref()
+            .and_then(|sr| sr.get("customDesign"))
+            .filter(|v| v.is_object())
+    });
+
+    let mut sanitized_custom = raw_custom_design
+        .map(|cd| sanitize_custom_design_value(cd, &full_text_context, &[]))
+        .unwrap_or_else(|| {
+            sanitize_custom_design_value(
+                &json!({
+                    "renderMedium": "3d_diorama",
+                    "worldPreset": inferred_preset,
+                    "captionPlacement": "center_middle",
+                    "visualStyle": { "captionLook": if inferred_preset == "ocean_cross_section" { "black_pill" } else { "outline_bold" } }
+                }),
+                &format!("3d diorama {full_text_context}"),
+                &[],
+            )
+        });
+
+    // Ensure 3D Diorama viral Shorts subtitle placement & medium are cleanly set
+    sanitized_custom.render_medium = "3d_diorama".to_string();
+    if sanitized_custom.world_preset == "auto" {
+        sanitized_custom.world_preset = inferred_preset.to_string();
+    }
+    sanitized_custom.caption_placement = "center_middle".to_string();
+    if !matches!(
+        sanitized_custom.visual_style.caption_look.as_str(),
+        "black_pill" | "outline_bold" | "clean_shadow"
+    ) {
+        sanitized_custom.visual_style.caption_look =
+            if sanitized_custom.world_preset == "ocean_cross_section" {
+                "black_pill".to_string()
+            } else {
+                "outline_bold".to_string()
+            };
+    }
+
+    let skills_rules =
+        motion_skills::build_active_skills_prompt(&app, &["3d-diorama-storytelling".to_string()]);
+
+    let beat_lines: String = req
+        .beats
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            format!(
+                "- Beat #{i} ({}, {:.1}s–{:.1}s): title=\"{}\" | narasi=\"{}\" | konsep=\"{}\"",
+                b.role,
+                (b.start_ms as f64) / 1000.0,
+                (b.end_ms as f64) / 1000.0,
+                b.title,
+                b.text,
+                b.visual_concept
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let system_prompt = format!(
+        "Kamu adalah Technical 3D Animator & Director (gaya Blender / Zack D. Films / AkuTahu / Kenapa Yaaa? / How Come?) di Synkcut v2.1.\n\
+        Tugasmu merancang SATU DUNIA 3D DIORAMA UTUH (100% by-code Three.js PBR) beserta animasi kamera & akting karakter 3D kontinu di seluruh beat.\n\
+        ATURAN WAJIB:\n\
+        1. `setupCode`: Panggil salah satu world builder (`D3.buildOceanCutaway`, `D3.buildGroundCutaway`, `D3.buildRoomCutaway`, atau `D3.buildStudioStage`) lalu bangun objek 3D nyata sesuai topik (bangunan, rig, meja, kolam, mesin kopi, pohon, kabel, dll) + 1–3 karakter 3D (`D3.createCharacter`) yang relevan dengan cerita! DILARANG membuat aset tidak nyambung.\n\
+        2. `animateCode`: \n\
+           - Hitung `const tSec = state.globalTimeMs / 1000;` dan panggil `D3.animateClouds(world, tSec)` (dan `D3.animateOcean(world, tSec)` jika laut).\n\
+           - Gunakan `D3.lerpCamera(world, [...minimal 4-5 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak sinematik kontinu dari shot pembuka lebar -> zoom-in detail/cutaway -> fokus karakter/aksi -> pullback penutup!\n\
+           - Gerakkan karakter dengan `D3.poseCharacter` berdasarkan `state.beatIndex` (misal beat 0 point/surprised, beat 1 talk/walk, beat 2 think/handshake, beat terakhir wave/cheer) dan gerakkan objek 3D (putar, naik-turun, pop-in).\n\
+           - Tampilkan `D3.drawPopupTitle(world, ...)` pada Beat 0 (`state.beatIndex === 0`) dan tambahkan `D3.drawBadgeAt3D` / `D3.drawCalloutAt3D` / `D3.drawRuler` yang nyambung dengan topik!\n\
+        3. Pastikan koordinat kamera SELALU mengarah ke pusat diorama yang punya banyak objek 3D terang & berwarna jelas.\n\
+        4. Kembalikan HANYA JSON valid:\n\
+        {{\n\
+          \"worldPreset\": \"ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
+          \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia tentang dunia 3D diorama yang dibangun\",\n\
+          \"recommendedCaptionLook\": \"black_pill|outline_bold|clean_shadow\",\n\
+          \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
+          \"setupCode\": \"...pure JS body of setupWorld(world, D3)...\",\n\
+          \"animateCode\": \"...pure JS body of animateFrame(world, state, D3)...\",\n\
+          \"beatNotes\": [\"catatan kamera/aksi beat 0\", \"catatan kamera/aksi beat 1\", \"...\"]\n\
+        }}\n\n\
+        {DIORAMA_3D_SDK_REFERENCE}\n\n\
+        {skills_rules}"
+    );
+
+    let user_prompt = format!(
+        "Proyek: \"{}\" (format: {})\n\
+        World Preset Disarankan: {}\n\
+        Arahan Referensi / Art Direction: {} — {}\n\
+        Gaya Subtitle Referensi: {} (posisi: {})\n\
+        HUD Referensi: {:?}\n\n\
+        Daftar Beat & Narasi Dubbing ({} beat):\n{}\n\n\
+        Bangun dunia 3D Diorama + karakter + kamera sinematik yang kaya detail, cerah bergaya Blender daylight, 100% sesuai topik & bebas error!",
+        req.project_title.trim(),
+        req.format,
+        sanitized_custom.world_preset,
+        sanitized_custom.name,
+        sanitized_custom.art_direction_notes,
+        sanitized_custom.visual_style.caption_look,
+        sanitized_custom.caption_placement,
+        sanitized_custom.hud_elements,
+        req.beats.len(),
+        beat_lines
+    );
+
+    let (val, _provider) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+
+    let setup_code = clean_js_code_output(val["setupCode"].as_str().unwrap_or(""));
+    let animate_code = clean_js_code_output(val["animateCode"].as_str().unwrap_or(""));
+    let world_preset = val["worldPreset"]
+        .as_str()
+        .filter(|s| {
+            matches!(
+                *s,
+                "ocean_cross_section"
+                    | "ground_cutaway"
+                    | "desert_cutaway"
+                    | "room_cutaway"
+                    | "outdoor_farm"
+                    | "studio_stage"
+            )
+        })
+        .unwrap_or(&sanitized_custom.world_preset)
+        .to_string();
+    let world_summary = val["worldSummary"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| format!("Dunia 3D Diorama untuk {}", req.project_title.trim()));
+
+    if let Some(rec_look) = val["recommendedCaptionLook"].as_str() {
+        if matches!(rec_look, "black_pill" | "outline_bold" | "clean_shadow") {
+            sanitized_custom.visual_style.caption_look = rec_look.to_string();
+        }
+    }
+    let effective_bgm = if req.bgm_preset == "auto" || req.bgm_preset.trim().is_empty() {
+        val["recommendedBgm"]
+            .as_str()
+            .filter(|s| matches!(*s, "upbeat_promo" | "lofi_chill" | "cinematic_pulse" | "minimal_tech"))
+            .unwrap_or(&sanitized_custom.recommended_bgm)
+            .to_string()
+    } else {
+        req.bgm_preset.clone()
+    };
+    sanitized_custom.world_preset = world_preset.clone();
+    sanitized_custom.recommended_bgm = effective_bgm.clone();
+
+    let beat_notes: Vec<String> = val["beatNotes"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let custom_design_json = serde_json::to_value(&sanitized_custom).unwrap_or(Value::Null);
+    let effective_accent = if !sanitized_custom.palette.accent_primary.trim().is_empty() {
+        sanitized_custom.palette.accent_primary.clone()
+    } else {
+        req.accent_color.clone()
+    };
+
+    let mut scenes_json = Vec::with_capacity(req.beats.len());
+    for (idx, beat) in req.beats.iter().enumerate() {
+        let sfx_arr = if req.auto_sfx && !beat.sfx.is_empty() && beat.sfx != "none" {
+            vec![json!({
+                "preset": beat.sfx,
+                "offsetMs": 0,
+                "volume": 0.62
+            })]
+        } else {
+            Vec::new()
+        };
+        let cam_note = beat_notes
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| beat.visual_concept.clone());
+
+        scenes_json.push(json!({
+            "id": beat.id,
+            "role": beat.role,
+            "startMs": beat.start_ms,
+            "endMs": beat.end_ms,
+            "text": beat.text,
+            "visualSource": "motion",
+            "aiMotion": {
+                "engine": "diorama_3d",
+                "theme": "paper",
+                "title": beat.title,
+                "subtitle": req.project_title.trim(),
+                "diorama3d": {
+                    "visualConcept": beat.visual_concept,
+                    "worldPreset": world_preset,
+                    "cameraNote": cam_note,
+                    "skillsUsed": ["3d-diorama-storytelling"],
+                    "verified": false
+                }
+            },
+            "media": {
+                "path": Value::Null,
+                "secondaryPath": Value::Null,
+                "trimStartMs": 0,
+                "fit": "cover"
+            },
+            "motion": {
+                "preset": "static_clean",
+                "intensity": 0.2
+            },
+            "transitionIn": {
+                "preset": "hard_cut",
+                "durationMs": 0
+            },
+            "sfx": sfx_arr,
+            "overlays": []
+        }));
+    }
+
+    let now_ts = chrono::Utc::now().timestamp_millis();
+    let now_iso = chrono::Utc::now().to_rfc3339();
+
+    Ok(json!({
+        "version": "2.1",
+        "meta": {
+            "id": format!("proj_{now_ts}"),
+            "name": req.project_title.trim(),
+            "format": req.format,
+            "aspectRatio": "9:16",
+            "fps": 30,
+            "createdAt": now_iso,
+            "updatedAt": now_iso
+        },
+        "styleReference": req.style_reference.unwrap_or(Value::Null),
+        "footageLibrary": [],
+        "world3d": {
+            "setupCode": setup_code,
+            "animateCode": animate_code,
+            "worldPreset": world_preset,
+            "summary": world_summary,
+            "verified": false
+        },
+        "globalStyle": {
+            "captionPreset": req.caption_preset,
+            "accentColor": effective_accent,
+            "showProgressBar": true,
+            "customDesign": custom_design_json,
+            "bgm": {
+                "preset": effective_bgm,
+                "volume": 0.22,
+                "autoDucking": req.auto_ducking
+            },
+            "safeZone": "tiktok_reels"
+        },
+        "voiceover": {
+            "source": req.audio_source,
+            "audioPath": req.audio_path,
+            "trimSilence": req.trim_silence,
+            "words": req.words
+        },
+        "scenes": scenes_json
+    }))
+}
+
+#[tauri::command]
+pub async fn ai_repair_3d_diorama(
+    app: AppHandle,
+    req: Repair3DDioramaRequest,
+) -> Result<Repair3DDioramaResponse, String> {
+    let resolved = byok::resolve_active_provider(&app)?;
+    let system_prompt = format!(
+        "Kamu adalah Three.js 3D Debugger di Synkcut.\n\
+        Perbaiki `setupCode` dan `animateCode` berikut agar 100% bebas syntax/runtime error, objek berada di depan kamera, terang bergaya daylight, dan lolos verifikasi 4 frame WebGL!\n\
+        Balas HANYA JSON: {{\"setupCode\": \"...\", \"animateCode\": \"...\"}}.\n\n\
+        {DIORAMA_3D_SDK_REFERENCE}"
+    );
+    let user_prompt = format!(
+        "Proyek: \"{}\" (worldPreset: {})\nBeat: {}\nError Validasi: \"{}\"\n\nsetupCode sebelumnya:\n```js\n{}\n```\n\nanimateCode sebelumnya:\n```js\n{}\n```",
+        req.project_title,
+        req.world_preset,
+        req.beats_summary,
+        req.error_message,
+        req.broken_setup_code.chars().take(4000).collect::<String>(),
+        req.broken_animate_code.chars().take(4000).collect::<String>()
+    );
+
+    let (val, provider_used) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+    let fixed_setup = clean_js_code_output(val["setupCode"].as_str().unwrap_or(""));
+    let fixed_anim = clean_js_code_output(val["animateCode"].as_str().unwrap_or(""));
+    if fixed_setup.len() < 30 || fixed_anim.len() < 30 {
+        return Err("AI tidak mengembalikan perbaikan kode 3D yang lengkap.".to_string());
+    }
+    Ok(Repair3DDioramaResponse {
+        setup_code: fixed_setup,
+        animate_code: fixed_anim,
+        provider_used,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3867,5 +4410,61 @@ mod tests {
     fn test_clean_js_code_output_unwraps_fences_and_function_wrapper() {
         let raw = "```javascript\nfunction renderBeat(ctx, state, M) {\n  M.drawBackdrop(ctx, state);\n}\n```";
         assert_eq!(clean_js_code_output(raw), "M.drawBackdrop(ctx, state);");
+        let setup_raw = "```js\nfunction setupWorld(world, D3) {\n  D3.buildOceanCutaway(world);\n}\n```";
+        assert_eq!(clean_js_code_output(setup_raw), "D3.buildOceanCutaway(world);");
+    }
+
+    #[test]
+    fn test_sanitize_ai_motion_supports_diorama_3d_and_copilot_preserves_world3d() {
+        let raw_motion = json!({
+            "engine": "diorama_3d",
+            "title": "Anjungan Minyak Laut",
+            "diorama3d": {
+                "visualConcept": "Rig minyak mengapung di atas laut cutaway 1500m",
+                "worldPreset": "ocean_cross_section",
+                "cameraNote": "Dive dari permukaan laut ke bawah air"
+            }
+        });
+        let sanitized = sanitize_ai_motion_value(&raw_motion, "Anjungan minyak", "paper");
+        assert_eq!(sanitized["engine"], "diorama_3d");
+        assert_eq!(sanitized["diorama3d"]["worldPreset"], "ocean_cross_section");
+
+        let orig = json!({
+            "version": "2.1",
+            "world3d": {
+                "setupCode": "D3.buildOceanCutaway(world);",
+                "animateCode": "D3.animateOcean(world, state.globalTimeMs / 1000);",
+                "worldPreset": "ocean_cross_section",
+                "summary": "Laut cutaway"
+            },
+            "scenes": [{
+                "id": "beat_1",
+                "role": "hook",
+                "startMs": 0,
+                "endMs": 3200,
+                "text": "Kok anjungan minyak bisa ngapung?",
+                "visualSource": "motion",
+                "aiMotion": sanitized,
+                "media": { "path": null, "trimStartMs": 0, "fit": "cover" },
+                "motion": { "preset": "static_clean", "intensity": 0.2 },
+                "transitionIn": { "preset": "hard_cut", "durationMs": 0 },
+                "sfx": [],
+                "overlays": []
+            }]
+        });
+
+        let patch = json!({
+            "world3d": {
+                "setupCode": "D3.buildOceanCutaway(world, { fishCount: 12 });",
+                "animateCode": "[3d-world-animate-preserved]"
+            }
+        });
+        let merged = merge_and_sanitize_copilot_patch(&orig, &patch, Some("beat_1"), "Tambah ikan");
+        assert_eq!(merged["version"], "2.1");
+        assert!(merged["world3d"]["setupCode"].as_str().unwrap().contains("fishCount: 12"));
+        assert_eq!(
+            merged["world3d"]["animateCode"],
+            "D3.animateOcean(world, state.globalTimeMs / 1000);"
+        );
     }
 }
