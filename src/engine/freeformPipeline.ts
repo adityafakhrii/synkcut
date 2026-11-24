@@ -117,7 +117,7 @@ export async function verifyAndRepairProjectBeats(
 
     if (!passed3d) {
       fallbackCount++;
-      const note = `Fallback Diorama 3D Kontekstual (${lastErr3d.slice(0, 72)})`;
+      const note = `Fallback Tipografi Kinetik Aman (${lastErr3d.slice(0, 72)})`;
       nextWorld3d = {
         ...nextWorld3d,
         setupCode: "",

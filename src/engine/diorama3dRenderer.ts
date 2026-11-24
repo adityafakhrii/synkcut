@@ -7,7 +7,12 @@ import {
   type DioramaFrameState,
   type DioramaWorldHandle,
 } from "./diorama3dSdk";
-import { defaultDesignFromTheme, validateBeatCodeSafety } from "./freeformMotionRenderer";
+import {
+  buildBeatRenderState,
+  defaultDesignFromTheme,
+  renderFreeformBeat,
+  validateBeatCodeSafety,
+} from "./freeformMotionRenderer";
 import { clamp } from "./motionSdk";
 
 type CompiledSetupFn = (
@@ -222,89 +227,6 @@ function compileAnimateCode(code: string): { fn: CompiledAnimateFn | null; error
   }
 }
 
-/**
- * Clean contextual 3D fallback world (used ONLY when custom 3D code is empty or unrecoverable).
- * Adapts to the detected `worldPreset` so it NEVER renders unrelated sample assets.
- */
-function buildContextualFallbackWorld(world: DioramaWorldHandle, worldPreset: string) {
-  if (worldPreset === "ocean_cross_section") {
-    D3_SDK.buildOceanCutaway(world, { fishCount: 7 });
-    D3_SDK.box(world, { name: "deck", size: [5.4, 0.7, 3.8], color: "#E2E8F0", pos: [0, 2.3, 0] });
-    D3_SDK.truss(world, { name: "tower", height: 4.2, baseWidth: 1.4, topWidth: 0.55, color: "#94A3B8", pos: [0, 2.65, 0] });
-    for (const sx of [-1.8, 1.8]) {
-      for (const sz of [-1.1, 1.1]) {
-        D3_SDK.cylinder(world, { radius: 0.34, height: 3.4, color: "#D97706", pos: [sx, 0.7, sz] });
-      }
-    }
-    D3_SDK.createCharacter(world, { name: "host", pos: [1.3, 2.65, 0.7], outfitColor: "#F97316", hat: "helmet", scale: 0.72 });
-  } else if (worldPreset === "desert_cutaway") {
-    D3_SDK.buildGroundCutaway(world, { style: "desert", withPit: true, treeCount: 5 });
-    D3_SDK.createCharacter(world, { name: "host", pos: [-1.1, -3.0, 0.4], outfitColor: "#E2E8F0", hat: "turban", rotY: 0.4 });
-    D3_SDK.createCharacter(world, { name: "guest", pos: [1.1, -3.0, 0.4], outfitColor: "#3B82F6", hat: "hair", rotY: -0.4 });
-  } else if (worldPreset === "room_cutaway") {
-    D3_SDK.buildRoomCutaway(world, {});
-    D3_SDK.table(world, { name: "desk", size: [3.2, 1.25, 1.6], pos: [0, 0, -0.8] });
-    D3_SDK.createCharacter(world, { name: "host", pos: [-1.4, 0, 1.2], outfitColor: "#2563EB", hat: "hair", rotY: 0.35 });
-    D3_SDK.createCharacter(world, { name: "guest", pos: [1.6, 0, 1.0], outfitColor: "#10B981", hat: "cap", rotY: -0.4 });
-  } else {
-    D3_SDK.buildGroundCutaway(world, { style: worldPreset === "outdoor_farm" ? "farm" : "grass", withPond: worldPreset === "outdoor_farm", treeCount: 5 });
-    D3_SDK.createCharacter(world, { name: "host", pos: [-1.8, 0, 2.8], outfitColor: "#2563EB", hat: "cap", rotY: 0.25 });
-    D3_SDK.createCharacter(world, { name: "guest", pos: [1.8, 0, 2.5], outfitColor: "#F59E0B", hat: "hair", rotY: -0.35 });
-  }
-}
-
-function animateContextualFallbackWorld(
-  world: DioramaWorldHandle,
-  state: DioramaFrameState,
-  worldPreset: string
-) {
-  const t = state.globalTimeMs / 1000;
-  D3_SDK.animateClouds(world, t);
-  if (worldPreset === "ocean_cross_section") {
-    D3_SDK.animateOcean(world, t);
-    D3_SDK.lerpCamera(
-      world,
-      [
-        { t: 0, pos: [12, 6, 17], lookAt: [0, 1.2, 0], fov: 38 },
-        { t: 0.45, pos: [10, -2.5, 16], lookAt: [0, -2.8, 0], fov: 40 },
-        { t: 1.0, pos: [-9, 4.5, 17], lookAt: [0, 0.2, 0], fov: 38 },
-      ],
-      state.globalProgress
-    );
-    D3_SDK.drawRuler(world, { minLabel: "0 m", maxLabel: "1000 m", progress: state.globalProgress });
-  } else {
-    D3_SDK.lerpCamera(
-      world,
-      [
-        { t: 0, pos: [11, 7.5, 13], lookAt: [0, 1.2, 0], fov: 36 },
-        { t: 0.5, pos: [4.5, 4.2, 9.5], lookAt: [0, 1.3, 0], fov: 34 },
-        { t: 1.0, pos: [-9, 6.5, 12.5], lookAt: [0, 1.1, 0], fov: 36 },
-      ],
-      state.globalProgress
-    );
-  }
-  const host = world.characters["host"];
-  const guest = world.characters["guest"];
-  if (host) {
-    D3_SDK.poseCharacter(host, {
-      action: state.beatIndex % 2 === 0 ? "point" : "talk",
-      phase: t * 1.4,
-    });
-  }
-  if (guest) {
-    D3_SDK.poseCharacter(guest, {
-      action: state.beatIndex % 2 === 0 ? "idle" : "wave",
-      phase: t * 1.2,
-    });
-  }
-  if (state.beatIndex === 0 && state.beatProgress < 0.85) {
-    D3_SDK.drawPopupTitle(world, state.title, {
-      yRatio: 0.18,
-      progress: clamp(state.beatProgress * 3.5),
-    });
-  }
-}
-
 function getOrBuildWorld(
   setupCode: string,
   worldPreset: string,
@@ -347,11 +269,12 @@ function getOrBuildWorld(
 
   let setupError: string | undefined;
 
-  if (setupCode.trim()) {
+  if (!setupCode.trim()) {
+    setupError = "setupCode 3D kosong.";
+  } else {
     const compiled = compileSetupCode(setupCode);
     if (!compiled.fn) {
       setupError = compiled.error || "Gagal compile setupCode.";
-      buildContextualFallbackWorld(world, worldPreset);
     } else {
       let guardSteps = 0;
       const guard = () => {
@@ -359,23 +282,14 @@ function getOrBuildWorld(
       };
       try {
         compiled.fn(world, D3_SDK, guard);
-        // Ensure lighting exists even if LLM omitted D3.setupDaylight
+        // Ensure basic lighting exists if LLM omitted explicit lights
         if (!world.sunLight && !world.hemiLight) {
-          D3_SDK.setupDaylight(world);
+          D3_SDK.setupAtmosphere(world);
         }
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);
-        // Reset cleanly to contextual fallback
-        while (world.root.children.length > 0) {
-          world.root.remove(world.root.children[0]);
-        }
-        world.objects = {};
-        world.characters = {};
-        buildContextualFallbackWorld(world, worldPreset);
       }
     }
-  } else {
-    buildContextualFallbackWorld(world, worldPreset);
   }
 
   if (builtWorldCache.size >= 6) {
@@ -390,6 +304,37 @@ function getOrBuildWorld(
   const entry: CachedWorldEntry = { world, setupError };
   builtWorldCache.set(key, entry);
   return entry;
+}
+
+/**
+ * Zero-Sample-Asset Fallback: if 3D WebGL or LLM 3D code fails completely after auto-repair,
+ * NEVER inject unrelated 3D sample objects (no oil rigs, no tables, no dummy characters).
+ * Render clean brand-styled kinetic typography of the user's real beat text instead.
+ */
+function renderNeutralTypographyFallback(params: {
+  ctx: CanvasRenderingContext2D;
+  width: number;
+  height: number;
+  project: SynkcutProject;
+  scene: SceneItem;
+  sceneProgress: number;
+}) {
+  const { ctx, width, height, project, scene, sceneProgress } = params;
+  const customDesign = project.globalStyle?.customDesign ?? null;
+  const accentColor =
+    customDesign?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
+  const beatState = buildBeatRenderState({
+    width,
+    height,
+    scene,
+    progress: sceneProgress,
+    fps: project.meta?.fps || 30,
+    allWords: project.voiceover?.words ?? [],
+    accentColor,
+    customDesign,
+    brandLogoUrl: project.styleReference?.logoDataUrl ?? null,
+  });
+  renderFreeformBeat(ctx, beatState, "");
 }
 
 export function clearDiorama3DCache() {
@@ -411,12 +356,7 @@ export function renderDiorama3DFrame(params: {
   const { ctx, width, height, project, scene, globalTimeMs, sceneProgress } = params;
   const webgl = getSharedWebGL(width, height);
   if (!webgl) {
-    // Graceful 2D sky fallback if WebGL is unavailable in headless env
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, "#5AAEE8");
-    grad.addColorStop(1, "#166996");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
+    renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
     return { ok: false, error: "WebGL tidak tersedia pada perangkat ini." };
   }
 
@@ -427,9 +367,19 @@ export function renderDiorama3DFrame(params: {
     beatSpec?.worldPreset ||
     project.world3d?.worldPreset ||
     project.globalStyle?.customDesign?.worldPreset ||
-    "ground_cutaway";
+    "custom";
+
+  if (!setupCode || !animateCode) {
+    renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
+    return { ok: false, error: "Kode 3D belum tersedia." };
+  }
 
   const entry = getOrBuildWorld(setupCode, worldPreset, webgl.envTexture, width, height);
+  if (entry.setupError) {
+    renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
+    return { ok: false, error: entry.setupError };
+  }
+
   const world = entry.world;
   world.hudQueue = [];
 
@@ -482,7 +432,7 @@ export function renderDiorama3DFrame(params: {
     width,
     height,
     u: width / 1080,
-    title: scene.aiMotion?.title || project.meta?.name || "3D Diorama",
+    title: scene.aiMotion?.title || project.meta?.name || "3D Scene",
     text: scene.text || "",
     role: scene.role || "body",
     words: localWords,
@@ -490,27 +440,21 @@ export function renderDiorama3DFrame(params: {
     design: customDesign,
   };
 
-  let runError = entry.setupError;
+  const compiledAnim = compileAnimateCode(animateCode);
+  if (!compiledAnim.fn) {
+    renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
+    return { ok: false, error: compiledAnim.error };
+  }
 
-  if (!entry.setupError && animateCode) {
-    const compiledAnim = compileAnimateCode(animateCode);
-    if (!compiledAnim.fn) {
-      runError = compiledAnim.error;
-      animateContextualFallbackWorld(world, frameState, worldPreset);
-    } else {
-      let guardSteps = 0;
-      const guard = () => {
-        if (++guardSteps > 12000) throw new Error("Loop guard animateCode terlampaui.");
-      };
-      try {
-        compiledAnim.fn(world, frameState, D3_SDK, guard);
-      } catch (err) {
-        runError = err instanceof Error ? err.message : String(err);
-        animateContextualFallbackWorld(world, frameState, worldPreset);
-      }
-    }
-  } else {
-    animateContextualFallbackWorld(world, frameState, worldPreset);
+  let guardSteps = 0;
+  const guard = () => {
+    if (++guardSteps > 12000) throw new Error("Loop guard animateCode terlampaui.");
+  };
+  try {
+    compiledAnim.fn(world, frameState, D3_SDK, guard);
+  } catch (err) {
+    renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   // Render WebGL scene and blit seamlessly onto target 2D canvas
@@ -518,7 +462,7 @@ export function renderDiorama3DFrame(params: {
   ctx.save();
   ctx.drawImage(webgl.canvas, 0, 0, width, height);
 
-  // Render 3D-tracked 2D HUD overlays (depth ruler, '?' badges, popup titles, callouts)
+  // Render 3D-tracked 2D HUD overlays
   for (const op of world.hudQueue) {
     try {
       op.draw(ctx, width, height);
@@ -528,7 +472,7 @@ export function renderDiorama3DFrame(params: {
   }
   ctx.restore();
 
-  return runError ? { ok: false, error: runError } : { ok: true };
+  return { ok: true };
 }
 
 /**

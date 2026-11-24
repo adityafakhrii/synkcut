@@ -984,6 +984,9 @@ export async function deleteCustomMotionSkill(skillId: string): Promise<MotionSk
 export interface PlanStoryboardResponse {
   beats: StoryboardBeat[];
   providerUsed: string;
+  recommendedMedium?: "2d_freeform" | "3d_diorama";
+  mediumReason?: string;
+  autoDesign?: CustomDesignDirection | null;
 }
 
 export async function aiPlanStoryboard(req: {
@@ -1005,6 +1008,9 @@ export async function aiPlanStoryboard(req: {
     const per = Math.round(totalMs / list.length);
     return {
       providerUsed: "browser preview",
+      recommendedMedium: req.customDesign?.renderMedium === "3d_diorama" ? "3d_diorama" : "2d_freeform",
+      mediumReason: "Dipilih otomatis berdasarkan konteks topik & referensi.",
+      autoDesign: null,
       beats: list.map((txt, idx) => ({
         id: `beat_${idx + 1}`,
         role: idx === 0 ? "hook" : idx === list.length - 1 ? "cta" : "body",
@@ -1187,46 +1193,43 @@ export async function aiRepair3dDiorama(req: {
 }
 
 /**
- * AI Auto-Director helper: resolves whether the video should render as a 3D Diorama
- * or 2D Freeform Motion based on user override, attached reference DNA, and topic cues.
+ * AI Auto-Director helper: resolves visual medium cleanly without noisy example keyword biases.
+ * Priority: explicit user switch > attached reference medium > AI Storyboard Director decision > explicit "3d/diorama" request > 2d_freeform.
  */
 export function resolveAutoRenderMedium(params: {
   preference: "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
   styleRef?: StyleReferenceResult | null;
+  aiRecommendedMedium?: "2d_freeform" | "3d_diorama" | null;
   topicOrScript: string;
 }): "3d_diorama" | "2d_freeform" {
   if (params.preference === "3d_diorama") return "3d_diorama";
   if (params.preference === "2d_freeform") return "2d_freeform";
+
   const refMed = params.styleRef?.customDesign?.renderMedium;
   if (refMed === "3d_diorama") return "3d_diorama";
   if (refMed === "2d_freeform") return "2d_freeform";
 
-  const lower = `${params.topicOrScript} ${params.styleRef?.title ?? ""} ${params.styleRef?.styleDnaSummary ?? ""}`.toLowerCase();
-  const cues3d = [
-    "3d",
+  if (params.aiRecommendedMedium === "3d_diorama") return "3d_diorama";
+  if (params.aiRecommendedMedium === "2d_freeform") return "2d_freeform";
+
+  const lower = `${params.topicOrScript}`.toLowerCase();
+  const explicit3dCues = [
+    "3d diorama",
+    "diorama 3d",
     "diorama",
-    "akutahu",
-    "kenapa",
-    "how come",
-    "zack",
-    "cutaway",
-    "blender",
-    "karakter",
-    "laut",
-    "anjungan",
-    "lubang tanah",
-    "stadion",
-    "bangunan",
-    "gedung",
-    "arsitek",
-    "bawah tanah",
-    "ternak",
-    "kolam",
-    "sejarah",
-    "cerita",
-    "eksperimen",
+    "animasi 3d",
+    "3d animation",
+    "karakter 3d",
+    "3d character",
+    "gaya 3d",
+    "visual 3d",
+    "miniatur 3d",
+    "cutaway 3d",
+    "3d cutaway",
+    "blender 3d",
+    "3d explainer",
   ];
-  return cues3d.some((k) => lower.includes(k)) ? "3d_diorama" : "2d_freeform";
+  return explicit3dCues.some((k) => lower.includes(k)) ? "3d_diorama" : "2d_freeform";
 }
 
 export async function pickRemotionExportFolder(): Promise<string | null> {

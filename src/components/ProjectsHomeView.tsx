@@ -313,10 +313,13 @@ export default function ProjectsHomeView({
         audioRes = null;
       }
 
-      // 3/3 Plan micro-beat storyboard (2.5-4.5s/beat, 100% custom visual concepts — ZERO sample assets!)
+      // 3/3 Plan micro-beat storyboard + AI medium & custom palette direction!
       let beats: StoryboardBeat[] = [];
+      let aiRecommendedMedium: "2d_freeform" | "3d_diorama" | null = null;
+      let aiMediumReason: string | null = null;
+      let autoDesign = null;
       if (!isFootageMode) {
-        setCreateStatusText("3/3 Merancang storyboard micro-beat tanpa template...");
+        setCreateStatusText("3/3 Merancang storyboard & arahan visual kustom dari prompt...");
         const styleReference: ProjectStyleReference | null = styleRef
           ? {
               sourceType: styleRef.sourceType,
@@ -341,6 +344,9 @@ export default function ProjectsHomeView({
             styleReference,
           });
           beats = planned.beats;
+          aiRecommendedMedium = planned.recommendedMedium ?? null;
+          aiMediumReason = planned.mediumReason ?? null;
+          autoDesign = planned.autoDesign ?? null;
         } catch {
           beats = [];
         }
@@ -358,6 +364,9 @@ export default function ProjectsHomeView({
         fullScript,
         audio: audioRes,
         beats,
+        aiRecommendedMedium,
+        aiMediumReason,
+        autoDesign,
         styleRef,
         attachedClips,
         ttsEngine: heroTtsEngine,

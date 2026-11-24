@@ -119,17 +119,17 @@ const BUILTIN_SKILLS: &[BuiltinSkillDef] = &[
     },
     BuiltinSkillDef {
         id: "3d-diorama-storytelling",
-        name: "3D Diorama & Character Storytelling",
-        source: "Synkcut 3D Engine (Zack D. / AkuTahu / Kenapa Yaaa? style)",
-        category: "3D Diorama & Karakter",
-        summary: "Dunia 3D cutaway PBR siang hari, karakter 3D berpose ekspresif, kamera 3D kontinu antar beat, dan HUD terikat koordinat 3D.",
-        content: r#"# Skill: 3D Diorama & Character Storytelling (100% By-Code Three.js PBR)
-- Build ONE cohesive 3D miniature world in `setupWorld(world, D3)` with bright Blender-style daylight (`D3.setupDaylight` + `D3.addClouds`), soft shadows, and tactile clay/matte PBR surfaces (`roughness: 0.65-0.88`).
-- Choose the matching cutaway world builder (`D3.buildOceanCutaway`, `D3.buildGroundCutaway`, `D3.buildRoomCutaway`, or `D3.buildStudioStage`) so the environment visually explains the topic immediately — NEVER leave an empty dark void.
-- Populate with bespoke 3D props built from `D3.box`, `D3.roundedBox`, `D3.cylinder`, `D3.sphere`, `D3.cone`, `D3.torus`, `D3.tube`, `D3.lathe`, `D3.truss`, `D3.tree`, `D3.table`, `D3.particles3D` AND stylized articulated 3D humans via `D3.createCharacter(...)`.
-- Drive expressive acting in `animateFrame(world, state, D3)` with `D3.poseCharacter(char, { action, phase, headTurn })` synced to `state.beatIndex` and `state.beatProgress` (`idle`, `point`, `wave`, `handshake`, `walk`, `think`, `surprised`, `sit`, `sleep`, `talk`).
-- Choreograph CONTINUOUS 3D camera movement across beats using `D3.lerpCamera(world, keyframes, state.globalProgress)`: wide establishing -> dramatic dive/push-in -> side cutaway reveal -> character close-up -> grand pullback finale!
-- Layer crisp 3D-tracked HUD graphics (`D3.drawRuler`, `D3.drawBadgeAt3D`, `D3.drawPopupTitle`, `D3.drawCalloutAt3D`) while keeping the vertical center-middle zone (y = 0.54..0.64) clear for viral Shorts captions."#,
+        name: "3D Scene, Diorama & Character Storytelling",
+        source: "Synkcut 3D Engine (Three.js PBR)",
+        category: "3D Scene & Karakter",
+        summary: "Dunia 3D PBR bebas sesuai prompt (siang/malam/neon/angkasa/studio), karakter 3D berpose opsional, kamera 3D kontinu, dan HUD 3D.",
+        content: r#"# Skill: 3D Scene, Diorama & Character Storytelling (100% Prompt-Driven Three.js PBR)
+- Follow the user's prompt and attached visual reference 100% — NEVER force a single preset look!
+- Configure lighting & atmosphere to match the prompt with `D3.setupAtmosphere(world, { bgTop, bgMid, bgBottom, isDark, keyColor, fillColor, stars })` (bright daylight, dark cyberpunk neon, outer space with stars, warm sunset, cozy interior, or clean studio).
+- Optional environment helpers (`D3.buildOceanCutaway`, `D3.buildGroundCutaway`, `D3.buildRoomCutaway`, `D3.buildStudioStage`) should ONLY be used when they genuinely fit the topic; otherwise construct a bespoke environment from scratch using `D3.THREE` and procedural primitives (`D3.box`, `D3.cylinder`, `D3.sphere`, `D3.cone`, `D3.torus`, `D3.tube`, `D3.truss`, `D3.particles3D`).
+- Add articulated 3D characters (`D3.createCharacter` + `D3.poseCharacter`) ONLY when the story benefits from human actors.
+- Choreograph smooth continuous 3D camera motion across beats via `D3.lerpCamera(world, keyframes, state.globalProgress)`.
+- Layer 3D-tracked HUD graphics (`D3.drawBadgeAt3D`, `D3.drawCalloutAt3D`, `D3.drawRuler`, `D3.drawPopupTitle`) ONLY when relevant to the narration."#,
     },
 ];
 

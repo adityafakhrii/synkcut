@@ -288,7 +288,110 @@ export function createDiorama3DSdk() {
     interpolate,
     rng: seededRng,
 
-    /** Blender-style daylight PBR sky + warm sun + cool sky hemisphere fill + soft fog */
+    /**
+     * Universal 3D Atmosphere & Lighting Builder: works for ANY mood requested by the user's prompt
+     * (daylight, night, neon cyberpunk, outer space with stars, warm cafe/sunset, clean dark/light studio).
+     */
+    setupAtmosphere(
+      world: DioramaWorldHandle,
+      opts?: {
+        bgTop?: string;
+        bgMid?: string;
+        bgBottom?: string;
+        isDark?: boolean;
+        ambientColor?: string;
+        ambientIntensity?: number;
+        keyColor?: string;
+        keyIntensity?: number;
+        keyPos?: Vec3Tuple;
+        fillColor?: string;
+        fillIntensity?: number;
+        fogColor?: string;
+        fogNear?: number;
+        fogFar?: number;
+        stars?: boolean;
+      }
+    ) {
+      const isDark = opts?.isDark ?? false;
+      const top = opts?.bgTop || (isDark ? "#070B18" : "#5AAEE8");
+      const mid = opts?.bgMid || (isDark ? "#101932" : "#A3D7F5");
+      const bottom = opts?.bgBottom || (isDark ? "#182442" : "#E6F3FC");
+      world.skyColorTop = top;
+      world.skyColorBottom = bottom;
+
+      const skyTex = createSkyTexture(top, mid, bottom);
+      world.ownedTextures.push(skyTex);
+      world.scene.background = skyTex;
+      world.scene.fog = new THREE.Fog(
+        toColor(opts?.fogColor || bottom, isDark ? 0x101932 : 0xd8eefc),
+        opts?.fogNear ?? 36,
+        opts?.fogFar ?? 135
+      );
+
+      if (world.hemiLight) world.scene.remove(world.hemiLight);
+      if (world.sunLight) {
+        world.scene.remove(world.sunLight);
+        world.scene.remove(world.sunLight.target);
+      }
+
+      const hemi = new THREE.HemisphereLight(
+        toColor(opts?.ambientColor || (isDark ? "#7AA2F7" : "#DDF1FF"), 0xddf1ff),
+        toColor(isDark ? "#1A1B26" : "#9C8A78", 0x9c8a78),
+        opts?.ambientIntensity ?? (isDark ? 0.85 : 1.15)
+      );
+      world.scene.add(hemi);
+      world.hemiLight = hemi;
+
+      const key = new THREE.DirectionalLight(
+        toColor(opts?.keyColor || (isDark ? "#E0F2FE" : "#FFF6E5"), 0xfff6e5),
+        opts?.keyIntensity ?? (isDark ? 2.1 : 2.35)
+      );
+      const sp = opts?.keyPos ?? [18, 28, 16];
+      key.position.set(sp[0], sp[1], sp[2]);
+      key.castShadow = true;
+      key.shadow.mapSize.set(1024, 1024);
+      key.shadow.camera.near = 2;
+      key.shadow.camera.far = 110;
+      const d = 24;
+      key.shadow.camera.left = -d;
+      key.shadow.camera.right = d;
+      key.shadow.camera.top = d;
+      key.shadow.camera.bottom = -d;
+      key.shadow.bias = -0.0008;
+      key.shadow.normalBias = 0.04;
+      world.scene.add(key);
+      world.scene.add(key.target);
+      world.sunLight = key;
+
+      const fill = new THREE.DirectionalLight(
+        toColor(opts?.fillColor || (isDark ? "#A855F7" : "#AAD4FF"), 0xaad4ff),
+        opts?.fillIntensity ?? (isDark ? 0.95 : 0.55)
+      );
+      fill.position.set(-16, 10, -14);
+      world.root.add(fill);
+
+      if (opts?.stars) {
+        const rand = seededRng(509);
+        const starGrp = new THREE.Group();
+        const starGeo = new THREE.SphereGeometry(0.11, 6, 6);
+        const starMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        for (let i = 0; i < 65; i++) {
+          const s = new THREE.Mesh(starGeo, starMat);
+          const theta = rand() * Math.PI * 2;
+          const phi = Math.acos(2 * rand() - 1);
+          const r = 34 + rand() * 24;
+          s.position.set(
+            r * Math.sin(phi) * Math.cos(theta),
+            Math.abs(r * Math.cos(phi)) * 0.8 + 2,
+            r * Math.sin(phi) * Math.sin(theta)
+          );
+          starGrp.add(s);
+        }
+        registerObj(world, starGrp, "__stars");
+      }
+    },
+
+    /** Bright daylight PBR sky helper (shorthand for `setupAtmosphere` with warm sun) */
     setupDaylight(
       world: DioramaWorldHandle,
       opts?: {
@@ -303,60 +406,18 @@ export function createDiorama3DSdk() {
         fogFar?: number;
       }
     ) {
-      const top = opts?.skyTop || "#5AAEE8";
-      const mid = opts?.skyMid || "#A3D7F5";
-      const bottom = opts?.skyBottom || "#E6F3FC";
-      world.skyColorTop = top;
-      world.skyColorBottom = bottom;
-
-      const skyTex = createSkyTexture(top, mid, bottom);
-      world.ownedTextures.push(skyTex);
-      world.scene.background = skyTex;
-      world.scene.fog = new THREE.Fog(
-        toColor(opts?.fogColor || bottom, 0xd8eefc),
-        opts?.fogNear ?? 38,
-        opts?.fogFar ?? 130
-      );
-
-      // Remove old lights inside root if called twice
-      if (world.hemiLight) world.scene.remove(world.hemiLight);
-      if (world.sunLight) {
-        world.scene.remove(world.sunLight);
-        world.scene.remove(world.sunLight.target);
-      }
-
-      const hemi = new THREE.HemisphereLight(
-        toColor("#DDF1FF", 0xddf1ff),
-        toColor("#9C8A78", 0x9c8a78),
-        1.15
-      );
-      world.scene.add(hemi);
-      world.hemiLight = hemi;
-
-      const sun = new THREE.DirectionalLight(
-        toColor(opts?.sunColor || "#FFF6E5", 0xfff6e5),
-        opts?.sunIntensity ?? 2.35
-      );
-      const sp = opts?.sunPos ?? [18, 28, 16];
-      sun.position.set(sp[0], sp[1], sp[2]);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
-      sun.shadow.camera.near = 2;
-      sun.shadow.camera.far = 110;
-      const d = 24;
-      sun.shadow.camera.left = -d;
-      sun.shadow.camera.right = d;
-      sun.shadow.camera.top = d;
-      sun.shadow.camera.bottom = -d;
-      sun.shadow.bias = -0.0008;
-      sun.shadow.normalBias = 0.04;
-      world.scene.add(sun);
-      world.scene.add(sun.target);
-      world.sunLight = sun;
-
-      const fill = new THREE.DirectionalLight(0xaad4ff, 0.55);
-      fill.position.set(-16, 10, -14);
-      world.root.add(fill);
+      this.setupAtmosphere(world, {
+        bgTop: opts?.skyTop || "#5AAEE8",
+        bgMid: opts?.skyMid || "#A3D7F5",
+        bgBottom: opts?.skyBottom || "#E6F3FC",
+        isDark: false,
+        keyColor: opts?.sunColor || "#FFF6E5",
+        keyIntensity: opts?.sunIntensity ?? 2.35,
+        keyPos: opts?.sunPos ?? [18, 28, 16],
+        fogColor: opts?.fogColor,
+        fogNear: opts?.fogNear,
+        fogFar: opts?.fogFar,
+      });
     },
 
     /** Soft Blender-style puffy 3D clouds drifting gently in the upper sky */

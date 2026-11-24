@@ -39,6 +39,7 @@ export type AiMotionEngine =
 export type RenderMedium = "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
 
 export type Diorama3DWorldPreset =
+  | "custom"
   | "ocean_cross_section"
   | "ground_cutaway"
   | "desert_cutaway"

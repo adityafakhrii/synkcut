@@ -250,85 +250,39 @@ fn sanitize_engines(arr: Option<&Vec<Value>>) -> Vec<String> {
 
 pub fn detect_3d_diorama_cues(lower: &str) -> bool {
     let cues = [
+        "3d diorama",
+        "diorama 3d",
         "diorama",
-        "akutahu",
-        "aku tahu",
-        "kenapa yaaa",
-        "kenapa ya",
-        "how come",
-        "zack d",
-        "zackdfilms",
-        "blender",
-        "cutaway",
-        "karakter 3d",
         "animasi 3d",
-        "3d explainer",
+        "3d animation",
+        "karakter 3d",
         "3d character",
+        "3d explainer",
         "3d storytelling",
-        "anjungan",
-        "laut",
-        "lubang tanah",
-        "stadion",
-        "bangunan",
-        "gedung",
-        "arsitek",
-        "bawah tanah",
-        "dasar laut",
-        "miniatur",
+        "miniatur 3d",
         "3d model",
-        "3d shorts",
+        "3d scene",
+        "cutaway 3d",
+        "3d cutaway",
+        "blender 3d",
+        "gaya 3d",
+        "model 3d",
+        "visual 3d",
     ];
     cues.iter().any(|c| lower.contains(c))
 }
 
 pub fn infer_world_preset(lower: &str) -> &'static str {
-    if lower.contains("laut")
-        || lower.contains("samudra")
-        || lower.contains("ocean")
-        || lower.contains("kapal")
-        || lower.contains("anjungan")
-        || lower.contains("minyak")
-        || lower.contains("ikan")
-        || lower.contains("selam")
-        || lower.contains("sea")
-        || lower.contains("lele")
-        || lower.contains("kolam")
-    {
+    if lower.contains("ocean") || lower.contains("underwater") || lower.contains("bawah laut") {
         "ocean_cross_section"
-    } else if lower.contains("gurun")
-        || lower.contains("desert")
-        || lower.contains("pasir")
-        || lower.contains("tunisia")
-        || lower.contains("lubang")
-        || lower.contains("bawah tanah")
-        || lower.contains("underground")
-        || lower.contains("gua")
-    {
+    } else if lower.contains("desert") || lower.contains("gurun") || lower.contains("bawah tanah") {
         "desert_cutaway"
-    } else if lower.contains("kamar")
-        || lower.contains("ruang")
-        || lower.contains("kantor")
-        || lower.contains("kafe")
-        || lower.contains("kopi")
-        || lower.contains("dapur")
-        || lower.contains("rumah")
-        || lower.contains("stadion")
-        || lower.contains("room")
-        || lower.contains("studio")
-        || lower.contains("pabrik")
-    {
+    } else if lower.contains("indoor") || lower.contains("interior") || lower.contains("ruangan") {
         "room_cutaway"
-    } else if lower.contains("ternak")
-        || lower.contains("kebun")
-        || lower.contains("sawah")
-        || lower.contains("desa")
-        || lower.contains("farm")
-        || lower.contains("taman")
-        || lower.contains("hutan")
-    {
-        "outdoor_farm"
+    } else if lower.contains("studio") || lower.contains("produk") {
+        "studio_stage"
     } else {
-        "ground_cutaway"
+        "custom"
     }
 }
 
@@ -342,7 +296,8 @@ fn sanitize_render_medium(val: Option<&str>, fallback: &str) -> String {
 fn sanitize_world_preset(val: Option<&str>, fallback: &str) -> String {
     match val.unwrap_or(fallback) {
         valid
-        @ ("ocean_cross_section"
+        @ ("custom"
+        | "ocean_cross_section"
         | "ground_cutaway"
         | "desert_cutaway"
         | "room_cutaway"
@@ -1612,9 +1567,9 @@ fn design_system_prompt() -> &'static str {
     "Kamu adalah Art Director & Motion Systems Designer kelas dunia untuk Synkcut. \
     Tugasmu menghasilkan ARAHAN DESAIN CUSTOM (Custom Design System) yang UNIK dan AKURAT meniru medium + gaya referensi gambar, YouTube Shorts, URL, atau brief user — BUKAN mengikuti template kaku! \
     DETEKSI MEDIUM VISUAL DENGAN TELITI: \
-    - Jika gambar referensi menampilkan animasi 3D diorama, cutaway laut/tanah/ruangan, karakter 3D bergaya Blender/Clay/Zack D. Films/AkuTahu/Kenapa Yaaa?/How Come?, SET `renderMedium: \"3d_diorama\"`, pilih `worldPreset` yang cocok, dan set `captionPlacement: \"center_middle\"` bila subtitle berada di tengah layar! \
-    - Jika referensi menampilkan desain grafis 2D, website UI, tipografi kinetik, poster, atau ilustrasi datar, SET `renderMedium: \"2d_freeform\"`. \
-    - Deteksi gaya subtitle asli referensi secara tepat: \"black_pill\" (kotak hitam bundar teks putih ala AkuTahu), \"outline_bold\" (teks putih tebal + garis tepi hitam + kata sorotan kuning ala Kenapa Yaaa?), \"clean_shadow\" (teks putih bersih bershadow halus ala How Come?), atau gaya lain. \
+    - Jika gambar referensi atau prompt user secara jelas menampilkan/meminta animasi 3D (diorama, lingkungan 3D, karakter 3D, cutaway 3D, produk 3D, atau dunia 3D bergaya apa pun: siang, malam, neon, luar angkasa, atau studio), SET `renderMedium: \"3d_diorama\"`, pilih `worldPreset` yang paling sesuai (`custom` jika tidak cocok dengan preset cutaway), dan set `captionPlacement: \"center_middle\"` HANYA bila subtitle referensi memang berada di tengah layar. \
+    - Jika referensi menampilkan desain grafis 2D, website UI, tipografi kinetik, poster, promo produk, atau ilustrasi datar, SET `renderMedium: \"2d_freeform\"`. \
+    - Deteksi gaya subtitle asli referensi secara tepat: \"black_pill\" (kotak hitam bundar teks putih), \"outline_bold\" (teks putih tebal + garis tepi hitam + kata sorotan), \"clean_shadow\" (teks putih bersih bershadow halus), \"custom_pill\", \"editorial_bar\", \"glass_tag\", atau \"minimal_clean\". \
     Pastikan textPrimary kontras jelas terhadap bgTop/bgBottom agar selalu mudah dibaca. \
     Balas HANYA dalam JSON valid tanpa teks luar."
 }
@@ -2427,10 +2382,11 @@ mod tests {
 
     #[test]
     fn test_3d_diorama_detection_and_viral_shorts_caption_sanitization() {
-        assert!(detect_3d_diorama_cues("anjungan minyak laut ternyata ngapung @akutahu_id"));
-        assert_eq!(infer_world_preset("anjungan minyak di tengah laut"), "ocean_cross_section");
-        assert_eq!(infer_world_preset("rumah di dalam lubang tanah gurun"), "desert_cutaway");
-        assert_eq!(infer_world_preset("arsitek membangun atap stadion gbk"), "room_cutaway");
+        assert!(detect_3d_diorama_cues("buatkan animasi 3d dengan karakter 3d yang menarik"));
+        assert!(!detect_3d_diorama_cues("promo codepolitan junior belajar coding anak pakai scratch"));
+        assert_eq!(infer_world_preset("eksplorasi bawah laut"), "ocean_cross_section");
+        assert_eq!(infer_world_preset("arsitektur gurun bawah tanah"), "desert_cutaway");
+        assert_eq!(infer_world_preset("kota cyberpunk neon malam hari"), "custom");
 
         let val = json!({
             "customDesign": {
@@ -2445,7 +2401,7 @@ mod tests {
                 }
             }
         });
-        let sanitized = sanitize_custom_design_value(&val, "Anjungan minyak laut", &[]);
+        let sanitized = sanitize_custom_design_value(&val, "Eksplorasi bawah laut 3D", &[]);
         assert_eq!(sanitized.render_medium, "3d_diorama");
         assert_eq!(sanitized.world_preset, "ocean_cross_section");
         assert_eq!(sanitized.caption_placement, "center_middle");

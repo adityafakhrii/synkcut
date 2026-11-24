@@ -3044,6 +3044,9 @@ pub struct PlanStoryboardRequest {
 pub struct PlanStoryboardResponse {
     pub beats: Vec<StoryboardBeat>,
     pub provider_used: String,
+    pub recommended_medium: String,
+    pub medium_reason: String,
+    pub auto_design: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3204,21 +3207,23 @@ pub async fn ai_plan_storyboard(
     let resolved = byok::resolve_active_provider(&app)?;
     let skills_catalog = motion_skills::build_skills_catalog_for_storyboard(&app);
 
+    let has_user_design = req.custom_design.as_ref().is_some_and(Value::is_object);
     let design_hint = req
         .custom_design
         .as_ref()
         .map(|d| {
             format!(
-                "Arahan Desain Custom: {} — {}. Palette: bgTop={}, accentPrimary={}, accentSecondary={}, isLight={}",
+                "Arahan Desain Custom (WAJIB DIIKUTI): {} — {}. Medium Referensi: {}, Palette: bgTop={}, accentPrimary={}, accentSecondary={}, isLight={}",
                 d["name"].as_str().unwrap_or("Custom"),
                 d["artDirectionNotes"].as_str().or_else(|| d["summary"].as_str()).unwrap_or(""),
+                d["renderMedium"].as_str().unwrap_or("auto"),
                 d["palette"]["bgTop"].as_str().unwrap_or("#0B0F17"),
                 d["palette"]["accentPrimary"].as_str().unwrap_or("#38E59D"),
                 d["palette"]["accentSecondary"].as_str().unwrap_or("#F59E0B"),
                 d["isLight"].as_bool().unwrap_or(false)
             )
         })
-        .unwrap_or_else(|| "Arahan Desain Custom: Rancang mood visual yang paling cocok dengan produk/topik.".to_string());
+        .unwrap_or_else(|| "User belum melampirkan referensi desain — WAJIB rancang `autoDesign` (palet warna, mood terang/gelap, tipografi, gaya subtitle, & BGM) yang 100% unik sesuai karakter topik/brand di prompt user!".to_string());
 
     let brand_headings = req
         .style_reference
@@ -3246,14 +3251,37 @@ pub async fn ai_plan_storyboard(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let system_prompt = "Kamu adalah Creative Director & Motion Graphics Storyboarder kelas dunia (setara studio Remotion / Apple Launch / LottieFiles).\n\
-        Tugasmu merancang KONSEP VISUAL UNIK TANPA TEMPLATE untuk setiap micro-beat (2.5–4.5 detik) berdasarkan naskah asli user.\n\
+    let system_prompt = "Kamu adalah Creative Director & Motion Graphics Storyboarder kelas dunia.\n\
+        Tugasmu merancang ARAHAN VISUAL 100% KUSTOM TANPA TEMPLATE mengikuti prompt & referensi user:\n\
         ATURAN KERAS:\n\
-        1. DILARANG KERAS mengulang pola visual atau metafora yang sama pada 2 beat berturut-turut!\n\
-        2. DILARANG memakai aset/konsep yang tidak nyambung dengan topik (misal: topik kopi WAJIB visualisasi kopi/es/gula aren/botol/gelas/harga, BUKAN smartphone/kotak generik!).\n\
-        3. Setiap beat harus punya visual konkret yang bisa digambar secara prosedural di Canvas 2D + SVG + Spring Physics (misal: gelas kopi 3 lapis dituang, blok Scratch saling menyambung, counter harga Rp45rb, jendela browser mengetik URL & diklik kursor, perbandingan split-screen, tipografi kinetik ber-highlight).\n\
+        1. Tentukan `recommendedMedium` terbaik untuk topik ini:\n\
+           - Jika user melampirkan referensi desain yang sudah punya `renderMedium`, PATUHI 100% medium referensi tersebut.\n\
+           - Jika user tidak menyebutkan 2D/3D dan tanpa referensi: untuk promo produk, iklan SaaS/edtech, penawaran harga, aplikasi, atau review (`ad_promo`, `review`), pilih `\"2d_freeform\"` agar tipografi kinetik, UI demo, & ilustrasi produknya tajam dan modern. Untuk cerita spasial, dunia fisik, arsitektur, eksperimen sains, atau storytelling antar tokoh (`storytelling`, `education`) yang memang jauh lebih hidup secara 3D, pilih `\"3d_diorama\"` — atau `\"2d_freeform\"` jika lebih kuat sebagai explainer grafis.\n\
+        2. Jika user tidak melampirkan referensi, rancang `autoDesign` (palet warna hex, mood terang/gelap, font, gaya subtitle, BGM) yang OTENTIK dengan karakter produk/topik (misal edukasi anak = cerah & playful; kopi/kuliner = hangat & kaya; tech/AI = modern presisi; editorial/luxury = kontras elegan) — JANGAN selalu hitam-hijau monoton!\n\
+        3. DILARANG KERAS mengulang pola visual atau metafora yang sama pada 2 beat berturut-turut, dan DILARANG memakai aset/konsep yang tidak nyambung dengan topik.\n\
         4. Pilih 2-3 ID skill motion terbaik dari katalog skill untuk tiap beat.\n\
         Balas HANYA dalam JSON valid.";
+
+    let auto_design_schema = if has_user_design {
+        String::new()
+    } else {
+        ",\n          \"autoDesign\": {\n\
+            \"name\": \"Nama gaya visual unik 2-4 kata sesuai topik\",\n\
+            \"summary\": \"Ringkasan 1 kalimat gaya warna & suasana untuk topik ini\",\n\
+            \"artDirectionNotes\": \"Arahan konkret untuk visual beat (warna, komposisi, mood, ritme)\",\n\
+            \"renderMedium\": \"2d_freeform|3d_diorama\",\n\
+            \"captionPlacement\": \"bottom_safe|center_middle\",\n\
+            \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
+            \"isLight\": true,\n\
+            \"palette\": {\n\
+              \"bgTop\": \"#HEX\", \"bgBottom\": \"#HEX\", \"surfaceBg\": \"rgba(r,g,b,0.9)\", \"surfaceBorder\": \"rgba(r,g,b,0.18)\",\n\
+              \"textPrimary\": \"#HEX\", \"textSecondary\": \"#HEX\", \"accentPrimary\": \"#HEX\", \"accentSecondary\": \"#HEX\", \"accentInk\": \"#HEX\"\n\
+            },\n\
+            \"typography\": { \"headingFont\": \"sans|serif|mono|display\", \"bodyFont\": \"sans|serif|mono\", \"captionFont\": \"sans|serif|mono|display\", \"captionUppercase\": false },\n\
+            \"visualStyle\": { \"backgroundPattern\": \"grid|dots|diagonal|aurora|paper_grain|minimal\", \"cardStyle\": \"glass|solid|brutalist|hairline|neon\", \"cornerStyle\": \"sharp|rounded|pill\", \"captionLook\": \"bold_outline|black_pill|outline_bold|clean_shadow|custom_pill|editorial_bar|minimal_clean\" },\n\
+            \"pacing\": \"snappy|balanced|cinematic\"\n\
+          }".to_string()
+    };
 
     let user_prompt = format!(
         "Proyek: \"{}\" (format: {})\n{}\n{}\n\n\
@@ -3261,6 +3289,8 @@ pub async fn ai_plan_storyboard(
         Daftar Micro-Beat (durasi dikunci ke suara dubbing):\n{}\n\n\
         Balas JSON persis seperti ini:\n\
         {{\n\
+          \"recommendedMedium\": \"2d_freeform|3d_diorama\",\n\
+          \"mediumReason\": \"Alasan singkat 1 kalimat Bahasa Indonesia kenapa medium ini paling cocok dengan prompt/referensi user\"{auto_design_schema},\n\
           \"beats\": [\n\
             {{\n\
               \"beatIndex\": 0,\n\
@@ -3287,6 +3317,47 @@ pub async fn ai_plan_storyboard(
 
     let (val, provider_used) = call_llm_json(&resolved, system_prompt, &user_prompt, &[]).await?;
     let ai_beats = val["beats"].as_array().cloned().unwrap_or_default();
+
+    let ref_medium = req
+        .custom_design
+        .as_ref()
+        .and_then(|d| d["renderMedium"].as_str())
+        .filter(|m| matches!(*m, "2d_freeform" | "3d_diorama"));
+
+    let recommended_medium = ref_medium
+        .or_else(|| {
+            val["recommendedMedium"]
+                .as_str()
+                .filter(|m| matches!(*m, "2d_freeform" | "3d_diorama"))
+        })
+        .unwrap_or("2d_freeform")
+        .to_string();
+
+    let medium_reason = val["mediumReason"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| {
+            if recommended_medium == "3d_diorama" {
+                "Dipilih 3D Scene/Diorama agar ruang, objek, dan cerita spasial tampil lebih hidup.".to_string()
+            } else {
+                "Dipilih 2D Motion Bebas agar tipografi kinetik, ilustrasi, dan pesan utama tampil tajam.".to_string()
+            }
+        });
+
+    let auto_design = if has_user_design {
+        None
+    } else {
+        val.get("autoDesign")
+            .filter(|v| v.is_object())
+            .map(|ad| {
+                let mut sanitized =
+                    sanitize_custom_design_value(ad, &format!("{} {}", req.project_title, req.full_script), &[]);
+                sanitized.render_medium = recommended_medium.clone();
+                serde_json::to_value(sanitized).ok()
+            })
+            .flatten()
+    };
 
     let mut out_beats = Vec::with_capacity(micro.len());
     for (i, (role, txt, start_ms, end_ms)) in micro.into_iter().enumerate() {
@@ -3371,6 +3442,9 @@ pub async fn ai_plan_storyboard(
     Ok(PlanStoryboardResponse {
         beats: out_beats,
         provider_used,
+        recommended_medium,
+        medium_reason,
+        auto_design,
     })
 }
 
@@ -3739,15 +3813,18 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - `beatIndex` (0..beatCount-1), `beatCount`, `beatProgress` (0..1 inside current beat), `beatTimeMs`, `beatDurationMs`
 - `title`, `text`, `role` ("hook"|"body"|"cta"), `width`, `height`, `u`, `design`
 
-`D3` World & Lighting Builders (call ONE in `setupCode`):
-- `D3.setupDaylight(world, { skyTop?, skyMid?, skyBottom?, sunColor?, sunIntensity?, sunPos? })`
+`D3` Atmosphere & Lighting (REQUIRED — choose ANY mood matching the user's prompt & reference!):
+- `D3.setupAtmosphere(world, { bgTop, bgMid, bgBottom, isDark=false, ambientColor?, ambientIntensity?, keyColor?, keyIntensity?, keyPos?, fillColor?, fillIntensity?, fogColor?, stars=false })` -> works for daylight, night, cyberpunk neon, outer space (`stars: true`), warm indoor, dark studio, or pastel!
+- `D3.setupDaylight(world, { skyTop?, skyMid?, skyBottom?, sunColor?, sunIntensity?, sunPos? })` -> quick bright daylight shorthand
 - `D3.addClouds(world, { count=6, y=10 })` + in animate: `D3.animateClouds(world, tSec)`
-- `D3.buildOceanCutaway(world, { width=22, depth=16, waterHeight=11, surfaceColor?, deepColor?, seabedColor?, fishCount=7 })` + in animate: `D3.animateOcean(world, tSec)`
+
+`D3` OPTIONAL Environment Helpers (use ONLY when they genuinely fit the user's topic — otherwise build custom 3D environments from scratch with `D3.setupAtmosphere` + `D3.THREE` + primitives!):
+- `D3.buildOceanCutaway(world, { width=22, depth=16, waterHeight=11, surfaceColor?, deepColor?, seabedColor?, fishCount=7 })` + `D3.animateOcean(world, tSec)`
 - `D3.buildGroundCutaway(world, { style:'desert'|'grass'|'farm'|'urban', width=22, depth=22, thickness=4.5, withPit=false, pitRadius=3.6, withPond=false, treeCount=5 })`
 - `D3.buildRoomCutaway(world, { width=13, depth=11, height=6.8, wallColor?, floorColor?, trimColor? })`
 - `D3.buildStudioStage(world, { bgTop?, bgBottom?, stageColor?, radius=8.5 })`
 
-`D3` Stylized Articulated 3D Characters (Kenapa Yaaa? / How Come? / Zack D. style):
+`D3` OPTIONAL Stylized Articulated 3D Characters (add ONLY when the script involves human actors):
 - `const hero = D3.createCharacter(world, { name:'hero', pos:[x,y,z], rotY:0, scale:1, skin:'#F2C39B', outfitColor:'#2563EB', pantsColor:'#1E293B', hat:'hair'|'peci'|'cap'|'turban'|'helmet'|'none', glasses:false, mustache:false })`
 - In `animateCode`: `D3.poseCharacter(world.characters.hero, { action:'idle'|'point'|'wave'|'handshake'|'walk'|'think'|'surprised'|'sit'|'sleep'|'talk'|'cheer', phase: tSec, headTurn?: 0 })`
 
@@ -3845,6 +3922,7 @@ pub async fn ai_generate_3d_diorama(
             .filter(|v| v.is_object())
     });
 
+    let had_user_custom_design = raw_custom_design.is_some();
     let mut sanitized_custom = raw_custom_design
         .map(|cd| sanitize_custom_design_value(cd, &full_text_context, &[]))
         .unwrap_or_else(|| {
@@ -3853,29 +3931,20 @@ pub async fn ai_generate_3d_diorama(
                     "renderMedium": "3d_diorama",
                     "worldPreset": inferred_preset,
                     "captionPlacement": "center_middle",
-                    "visualStyle": { "captionLook": if inferred_preset == "ocean_cross_section" { "black_pill" } else { "outline_bold" } }
+                    "visualStyle": { "captionLook": "outline_bold" }
                 }),
                 &format!("3d diorama {full_text_context}"),
                 &[],
             )
         });
 
-    // Ensure 3D Diorama viral Shorts subtitle placement & medium are cleanly set
+    // Respect user's reference / prompt design direction — NEVER forcibly overwrite their chosen caption style!
     sanitized_custom.render_medium = "3d_diorama".to_string();
     if sanitized_custom.world_preset == "auto" {
         sanitized_custom.world_preset = inferred_preset.to_string();
     }
-    sanitized_custom.caption_placement = "center_middle".to_string();
-    if !matches!(
-        sanitized_custom.visual_style.caption_look.as_str(),
-        "black_pill" | "outline_bold" | "clean_shadow"
-    ) {
-        sanitized_custom.visual_style.caption_look =
-            if sanitized_custom.world_preset == "ocean_cross_section" {
-                "black_pill".to_string()
-            } else {
-                "outline_bold".to_string()
-            };
+    if !had_user_custom_design {
+        sanitized_custom.caption_placement = "center_middle".to_string();
     }
 
     let skills_rules =
@@ -3900,21 +3969,21 @@ pub async fn ai_generate_3d_diorama(
         .join("\n");
 
     let system_prompt = format!(
-        "Kamu adalah Technical 3D Animator & Director (gaya Blender / Zack D. Films / AkuTahu / Kenapa Yaaa? / How Come?) di Synkcut v2.1.\n\
-        Tugasmu merancang SATU DUNIA 3D DIORAMA UTUH (100% by-code Three.js PBR) beserta animasi kamera & akting karakter 3D kontinu di seluruh beat.\n\
+        "Kamu adalah Technical 3D Animator & Director (Three.js WebGL PBR) di Synkcut.\n\
+        Tugasmu merancang SATU DUNIA / SCENE 3D UTUH (100% by-code, nol aset contoh) yang sepenuhnya mengikuti PROMPT, TOPIK, & REFERENSI USER.\n\
         ATURAN WAJIB:\n\
-        1. `setupCode`: Panggil salah satu world builder (`D3.buildOceanCutaway`, `D3.buildGroundCutaway`, `D3.buildRoomCutaway`, atau `D3.buildStudioStage`) lalu bangun objek 3D nyata sesuai topik (bangunan, rig, meja, kolam, mesin kopi, pohon, kabel, dll) + 1–3 karakter 3D (`D3.createCharacter`) yang relevan dengan cerita! DILARANG membuat aset tidak nyambung.\n\
+        1. `setupCode`: Atur suasana & pencahayaan 100% sesuai mood prompt/referensi user memakai `D3.setupAtmosphere` (siang cerah, malam gelap, neon futuristik, luar angkasa berbintang, hangat indoor, atau studio bersih — JANGAN memaksa langit siang hari kalau prompt-nya bukan siang!). Helper cutaway (`buildOceanCutaway`, `buildGroundCutaway`, `buildRoomCutaway`, `buildStudioStage`) dan `D3.createCharacter` bersifat OPSIONAL: gunakan HANYA bila benar-benar cocok dengan topik user; selain itu bangun objek & lingkungan 3D sendiri dari nol pakai `D3.THREE` + primitif 3D! DILARANG membuat objek yang tidak nyambung dengan topik.\n\
         2. `animateCode`: \n\
-           - Hitung `const tSec = state.globalTimeMs / 1000;` dan panggil `D3.animateClouds(world, tSec)` (dan `D3.animateOcean(world, tSec)` jika laut).\n\
-           - Gunakan `D3.lerpCamera(world, [...minimal 4-5 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak sinematik kontinu dari shot pembuka lebar -> zoom-in detail/cutaway -> fokus karakter/aksi -> pullback penutup!\n\
-           - Gerakkan karakter dengan `D3.poseCharacter` berdasarkan `state.beatIndex` (misal beat 0 point/surprised, beat 1 talk/walk, beat 2 think/handshake, beat terakhir wave/cheer) dan gerakkan objek 3D (putar, naik-turun, pop-in).\n\
-           - Tampilkan `D3.drawPopupTitle(world, ...)` pada Beat 0 (`state.beatIndex === 0`) dan tambahkan `D3.drawBadgeAt3D` / `D3.drawCalloutAt3D` / `D3.drawRuler` yang nyambung dengan topik!\n\
-        3. Pastikan koordinat kamera SELALU mengarah ke pusat diorama yang punya banyak objek 3D terang & berwarna jelas.\n\
+           - Hitung `const tSec = state.globalTimeMs / 1000;`.\n\
+           - Gunakan `D3.lerpCamera(world, [...minimal 4-5 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak sinematik kontinu mengikuti cerita dari Beat 0 sampai beat terakhir.\n\
+           - Animasikan objek 3D & karakter (jika ada) sesuai `state.beatIndex` dan `state.beatProgress`.\n\
+           - Gunakan HUD (`D3.drawPopupTitle`, `D3.drawBadgeAt3D`, `D3.drawCalloutAt3D`, `D3.drawRuler`) HANYA jika memang relevan dengan topik.\n\
+        3. Pastikan koordinat kamera SELALU menghadap objek utama 3D dengan pencahayaan & kontras yang jelas (tidak gelap/kosong).\n\
         4. Kembalikan HANYA JSON valid:\n\
         {{\n\
-          \"worldPreset\": \"ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
-          \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia tentang dunia 3D diorama yang dibangun\",\n\
-          \"recommendedCaptionLook\": \"black_pill|outline_bold|clean_shadow\",\n\
+          \"worldPreset\": \"custom|ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
+          \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia tentang dunia 3D yang dibangun\",\n\
+          \"recommendedCaptionLook\": \"outline_bold|black_pill|clean_shadow|bold_outline|custom_pill|editorial_bar|minimal_clean\",\n\
           \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
           \"setupCode\": \"...pure JS body of setupWorld(world, D3)...\",\n\
           \"animateCode\": \"...pure JS body of animateFrame(world, state, D3)...\",\n\
@@ -3926,20 +3995,21 @@ pub async fn ai_generate_3d_diorama(
 
     let user_prompt = format!(
         "Proyek: \"{}\" (format: {})\n\
-        World Preset Disarankan: {}\n\
         Arahan Referensi / Art Direction: {} — {}\n\
-        Gaya Subtitle Referensi: {} (posisi: {})\n\
-        HUD Referensi: {:?}\n\n\
+        Palet Warna: bgTop={}, bgBottom={}, accentPrimary={}, isLight={}\n\
+        Gaya Subtitle: {} (posisi: {})\n\n\
         Daftar Beat & Narasi Dubbing ({} beat):\n{}\n\n\
-        Bangun dunia 3D Diorama + karakter + kamera sinematik yang kaya detail, cerah bergaya Blender daylight, 100% sesuai topik & bebas error!",
+        Bangun dunia 3D + kamera sinematik yang 100% otentik mengikuti topik, mood, & referensi di atas, kaya detail, dan bebas error!",
         req.project_title.trim(),
         req.format,
-        sanitized_custom.world_preset,
         sanitized_custom.name,
         sanitized_custom.art_direction_notes,
+        sanitized_custom.palette.bg_top,
+        sanitized_custom.palette.bg_bottom,
+        sanitized_custom.palette.accent_primary,
+        sanitized_custom.is_light,
         sanitized_custom.visual_style.caption_look,
         sanitized_custom.caption_placement,
-        sanitized_custom.hud_elements,
         req.beats.len(),
         beat_lines
     );
@@ -3953,7 +4023,8 @@ pub async fn ai_generate_3d_diorama(
         .filter(|s| {
             matches!(
                 *s,
-                "ocean_cross_section"
+                "custom"
+                    | "ocean_cross_section"
                     | "ground_cutaway"
                     | "desert_cutaway"
                     | "room_cutaway"
@@ -3967,11 +4038,22 @@ pub async fn ai_generate_3d_diorama(
         .as_str()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| format!("Dunia 3D Diorama untuk {}", req.project_title.trim()));
+        .unwrap_or_else(|| format!("Dunia 3D untuk {}", req.project_title.trim()));
 
-    if let Some(rec_look) = val["recommendedCaptionLook"].as_str() {
-        if matches!(rec_look, "black_pill" | "outline_bold" | "clean_shadow") {
-            sanitized_custom.visual_style.caption_look = rec_look.to_string();
+    if !had_user_custom_design {
+        if let Some(rec_look) = val["recommendedCaptionLook"].as_str() {
+            if matches!(
+                rec_look,
+                "black_pill"
+                    | "outline_bold"
+                    | "clean_shadow"
+                    | "bold_outline"
+                    | "custom_pill"
+                    | "editorial_bar"
+                    | "minimal_clean"
+            ) {
+                sanitized_custom.visual_style.caption_look = rec_look.to_string();
+            }
         }
     }
     let effective_bgm = if req.bgm_preset == "auto" || req.bgm_preset.trim().is_empty() {

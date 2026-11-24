@@ -15,6 +15,7 @@ import {
 import type {
   ByokStatus,
   ContentFormat,
+  CustomDesignDirection,
   ProjectStyleReference,
   StoryboardBeat,
   SynkcutProject,
@@ -48,6 +49,9 @@ export interface PreProductionDraft {
   fullScript: string;
   audio: ProcessedAudioResult | null;
   beats: StoryboardBeat[];
+  aiRecommendedMedium?: "2d_freeform" | "3d_diorama" | null;
+  aiMediumReason?: string | null;
+  autoDesign?: CustomDesignDirection | null;
   styleRef: StyleReferenceResult | null;
   attachedClips: FootageInputItem[];
   ttsEngine: "auto" | "gemini" | "openai" | "windows_offline";
@@ -101,14 +105,25 @@ export default function PreProductionReviewModal({
 
   // Storyboard Micro-Beats & Visual Medium Auto-Director State
   const [beats, setBeats] = useState<StoryboardBeat[]>(draft.beats);
+  const [aiRecommendedMedium, setAiRecommendedMedium] = useState<"2d_freeform" | "3d_diorama" | null>(
+    draft.aiRecommendedMedium ?? null
+  );
+  const [aiMediumReason, setAiMediumReason] = useState<string | null>(
+    draft.aiMediumReason ?? null
+  );
+  const [autoDesign, setAutoDesign] = useState<CustomDesignDirection | null>(
+    draft.autoDesign ?? null
+  );
   const [isPlanningBeats, setIsPlanningBeats] = useState(false);
   const [mediumChoice, setMediumChoice] = useState<"auto" | "3d_diorama" | "2d_freeform">("auto");
 
   const resolvedMedium = resolveAutoRenderMedium({
     preference: mediumChoice,
     styleRef: draft.styleRef,
+    aiRecommendedMedium,
     topicOrScript: `${projectTitle} ${fullScript}`,
   });
+  const activeDesign = draft.styleRef?.customDesign ?? autoDesign ?? null;
 
   // Final Video Generation State
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
@@ -235,6 +250,9 @@ export default function PreProductionReviewModal({
         styleReference,
       });
       setBeats(planned.beats);
+      if (planned.recommendedMedium) setAiRecommendedMedium(planned.recommendedMedium);
+      if (planned.mediumReason) setAiMediumReason(planned.mediumReason);
+      if (planned.autoDesign) setAutoDesign(planned.autoDesign);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -282,12 +300,13 @@ export default function PreProductionReviewModal({
           }
         : null;
 
-      const customDesign = draft.styleRef?.customDesign ?? null;
+      const customDesign = activeDesign;
       const captionPreset = draft.styleRef?.suggestedCaption ?? "bold_pop";
       const accentColor =
         customDesign?.palette.accentPrimary ?? draft.styleRef?.suggestedAccent ?? "#38E59D";
       const bgmPreset =
-        draft.format === "education" ? "lofi_education" : "upbeat_promo";
+        customDesign?.recommendedBgm ||
+        (draft.format === "education" ? "lofi_education" : "upbeat_promo");
 
       // 2A. Footage-only mode: auto-cut multi-footage synced to dubbing audio
       if (isFootageOnly) {
@@ -730,26 +749,51 @@ export default function PreProductionReviewModal({
               </div>
 
               <div
-                className="flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-[11px]"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2 text-[11px]"
                 style={{
                   backgroundColor: "var(--bg-panel)",
                   border: "1px solid var(--border-subtle)",
                   color: "var(--text-secondary)",
                 }}
               >
-                <span
-                  className="rounded-full px-2 py-0.5 font-semibold"
-                  style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-                >
-                  {resolvedMedium === "3d_diorama"
-                    ? "Aktif: 3D Diorama & Karakter (Three.js)"
-                    : "Aktif: 2D Motion Bebas (Canvas + SVG)"}
-                </span>
-                <span>
-                  {resolvedMedium === "3d_diorama"
-                    ? "Pencahayaan siang PBR · kamera 3D kontinu · subtitle tengah Shorts · BGM & SFX otomatis"
-                    : "Kode animasi baru tiap beat · palet & tipografi kustom · BGM & SFX otomatis"}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className="rounded-full px-2 py-0.5 font-semibold"
+                    style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+                  >
+                    {resolvedMedium === "3d_diorama"
+                      ? "Aktif: 3D Scene (Three.js)"
+                      : "Aktif: 2D Motion Bebas (Canvas + SVG)"}
+                  </span>
+                  <span>
+                    {aiMediumReason ||
+                      (resolvedMedium === "3d_diorama"
+                        ? "Dunia 3D kustom sesuai prompt · kamera 3D kontinu · BGM & SFX otomatis"
+                        : "Kode animasi baru tiap beat · palet & tipografi kustom · BGM & SFX otomatis")}
+                  </span>
+                </div>
+                {activeDesign && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>
+                      {activeDesign.name}
+                    </span>
+                    {[
+                      activeDesign.palette.bgTop,
+                      activeDesign.palette.accentPrimary,
+                      activeDesign.palette.accentSecondary,
+                    ].map((hex, idx) => (
+                      <span
+                        key={idx}
+                        className="h-3 w-3 rounded-full"
+                        style={{
+                          backgroundColor: hex,
+                          border: "1px solid rgba(128,128,128,0.4)",
+                        }}
+                        title={hex}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">

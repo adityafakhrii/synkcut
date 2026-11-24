@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  Box,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -487,24 +488,39 @@ export default function WizardView({
           styleReference,
         });
 
+        const effectiveCustomDesign =
+          styleRefResult?.customDesign ?? planned.autoDesign ?? null;
+        const effectiveMedium = resolveAutoRenderMedium({
+          preference: mediumChoice,
+          styleRef: styleRefResult,
+          aiRecommendedMedium: planned.recommendedMedium ?? null,
+          topicOrScript: `${topic} ${projectTitle} ${fullScriptText}`,
+        });
+        const effectiveAccent =
+          effectiveCustomDesign?.palette.accentPrimary || accentColor;
+        const effectiveBgm =
+          bgmPreset === "auto"
+            ? effectiveCustomDesign?.recommendedBgm || resolvedBgm
+            : bgmPreset;
+
         let rawProj: SynkcutProject;
-        if (resolvedMedium === "3d_diorama" && (visualMode === "motion" || footageClips.length === 0)) {
+        if (effectiveMedium === "3d_diorama" && (visualMode === "motion" || footageClips.length === 0)) {
           setAssembleStatus(
-            `3/3 Membangun dunia 3D Diorama & karakter (Three.js) untuk ${planned.beats.length} beat...`
+            `3/3 Membangun dunia 3D (Three.js by-code) untuk ${planned.beats.length} beat...`
           );
           rawProj = await aiGenerate3dDiorama({
-            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Diorama",
+            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Scene",
             format,
             beats: planned.beats,
             words: finalAudio?.words ?? [],
-            customDesign: styleRefResult?.customDesign ?? null,
+            customDesign: effectiveCustomDesign,
             styleReference,
             audioPath: finalAudio?.audioPath ?? null,
             audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
             trimSilence,
             captionPreset,
-            accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
-            bgmPreset: resolvedBgm,
+            accentColor: effectiveAccent,
+            bgmPreset: effectiveBgm,
             autoDucking,
             autoSfx,
           });
@@ -517,14 +533,14 @@ export default function WizardView({
             format,
             beats: planned.beats,
             words: finalAudio?.words ?? [],
-            customDesign: styleRefResult?.customDesign ?? null,
+            customDesign: effectiveCustomDesign,
             styleReference,
             audioPath: finalAudio?.audioPath ?? null,
             audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
             trimSilence,
             captionPreset,
-            accentColor: styleRefResult?.customDesign?.palette.accentPrimary || accentColor,
-            bgmPreset: resolvedBgm,
+            accentColor: effectiveAccent,
+            bgmPreset: effectiveBgm,
             autoDucking,
             autoSfx,
             footage: visualMode === "motion" ? [] : footageClips,
@@ -1483,23 +1499,25 @@ export default function WizardView({
                         }}
                       >
                         {[
-                          { id: "auto" as const, label: "✨ Otomatis AI" },
-                          { id: "3d_diorama" as const, label: "🧊 3D Diorama" },
-                          { id: "2d_freeform" as const, label: "🎨 2D Motion" },
+                          { id: "auto" as const, label: "Otomatis AI", Icon: Sparkles },
+                          { id: "3d_diorama" as const, label: "3D Scene", Icon: Box },
+                          { id: "2d_freeform" as const, label: "2D Motion", Icon: Shapes },
                         ].map((opt) => {
                           const active = mediumChoice === opt.id;
+                          const OptIcon = opt.Icon;
                           return (
                             <button
                               key={opt.id}
                               type="button"
                               onClick={() => setMediumChoice(opt.id)}
-                              className="rounded-md py-2 text-xs font-semibold transition-colors cursor-pointer"
+                              className="inline-flex items-center justify-center gap-1.5 rounded-md py-2 text-xs font-semibold transition-colors cursor-pointer"
                               style={{
                                 backgroundColor: active ? "var(--bg-panel)" : "transparent",
                                 color: active ? "var(--accent)" : "var(--text-muted)",
                                 border: active ? "1px solid var(--accent)" : "1px solid transparent",
                               }}
                             >
+                              <OptIcon className="h-3.5 w-3.5 shrink-0" />
                               {opt.label}
                             </button>
                           );
