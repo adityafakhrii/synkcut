@@ -792,10 +792,11 @@ function drawKineticCaptions(
   ctx.textBaseline = "middle";
 
   // Measure static horizontal layout at scale = 1.0 so neighboring words & pill box NEVER jitter ("row breathing")!
+  // Include generous word spacing so thick 16px outlines + 1.12x pop NEVER visually merge adjacent words!
   const measureChunk = (sz: number) => {
     ctx.font = `${fontWeight} ${sz}px ${fontFamily}`;
     const baseSpaceW = ctx.measureText(" ").width;
-    const spW = useUppercase ? baseSpaceW * 1.4 : baseSpaceW * 1.18;
+    const spW = Math.max(sz * 0.34, useUppercase ? baseSpaceW * 1.55 : baseSpaceW * 1.48);
     const canPop =
       preset === "bold_pop" ||
       preset === "kinetic_punch" ||

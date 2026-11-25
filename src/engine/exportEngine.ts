@@ -257,8 +257,8 @@ export async function exportProjectToMp4(
         const sceneVideo = isMotionScene
           ? null
           : (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
-            options.videoElement ??
-            null;
+          options.videoElement ??
+          null;
         const secondaryVideo = activeScene?.media.secondaryPath
           ? videoMap.get(activeScene.media.secondaryPath) ?? null
           : null;

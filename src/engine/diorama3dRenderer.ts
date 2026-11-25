@@ -157,8 +157,17 @@ function compileSetupCode(code: string): { fn: CompiledSetupFn | null; error?: s
       "window",
       "document",
       "globalThis",
+      "self",
+      "top",
+      "parent",
+      "frames",
+      "location",
+      "navigator",
       "fetch",
       "localStorage",
+      "Reflect",
+      "Proxy",
+      "Function",
       body
     ) as (
       world: DioramaWorldHandle,
@@ -168,7 +177,25 @@ function compileSetupCode(code: string): { fn: CompiledSetupFn | null; error?: s
     ) => void;
 
     const wrapped: CompiledSetupFn = (world, D3, __guard) => {
-      rawFn(world, D3, __guard, undefined, undefined, undefined, undefined, undefined);
+      rawFn(
+        world,
+        D3,
+        __guard,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
     };
 
     if (setupFnCache.size > 40) {
@@ -210,8 +237,17 @@ function compileAnimateCode(code: string): { fn: CompiledAnimateFn | null; error
       "window",
       "document",
       "globalThis",
+      "self",
+      "top",
+      "parent",
+      "frames",
+      "location",
+      "navigator",
       "fetch",
       "localStorage",
+      "Reflect",
+      "Proxy",
+      "Function",
       body
     ) as (
       world: DioramaWorldHandle,
@@ -222,7 +258,26 @@ function compileAnimateCode(code: string): { fn: CompiledAnimateFn | null; error
     ) => void;
 
     const wrapped: CompiledAnimateFn = (world, state, D3, __guard) => {
-      rawFn(world, state, D3, __guard, undefined, undefined, undefined, undefined, undefined);
+      rawFn(
+        world,
+        state,
+        D3,
+        __guard,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
     };
 
     if (animateFnCache.size > 60) {

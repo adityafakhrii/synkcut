@@ -12,22 +12,71 @@ import {
 
 const FORBIDDEN_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   {
-    re: /\b(window|document|globalThis|self|top|parent|frames|location|navigator|localStorage|sessionStorage|indexedDB|cookie|ownerDocument|defaultView)\b/,
-    reason: "Akses DOM/browser global tidak diizinkan di sandbox motion.",
+    // Match standalone dangerous browser globals (NOT property accesses like `.window` or object keys like `window:`)
+    re: /(?<![.\w$])(window|document|globalThis|localStorage|sessionStorage|indexedDB|ownerDocument|defaultView)\b(?!\s*:(?!:))/,
+    reason: "Akses DOM/browser global tidak diizinkan di sandbox motion",
   },
   {
-    re: /\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts)\b|\bimport\s*\(/,
-    reason: "Akses jaringan/modul eksternal tidak diizinkan di sandbox motion.",
+    re: /(?<![.\w$])(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts)\b(?!\s*:(?!:))|\bimport\s*\(/,
+    reason: "Akses jaringan/modul eksternal tidak diizinkan di sandbox motion",
   },
   {
-    re: /\b(eval|Function|Reflect|Proxy|__TAURI__|__TAURI_INTERNALS__|process|require)\b/,
-    reason: "Eksekusi dinamis / API sistem tidak diizinkan di sandbox motion.",
+    re: /(?<![.\w$])(eval|Function|Reflect|Proxy|__TAURI__|__TAURI_INTERNALS__|process|require)\b(?!\s*:(?!:))/,
+    reason: "Eksekusi dinamis / API sistem tidak diizinkan di sandbox motion",
   },
   {
-    re: /\b(__proto__|prototype|setPrototypeOf|defineProperty|setTimeout|setInterval|requestAnimationFrame)\b|\.\s*constructor\b|\[\s*['"`]constructor['"`]\s*\]|\bconstructor\s*\(/,
-    reason: "Timer/prototype tampering tidak diizinkan di renderer frame deterministik.",
+    re: /\b(__proto__|setPrototypeOf|defineProperty|setTimeout|setInterval|requestAnimationFrame)\b|\.\s*constructor\b|\[\s*['"`]constructor['"`]\s*\]|\bconstructor\s*\(/,
+    reason: "Timer/prototype tampering tidak diizinkan di renderer frame deterministik",
   },
 ];
+
+/**
+ * Strips comments and string/template literal contents (replacing with spaces)
+ * so security scanning NEVER false-positives on UI text like `"server location"` or `// top of rack`.
+ */
+function stripCommentsAndStringBodies(code: string): string {
+  let out = "";
+  let i = 0;
+  const n = code.length;
+  while (i < n) {
+    const ch = code[i];
+    if (ch === "/" && code[i + 1] === "/") {
+      const nl = code.indexOf("\n", i + 2);
+      if (nl === -1) break;
+      out += "\n";
+      i = nl + 1;
+      continue;
+    }
+    if (ch === "/" && code[i + 1] === "*") {
+      const end = code.indexOf("*/", i + 2);
+      if (end === -1) break;
+      out += " ";
+      i = end + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      out += quote;
+      i++;
+      while (i < n) {
+        const sc = code[i];
+        i++;
+        if (sc === "\\" && i < n) {
+          i++;
+          continue;
+        }
+        if (sc === quote) {
+          out += quote;
+          break;
+        }
+      }
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
 
 export interface BeatValidationResult {
   ok: boolean;
@@ -92,9 +141,11 @@ export function validateBeatCodeSafety(code: string): BeatValidationResult {
   if (trimmed.length > 24000) {
     return { ok: false, error: "Kode animasi terlalu panjang (>24KB)." };
   }
+  const codeOnly = stripCommentsAndStringBodies(trimmed);
   for (const rule of FORBIDDEN_PATTERNS) {
-    if (rule.re.test(trimmed)) {
-      return { ok: false, error: rule.reason };
+    const m = codeOnly.match(rule.re);
+    if (m) {
+      return { ok: false, error: `${rule.reason} (token: '${m[0].trim()}').` };
     }
   }
   return { ok: true };
@@ -266,7 +317,7 @@ function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: s
   try {
     const guarded = instrumentLoopGuards(trimmed);
     const body = `"use strict";\n${guarded}`;
-    // Shadow browser globals inside parameter scope as defense-in-depth
+    // Shadow browser globals inside parameter scope as defense-in-depth (allows harmless local `const top/parent/location` too!)
     const rawFn = new Function(
       "ctx",
       "state",
@@ -275,6 +326,12 @@ function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: s
       "window",
       "document",
       "globalThis",
+      "self",
+      "top",
+      "parent",
+      "frames",
+      "location",
+      "navigator",
       "fetch",
       "localStorage",
       "Reflect",
@@ -296,6 +353,12 @@ function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: s
         state,
         M,
         __guard,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,
