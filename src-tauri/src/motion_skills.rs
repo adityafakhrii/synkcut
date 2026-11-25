@@ -422,11 +422,19 @@ pub async fn import_motion_skill_url(
 
     let mut fetched_text: Option<(String, String)> = None;
     for cand in &candidates {
+        // SSRF defense: block localhost, private LAN, and link-local addresses when importing remote skills
+        if !crate::style_ref::is_safe_public_http_url(cand) {
+            continue;
+        }
         if let Ok(res) = client.get(cand).send().await {
             if res.status().is_success() {
-                if let Ok(txt) = res.text().await {
+                if let Ok(bytes) = crate::style_ref::read_body_bounded(res, 256 * 1024).await {
+                    let txt = String::from_utf8_lossy(&bytes);
                     let trimmed = txt.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with("<!DOCTYPE html") && !trimmed.starts_with("<html") {
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with("<!DOCTYPE html")
+                        && !trimmed.starts_with("<html")
+                    {
                         fetched_text = Some((cand.clone(), trimmed.to_string()));
                         break;
                     }

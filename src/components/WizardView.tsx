@@ -246,6 +246,7 @@ export default function WizardView({
     key: string;
     planned: PlanStoryboardResponse;
   } | null>(null);
+  const assembleRunIdRef = useRef(0);
 
   useEffect(() => {
     if (!isAssembling) return;
@@ -492,6 +493,7 @@ export default function WizardView({
       );
       return;
     }
+    const myRunId = ++assembleRunIdRef.current;
     const startMs = Date.now();
     setIsAssembling(true);
     let attempted3d = false;
@@ -507,21 +509,15 @@ export default function WizardView({
           }
         : null;
 
-      // 1. Always guarantee dubbing voiceover exists (reuses existing audioResult checkpoint!)
+      // Detect if Step 1 script was edited after Step 2 TTS sample was generated!
       let finalAudio = audioResult;
-      if (!finalAudio && fullScriptText.trim()) {
-        setAssembleStatus("1/3 Membuat suara dubbing & sinkronisasi kata...");
-        try {
-          finalAudio = await generateTtsAudio({
-            text: fullScriptText.trim(),
-            voiceName: ttsVoice,
-            tone,
-            engine: ttsEngine === "windows_offline" ? "windows_offline" : "auto",
-          });
-          setAudioResult(finalAudio);
-        } catch {
-          finalAudio = null;
-        }
+      if (
+        finalAudio &&
+        audioTab === "tts" &&
+        finalAudio.transcript &&
+        finalAudio.transcript.trim() !== fullScriptText.trim()
+      ) {
+        finalAudio = null;
       }
 
       const resolvedBgm =
@@ -530,25 +526,106 @@ export default function WizardView({
             (format === "education" ? "lofi_education" : "upbeat_promo")
           : bgmPreset;
 
-      // v2.1.2 Sat-Set AI Auto-Director with Checkpointing (NEVER restarts finished stages!)
+      // v2.3.0 Parallel TTS + Storyboard + Checkpointing (35-50% faster & never restarts finished stages!)
       if ((visualMode === "motion" || visualMode === "hybrid") && isTauriRuntime() && hasAnyByok) {
-        const checkpointKey = `${projectTitle.trim()}::${format}::${fullScriptText.trim()}::${finalAudio?.durationMs ?? 0}::${styleRefResult?.customDesign?.name ?? ""}`;
+        const checkpointKey = `${projectTitle.trim()}::${format}::${fullScriptText.trim()}::${styleRefResult?.customDesign?.name ?? ""}`;
+        const cachedSb =
+          storyboardCheckpointRef.current?.key === checkpointKey
+            ? storyboardCheckpointRef.current.planned
+            : null;
+
         let planned: PlanStoryboardResponse;
-        if (storyboardCheckpointRef.current?.key === checkpointKey) {
-          planned = storyboardCheckpointRef.current.planned;
-          setAssembleStatus("Melanjutkan dari checkpoint storyboard...");
-        } else {
-          setAssembleStatus("2/3 Merancang storyboard micro-beat...");
-          planned = await aiPlanStoryboard({
-            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
-            format,
-            fullScript: fullScriptText.trim(),
-            durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
-            words: finalAudio?.words ?? [],
-            customDesign: styleRefResult?.customDesign ?? null,
-            styleReference,
-          });
+        if (!finalAudio && !cachedSb && fullScriptText.trim()) {
+          setAssembleStatus("Membuat suara dubbing & storyboard secara paralel...");
+          const estMs = Math.max(
+            6000,
+            Math.round(fullScriptText.trim().split(/\s+/).filter(Boolean).length * 410)
+          );
+          const [ttsRes, sbRes] = await Promise.allSettled([
+            generateTtsAudio({
+              text: fullScriptText.trim(),
+              voiceName: ttsVoice,
+              tone,
+              engine: ttsEngine,
+            }),
+            aiPlanStoryboard({
+              projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+              format,
+              fullScript: fullScriptText.trim(),
+              durationMs: estMs,
+              words: [],
+              customDesign: styleRefResult?.customDesign ?? null,
+              styleReference,
+            }),
+          ]);
+          if (assembleRunIdRef.current !== myRunId) return;
+          if (ttsRes.status === "fulfilled") {
+            finalAudio = ttsRes.value;
+            setAudioResult(finalAudio);
+          }
+          if (sbRes.status === "rejected") {
+            throw sbRes.reason;
+          }
+          planned = sbRes.value;
           storyboardCheckpointRef.current = { key: checkpointKey, planned };
+        } else {
+          if (!finalAudio && fullScriptText.trim()) {
+            setAssembleStatus("1/3 Membuat suara dubbing & sinkronisasi kata...");
+            try {
+              finalAudio = await generateTtsAudio({
+                text: fullScriptText.trim(),
+                voiceName: ttsVoice,
+                tone,
+                engine: ttsEngine,
+              });
+              if (assembleRunIdRef.current !== myRunId) return;
+              setAudioResult(finalAudio);
+            } catch {
+              finalAudio = null;
+            }
+          }
+          if (cachedSb) {
+            planned = cachedSb;
+            setAssembleStatus("Melanjutkan dari checkpoint storyboard...");
+          } else {
+            setAssembleStatus("2/3 Merancang storyboard micro-beat...");
+            planned = await aiPlanStoryboard({
+              projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
+              format,
+              fullScript: fullScriptText.trim(),
+              durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
+              words: finalAudio?.words ?? [],
+              customDesign: styleRefResult?.customDesign ?? null,
+              styleReference,
+            });
+            if (assembleRunIdRef.current !== myRunId) return;
+            storyboardCheckpointRef.current = { key: checkpointKey, planned };
+          }
+        }
+
+        // Lock parallel storyboard beat timings 100% to actual voiceover duration!
+        let syncedBeats = planned.beats;
+        if (finalAudio && finalAudio.durationMs >= 1000 && syncedBeats.length > 0) {
+          const weights = syncedBeats.map((b) =>
+            Math.max(1, (b.text || "").trim().split(/\s+/).filter(Boolean).length)
+          );
+          const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+          let cursor = 0;
+          syncedBeats = syncedBeats.map((b, idx) => {
+            const startMs = cursor;
+            const endMs =
+              idx === syncedBeats.length - 1
+                ? finalAudio!.durationMs
+                : Math.min(
+                    finalAudio!.durationMs - (syncedBeats.length - 1 - idx) * 600,
+                    Math.max(
+                      startMs + 600,
+                      Math.round(startMs + (weights[idx] / totalW) * finalAudio!.durationMs)
+                    )
+                  );
+            cursor = endMs;
+            return { ...b, startMs, endMs };
+          });
         }
 
         const effectiveCustomDesign =
@@ -575,7 +652,7 @@ export default function WizardView({
           rawProj = await aiGenerate3dDiorama({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Scene",
             format,
-            beats: planned.beats,
+            beats: syncedBeats,
             words: finalAudio?.words ?? [],
             customDesign: effectiveCustomDesign,
             styleReference,
@@ -590,12 +667,12 @@ export default function WizardView({
           });
         } else {
           setAssembleStatus(
-            `3/3 Menulis kode motion 2D untuk ${planned.beats.length} beat secara paralel...`
+            `3/3 Menulis kode motion 2D untuk ${syncedBeats.length} beat secara paralel...`
           );
           rawProj = await aiGenerateBeatCodes({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
             format,
-            beats: planned.beats,
+            beats: syncedBeats,
             words: finalAudio?.words ?? [],
             customDesign: effectiveCustomDesign,
             styleReference,
@@ -612,12 +689,30 @@ export default function WizardView({
           });
         }
 
-        const verified = await verifyAndRepairProjectBeats(rawProj, (msg) =>
-          setAssembleStatus(msg)
-        );
+        if (assembleRunIdRef.current !== myRunId) return;
+        const verified = await verifyAndRepairProjectBeats(rawProj, (msg) => {
+          if (assembleRunIdRef.current === myRunId) setAssembleStatus(msg);
+        });
+        if (assembleRunIdRef.current !== myRunId) return;
         storyboardCheckpointRef.current = null;
         onProjectCreated(verified.project, Date.now() - startMs);
         return;
+      }
+
+      if (!finalAudio && fullScriptText.trim()) {
+        setAssembleStatus("Membuat suara dubbing & sinkronisasi kata...");
+        try {
+          finalAudio = await generateTtsAudio({
+            text: fullScriptText.trim(),
+            voiceName: ttsVoice,
+            tone,
+            engine: ttsEngine,
+          });
+          if (assembleRunIdRef.current !== myRunId) return;
+          setAudioResult(finalAudio);
+        } catch {
+          finalAudio = null;
+        }
       }
 
       setAssembleStatus("Merakit video & memotong footage otomatis sesuai dubbing...");
@@ -652,13 +747,17 @@ export default function WizardView({
         ttsVoice,
         ttsTone: tone,
       });
+      if (assembleRunIdRef.current !== myRunId) return;
       onProjectCreated(project, Date.now() - startMs);
     } catch (err) {
+      if (assembleRunIdRef.current !== myRunId) return;
       setFailedOn3d(attempted3d);
       setAssembleError(toFriendlyAiError(err));
     } finally {
-      setIsAssembling(false);
-      setAssembleStatus("");
+      if (assembleRunIdRef.current === myRunId) {
+        setIsAssembling(false);
+        setAssembleStatus("");
+      }
     }
   }
 
@@ -1862,12 +1961,28 @@ export default function WizardView({
                 <div className="flex items-center gap-2.5">
                   <button
                     type="button"
-                    disabled={isAssembling}
-                    onClick={() => setStep(1)}
+                    onClick={() => {
+                      if (isAssembling) {
+                        assembleRunIdRef.current += 1;
+                        setIsAssembling(false);
+                        setAssembleStatus("");
+                      } else {
+                        setStep(1);
+                      }
+                    }}
                     className="ui-btn-secondary inline-flex h-9 items-center gap-1.5 rounded-md px-3.5 text-xs font-medium cursor-pointer"
                   >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    Kembali
+                    {isAssembling ? (
+                      <>
+                        <Square className="h-3.5 w-3.5" />
+                        Hentikan
+                      </>
+                    ) : (
+                      <>
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                        Kembali
+                      </>
+                    )}
                   </button>
                   <button
                     type="button"

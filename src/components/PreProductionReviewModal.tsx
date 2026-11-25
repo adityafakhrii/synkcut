@@ -108,6 +108,7 @@ export default function PreProductionReviewModal({
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const genRunIdRef = useRef(0);
 
   // Storyboard Micro-Beats & Visual Medium Auto-Director State
   const [beats, setBeats] = useState<StoryboardBeat[]>(draft.beats);
@@ -209,11 +210,35 @@ export default function PreProductionReviewModal({
         tone: ttsTone,
         engine: ttsEngine,
       });
+      const wasScriptEdited = scriptDirtyForAudio;
       setAudioResult(res);
       setScriptDirtyForAudio(false);
 
+      // Preserve user's edited beat visualConcepts if only voice/tone changed!
       if (alsoReplanBeats && !isFootageOnly) {
-        await handleReplanStoryboard(res.durationMs, res.words);
+        if (wasScriptEdited || beats.length === 0) {
+          await handleReplanStoryboard(res.durationMs, res.words);
+        } else if (res.durationMs >= 1000) {
+          const weights = beats.map((b) =>
+            Math.max(1, (b.text || "").trim().split(/\s+/).filter(Boolean).length)
+          );
+          const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+          let cursor = 0;
+          setBeats((prev) =>
+            prev.map((b, idx) => {
+              const startMs = cursor;
+              const endMs =
+                idx === prev.length - 1
+                  ? res.durationMs
+                  : Math.min(
+                      res.durationMs - (prev.length - 1 - idx) * 600,
+                      Math.max(startMs + 600, Math.round(startMs + (weights[idx] / totalW) * res.durationMs))
+                    );
+              cursor = endMs;
+              return { ...b, startMs, endMs };
+            })
+          );
+        }
       }
     } catch (err) {
       setFriendlyError(toFriendlyAiError(err));
@@ -297,6 +322,7 @@ export default function PreProductionReviewModal({
 
   async function handleConfirmGenerateVideo(overrideMedium?: "2d_freeform" | "3d_diorama") {
     if (isGeneratingVideo || !fullScript.trim()) return;
+    const myRunId = ++genRunIdRef.current;
     setFriendlyError(null);
     setFailedOn3d(false);
     const startMs = Date.now();
@@ -461,17 +487,22 @@ export default function PreProductionReviewModal({
       }
 
       // 3. Deliver-and-Verify: 4-frame offscreen sandbox check + automatic AI repair!
-      const verified = await verifyAndRepairProjectBeats(rawProject, (msg) =>
-        setProgressText(msg)
-      );
+      if (genRunIdRef.current !== myRunId) return;
+      const verified = await verifyAndRepairProjectBeats(rawProject, (msg) => {
+        if (genRunIdRef.current === myRunId) setProgressText(msg);
+      });
+      if (genRunIdRef.current !== myRunId) return;
 
       await onProjectReady(verified.project, Date.now() - startMs);
     } catch (err) {
+      if (genRunIdRef.current !== myRunId) return;
       setFailedOn3d(attempted3d);
       setFriendlyError(toFriendlyAiError(err));
     } finally {
-      setIsGeneratingVideo(false);
-      setProgressText("");
+      if (genRunIdRef.current === myRunId) {
+        setIsGeneratingVideo(false);
+        setProgressText("");
+      }
     }
   }
 
@@ -1026,11 +1057,18 @@ export default function PreProductionReviewModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              disabled={isGeneratingVideo}
-              onClick={onClose}
-              className="ui-btn-secondary rounded-lg px-4 py-2 text-xs font-semibold cursor-pointer disabled:opacity-45"
+              onClick={() => {
+                if (isGeneratingVideo) {
+                  genRunIdRef.current += 1;
+                  setIsGeneratingVideo(false);
+                  setProgressText("");
+                } else {
+                  onClose();
+                }
+              }}
+              className="ui-btn-secondary rounded-lg px-4 py-2 text-xs font-semibold cursor-pointer"
             >
-              Batal
+              {isGeneratingVideo ? "Hentikan Proses" : "Batal"}
             </button>
             <button
               type="button"

@@ -24,14 +24,31 @@ pub struct ProjectSummary {
 }
 
 fn sanitize_project_id(raw: &str) -> Result<String, String> {
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
-    if cleaned.is_empty() || cleaned.len() > 80 {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 80
+        || !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err("ID proyek tidak valid.".to_string());
     }
-    Ok(cleaned)
+    Ok(trimmed.to_string())
+}
+
+fn atomic_write_str(path: &std::path::Path, content: &str) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_extension(format!("synk.tmp.{}", std::process::id()));
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("Gagal menyiapkan file proyek sementara: {e}"))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("Gagal menulis data proyek: {e}"))?;
+    let _ = file.sync_all();
+    drop(file);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Gagal menyimpan file project.synk.json secara atomik: {e}")
+    })
 }
 
 fn projects_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -197,8 +214,7 @@ pub fn save_project(app: AppHandle, mut project: Value) -> Result<ProjectSummary
 
     let serialized = serde_json::to_string_pretty(&project)
         .map_err(|e| format!("Gagal serialisasi JSON proyek: {e}"))?;
-    std::fs::write(&path, serialized)
-        .map_err(|e| format!("Gagal menyimpan file project.synk.json: {e}"))?;
+    atomic_write_str(&path, &serialized)?;
 
     extract_summary(&project)
 }
@@ -207,7 +223,7 @@ pub fn save_project(app: AppHandle, mut project: Value) -> Result<ProjectSummary
 pub fn duplicate_project(app: AppHandle, project_id: String) -> Result<ProjectSummary, String> {
     let mut project = load_project(app.clone(), project_id)?;
     let now_ts = Utc::now().timestamp_millis();
-    let new_id = format!("proj_{now_ts}");
+    let new_id = format!("proj_{now_ts}_dup");
     let now_iso = Utc::now().to_rfc3339();
 
     if let Some(meta) = project.get_mut("meta").and_then(Value::as_object_mut) {
@@ -264,7 +280,7 @@ mod tests {
     #[test]
     fn test_sanitize_project_id() {
         assert_eq!(sanitize_project_id("proj_123-abc"), Ok("proj_123-abc".to_string()));
-        assert_eq!(sanitize_project_id("../evil/path"), Ok("evilpath".to_string()));
+        assert!(sanitize_project_id("../evil/path").is_err());
         assert!(sanitize_project_id("...///").is_err());
     }
 

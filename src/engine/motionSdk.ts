@@ -1,10 +1,10 @@
 import type { CustomDesignDirection, DesignFontFamily, SceneRole, WordTimestamp } from "../types/scene";
 
 const FONT_STACKS: Record<DesignFontFamily, string> = {
-  sans: '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  sans: '"Plus Jakarta Sans", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   serif: 'Georgia, "Times New Roman", Cambria, serif',
   mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
-  display: '"Impact", "Arial Black", "IBM Plex Sans", sans-serif',
+  display: '"Inter", "Plus Jakarta Sans", "IBM Plex Sans", -apple-system, sans-serif',
 };
 
 export interface BeatRenderState {
@@ -53,6 +53,23 @@ export function preloadBrandLogoImage(dataUrl?: string | null): HTMLImageElement
   img.src = dataUrl;
   brandImageCache.set(dataUrl, img);
   return img;
+}
+
+export async function ensureBrandLogoDecoded(dataUrl?: string | null): Promise<void> {
+  const img = preloadBrandLogoImage(dataUrl);
+  if (!img || img.complete) return;
+  try {
+    if (typeof img.decode === "function") {
+      await img.decode();
+    } else {
+      await new Promise<void>((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+      });
+    }
+  } catch {
+    // ignore invalid image data URL
+  }
 }
 
 export function clamp(v: number, min = 0, max = 1): number {

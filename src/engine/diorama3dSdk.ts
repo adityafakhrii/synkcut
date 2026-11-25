@@ -87,6 +87,7 @@ export interface DioramaWorldHandle {
   skyColorBottom: string;
   sunLight?: THREE.DirectionalLight;
   hemiLight?: THREE.HemisphereLight;
+  fillLight?: THREE.DirectionalLight;
   waterMesh?: THREE.Mesh;
   cloudsGroup?: THREE.Group;
   width: number;
@@ -117,7 +118,7 @@ export interface DioramaFrameState {
 }
 
 const SANS_FONT =
-  '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  '"Plus Jakarta Sans", "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
 function toColor(c: string | number | undefined, fallback = 0xffffff): THREE.Color {
   try {
@@ -352,16 +353,58 @@ function roundRectPath(
   ctx.closePath();
 }
 
+let sharedContactShadowTex: THREE.CanvasTexture | null = null;
+
+function getContactShadowTexture(): THREE.CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  if (sharedContactShadowTex) return sharedContactShadowTex;
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 128;
+  const x = c.getContext("2d");
+  if (x) {
+    const g = x.createRadialGradient(64, 64, 6, 64, 64, 62);
+    g.addColorStop(0, "rgba(8, 12, 20, 0.42)");
+    g.addColorStop(0.55, "rgba(8, 12, 20, 0.16)");
+    g.addColorStop(1, "rgba(8, 12, 20, 0)");
+    x.fillStyle = g;
+    x.fillRect(0, 0, 128, 128);
+  }
+  sharedContactShadowTex = new THREE.CanvasTexture(c);
+  return sharedContactShadowTex;
+}
+
+function addContactShadow(grp: THREE.Group, radiusX = 1.1, radiusZ = radiusX, y = 0.015) {
+  const tex = getContactShadowTexture();
+  if (!tex) return;
+  const disc = new THREE.Mesh(
+    new THREE.PlaneGeometry(radiusX * 2, radiusZ * 2),
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+    })
+  );
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.set(0, y, 0);
+  grp.add(disc);
+}
+
 type ParentTarget = DioramaWorldHandle | CharacterRig | THREE.Object3D;
 
 let activeWorldRef: DioramaWorldHandle | null = null;
+let activePhaseRef: "setup" | "animate" = "setup";
 
 /**
- * Sets the currently executing DioramaWorldHandle so D3 builders can gracefully recover
- * if LLM-generated code omits `world`, passes `undefined`, or passes a `CharacterRig`.
+ * Sets the currently executing DioramaWorldHandle & execution phase (`"setup"` vs `"animate"`).
+ * During `"animate"`, scene-building & texture-allocating helpers become safe no-ops to prevent VRAM leaks!
  */
-export function setActiveDioramaWorld(world: DioramaWorldHandle | null) {
+export function setActiveDioramaWorld(
+  world: DioramaWorldHandle | null,
+  phase: "setup" | "animate" = "setup"
+) {
   activeWorldRef = world;
+  activePhaseRef = phase;
 }
 
 function isWorldHandle(v: unknown): v is DioramaWorldHandle {
@@ -446,6 +489,13 @@ function attach3D<T extends THREE.Object3D>(
   name?: string
 ): T {
   const w = isWorldHandle(parent) ? parent : activeWorldRef;
+  // Guard against per-frame VRAM/mesh leaks if LLM accidentally calls a builder inside `animateCode`!
+  if (activePhaseRef === "animate") {
+    if (w && name && typeof name === "string" && w.objects[name]) {
+      return w.objects[name] as T;
+    }
+    return obj;
+  }
   if (isWorldHandle(parent)) {
     parent.root.add(obj);
   } else if (isCharacterRig(parent)) {
@@ -467,6 +517,12 @@ function registerObj<T extends THREE.Object3D>(
   name?: string
 ): T {
   const w = resolveWorld(world);
+  if (activePhaseRef === "animate") {
+    if (w && name && typeof name === "string" && w.objects[name]) {
+      return w.objects[name] as T;
+    }
+    return obj;
+  }
   if (w) {
     w.root.add(obj);
     if (name && typeof name === "string") {
@@ -527,11 +583,11 @@ export function createDiorama3DSdk() {
       }
     ) {
       const { world, opts } = resolveWorldAndOpts(worldOrOpts, maybeOpts);
-      if (!world) return;
+      if (!world || activePhaseRef === "animate") return;
       const isDark = opts?.isDark ?? false;
-      const top = opts?.bgTop || (isDark ? "#070B18" : "#5AAEE8");
-      const mid = opts?.bgMid || (isDark ? "#101932" : "#A3D7F5");
-      const bottom = opts?.bgBottom || (isDark ? "#182442" : "#E6F3FC");
+      const top = opts?.bgTop || (isDark ? "#070B18" : "#4CA5E4");
+      const mid = opts?.bgMid || (isDark ? "#101932" : "#9AD3F4");
+      const bottom = opts?.bgBottom || (isDark ? "#182442" : "#E4F2FC");
       world.skyColorTop = top;
       world.skyColorBottom = bottom;
 
@@ -544,10 +600,19 @@ export function createDiorama3DSdk() {
         Math.max(115, opts?.fogFar ?? 150)
       );
 
-      if (world.hemiLight) world.scene.remove(world.hemiLight);
+      if (world.hemiLight) {
+        world.scene.remove(world.hemiLight);
+        world.hemiLight.dispose();
+      }
       if (world.sunLight) {
+        world.sunLight.shadow?.map?.dispose();
         world.scene.remove(world.sunLight);
         world.scene.remove(world.sunLight.target);
+        world.sunLight.dispose();
+      }
+      if (world.fillLight) {
+        world.root.remove(world.fillLight);
+        world.fillLight.dispose();
       }
 
       const hemi = new THREE.HemisphereLight(
@@ -562,19 +627,19 @@ export function createDiorama3DSdk() {
         toColor(opts?.keyColor || (isDark ? "#E0F2FE" : "#FFF6E5"), 0xfff6e5),
         clamp(opts?.keyIntensity ?? (isDark ? 1.65 : 1.72), 0.8, 1.9)
       );
-      const sp = opts?.keyPos ?? [18, 28, 16];
+      const sp = opts?.keyPos ?? [16, 26, 15];
       key.position.set(sp[0], sp[1], sp[2]);
       key.castShadow = true;
-      key.shadow.mapSize.set(1024, 1024);
+      key.shadow.mapSize.set(2048, 2048);
       key.shadow.camera.near = 2;
-      key.shadow.camera.far = 110;
-      const d = 24;
+      key.shadow.camera.far = 95;
+      const d = 16;
       key.shadow.camera.left = -d;
       key.shadow.camera.right = d;
       key.shadow.camera.top = d;
       key.shadow.camera.bottom = -d;
-      key.shadow.bias = -0.0008;
-      key.shadow.normalBias = 0.04;
+      key.shadow.bias = -0.0005;
+      key.shadow.normalBias = 0.03;
       world.scene.add(key);
       world.scene.add(key.target);
       world.sunLight = key;
@@ -585,6 +650,7 @@ export function createDiorama3DSdk() {
       );
       fill.position.set(-16, 10, -14);
       world.root.add(fill);
+      world.fillLight = fill;
 
       if (opts?.stars) {
         const rand = seededRng(509);
@@ -1266,6 +1332,7 @@ export function createDiorama3DSdk() {
       }
 
       body.add(head);
+      addContactShadow(group, 0.72, 0.65);
 
       applyTransform(group, {
         pos: opts?.pos,
@@ -1937,6 +2004,7 @@ export function createDiorama3DSdk() {
       screen.position.set(0, 0.78, 0.052);
       lidPivot.add(screen);
       grp.add(lidPivot);
+      addContactShadow(grp, 1.45, 1.1);
 
       applyTransform(grp, opts);
       return attach3D(parent, grp, opts?.name);
@@ -2038,6 +2106,7 @@ export function createDiorama3DSdk() {
         core.position.set(0, h / 2, 0);
         grp.add(core);
       }
+      addContactShadow(grp, 1.45, 1.2);
 
       applyTransform(grp, opts);
       return attach3D(parent, grp, opts?.name);

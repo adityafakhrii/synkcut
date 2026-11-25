@@ -370,29 +370,102 @@ fn build_audio_mix_graph(
     Some((filters.join(";"), "[aout]".to_string()))
 }
 
+/// Streamed 2 MB base64 video chunk writer: avoids the 1.5 GB `Array.from(Uint8Array)` JSON IPC OOM spike!
+#[tauri::command]
+async fn write_export_video_chunk(
+    export_id: String,
+    chunk_base64: String,
+    append: bool,
+) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+    let safe_id: String = export_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(48)
+        .collect();
+    if safe_id.is_empty() {
+        return Err("export_id tidak valid.".to_string());
+    }
+    let temp_dir = std::env::temp_dir().join(format!("synkcut_export_{safe_id}"));
+    tokio::fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("Gagal membuat folder export sementara: {e}"))?;
+    let temp_video = temp_dir.join("encoded_video.mp4");
+    let decoded = BASE64
+        .decode(chunk_base64.trim())
+        .map_err(|e| format!("Gagal decode chunk video export: {e}"))?;
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(!append)
+        .append(append)
+        .open(&temp_video)
+        .await
+        .map_err(|e| format!("Gagal membuka file video sementara: {e}"))?;
+    file.write_all(&decoded)
+        .await
+        .map_err(|e| format!("Gagal menulis chunk video sementara: {e}"))?;
+    file.flush().await.ok();
+    Ok(temp_video.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn cleanup_export_temp(export_id: String) -> Result<(), String> {
+    let safe_id: String = export_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(48)
+        .collect();
+    if !safe_id.is_empty() {
+        let temp_dir = std::env::temp_dir().join(format!("synkcut_export_{safe_id}"));
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn mux_export_mp4(
     app: AppHandle,
-    video_bytes: Vec<u8>,
+    video_bytes: Option<Vec<u8>>,
+    temp_video_path: Option<String>,
     audio_path: Option<String>,
     generate_demo_audio: bool,
     duration_sec: f64,
     output_path: String,
     mix_plan: Option<AudioMixPlan>,
 ) -> Result<ExportResult, String> {
+    if !output_path.trim().to_ascii_lowercase().ends_with(".mp4") {
+        return Err("Path tujuan export wajib berakhiran .mp4.".to_string());
+    }
+    let seq = ATOMIC_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let temp_dir = std::env::temp_dir().join(format!("synkcut_export_{stamp}"));
-    tokio::fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| format!("Gagal membuat direktori sementara: {e}"))?;
 
-    let temp_video = temp_dir.join("encoded_video.mp4");
-    tokio::fs::write(&temp_video, &video_bytes)
-        .await
-        .map_err(|e| format!("Gagal menulis file video sementara: {e}"))?;
+    let (temp_dir, temp_video) = if let Some(ref prewritten) = temp_video_path.filter(|s| !s.trim().is_empty()) {
+        let pb = PathBuf::from(prewritten);
+        if !pb.is_file() {
+            return Err("File video hasil encode tidak ditemukan.".to_string());
+        }
+        let dir = pb.parent().map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        (dir, pb)
+    } else {
+        let bytes = video_bytes.ok_or_else(|| "Data video hasil encode kosong.".to_string())?;
+        let dir = std::env::temp_dir().join(format!("synkcut_export_{stamp}_{seq}"));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| format!("Gagal membuat direktori sementara: {e}"))?;
+        let vid = dir.join("encoded_video.mp4");
+        tokio::fs::write(&vid, &bytes)
+            .await
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&dir);
+                format!("Gagal menulis file video sementara: {e}")
+            })?;
+        (dir, vid)
+    };
 
     let _ = app.emit(
         "export-progress",
@@ -404,18 +477,20 @@ async fn mux_export_mp4(
     );
 
     let temp_video_str = temp_video.to_string_lossy().to_string();
-    let safe_dur = duration_sec.clamp(1.0, 180.0);
+    let safe_dur = if duration_sec.is_finite() {
+        duration_sec.clamp(1.0, 600.0)
+    } else {
+        15.0
+    };
     let mut args: Vec<String> = vec!["-y".to_string(), "-i".to_string(), temp_video_str];
     let mut next_input_idx: usize = 1;
 
-    // Input 1 (optional): Voiceover (user/TTS audio or synthesized demo chime)
-    let has_real_audio = audio_path
-        .as_deref()
-        .map(|p| !p.trim().is_empty())
-        .unwrap_or(false);
-    let has_voice = has_real_audio || generate_demo_audio;
+    // Input 1 (optional): Voiceover (validated local file or optional demo chime)
+    let valid_audio = audio_path
+        .filter(|p| !p.trim().is_empty() && PathBuf::from(p).is_file());
+    let has_voice = valid_audio.is_some() || generate_demo_audio;
 
-    if let Some(ref audio) = audio_path.filter(|p| !p.trim().is_empty()) {
+    if let Some(ref audio) = valid_audio {
         args.extend(["-i".to_string(), audio.clone()]);
         next_input_idx += 1;
     } else if generate_demo_audio {
@@ -428,10 +503,15 @@ async fn mux_export_mp4(
 
     // Optional BGM input (looped cleanly to duration)
     let mut bgm_input_idx: Option<usize> = None;
-    let bgm_volume = mix_plan
+    let raw_bgm_vol = mix_plan
         .as_ref()
         .and_then(|m| m.bgm_volume)
         .unwrap_or(0.24);
+    let bgm_volume = if raw_bgm_vol.is_finite() {
+        raw_bgm_vol.clamp(0.0, 1.0)
+    } else {
+        0.24
+    };
     let auto_ducking = mix_plan
         .as_ref()
         .and_then(|m| m.auto_ducking)
@@ -456,16 +536,21 @@ async fn mux_export_mp4(
         }
     }
 
-    // Optional timed SFX inputs (capped at 16 for predictable speed)
+    // Optional timed SFX inputs (up to 48 beats supported!)
     let mut sfx_inputs: Vec<(usize, u64, f64)> = Vec::new();
     if let Some(events) = mix_plan.as_ref().and_then(|m| m.sfx_events.as_ref()) {
-        for ev in events.iter().take(16) {
+        for ev in events.iter().take(48) {
             if ev.preset.trim().is_empty() || ev.preset == "none" {
                 continue;
             }
             if let Ok(sfx_file) = audio_pack::ensure_asset_file(&app, "sfx", &ev.preset) {
+                let safe_ev_vol = if ev.volume.is_finite() {
+                    ev.volume.clamp(0.0, 1.5)
+                } else {
+                    0.65
+                };
                 args.extend(["-i".to_string(), sfx_file.to_string_lossy().to_string()]);
-                sfx_inputs.push((next_input_idx, ev.timestamp_ms, ev.volume));
+                sfx_inputs.push((next_input_idx, ev.timestamp_ms, safe_ev_vol));
                 next_input_idx += 1;
             }
         }
@@ -503,16 +588,25 @@ async fn mux_export_mp4(
         ]);
     }
 
-    let output = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("Sidecar ffmpeg tidak ditemukan: {e}"))?
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| format!("Gagal menjalankan proses FFmpeg muxing: {e}"))?;
+    let sidecar_cmd = match app.shell().sidecar("ffmpeg") {
+        Ok(c) => c.args(&args),
+        Err(e) => {
+            if temp_dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("synkcut_export_")) {
+                let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            }
+            return Err(format!("Sidecar ffmpeg tidak ditemukan: {e}"));
+        }
+    };
 
-    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    let output_res = tokio::time::timeout(std::time::Duration::from_secs(180), sidecar_cmd.output()).await;
+
+    if temp_dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("synkcut_export_")) {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    let output = output_res
+        .map_err(|_| "Proses FFmpeg muxing melebihi batas waktu 3 menit.".to_string())?
+        .map_err(|e| format!("Gagal menjalankan proses FFmpeg muxing: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -535,7 +629,7 @@ async fn mux_export_mp4(
     Ok(ExportResult {
         output_path,
         file_size_bytes: meta.len(),
-        duration_ms: (duration_sec * 1000.0).round() as u64,
+        duration_ms: (safe_dur * 1000.0).round() as u64,
     })
 }
 
@@ -561,15 +655,32 @@ async fn export_remotion_project(
         .map_err(|e| format!("Gagal membuat folder Remotion: {e}"))?;
 
     for f in files {
-        let clean_rel = f
-            .relative_path
-            .replace('\\', "/")
-            .trim_start_matches('/')
-            .to_string();
-        if clean_rel.contains("..") || clean_rel.is_empty() {
+        let rel_raw = f.relative_path.replace('\\', "/");
+        if rel_raw.is_empty() || rel_raw.contains(':') {
             continue;
         }
-        let dest = root.join(&clean_rel);
+        let rel_path = std::path::Path::new(&rel_raw);
+        // Security: strictly require every path segment to be `Component::Normal` (prevents `C:` prefix & `..` traversal!)
+        if !rel_path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let allowed_ext = rel_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "ts" | "tsx" | "js" | "json" | "css" | "md" | "html" | "gitignore"
+                )
+            })
+            .unwrap_or(rel_raw.ends_with(".gitignore"));
+        if !allowed_ext {
+            continue;
+        }
+        let dest = root.join(rel_path);
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -577,18 +688,25 @@ async fn export_remotion_project(
         }
         tokio::fs::write(&dest, f.content.as_bytes())
             .await
-            .map_err(|e| format!("Gagal menulis {}: {e}", clean_rel))?;
+            .map_err(|e| format!("Gagal menulis {}: {e}", rel_raw))?;
     }
 
     if let Some(src_audio) = audio_path.filter(|p| !p.trim().is_empty()) {
         let src_path = PathBuf::from(&src_audio);
-        if src_path.exists() {
+        if src_path.is_file() {
             let public_dir = root.join("public");
             let _ = tokio::fs::create_dir_all(&public_dir).await;
-            let ext = src_path
+            let ext = match src_path
                 .extension()
                 .and_then(|e| e.to_str())
-                .unwrap_or("wav");
+                .map(|s| s.to_ascii_lowercase())
+                .as_deref()
+            {
+                Some("mp3") => "mp3",
+                Some("m4a") => "m4a",
+                Some("ogg") => "ogg",
+                _ => "wav",
+            };
             let dst_audio = public_dir.join(format!("voiceover.{ext}"));
             let _ = tokio::fs::copy(&src_path, &dst_audio).await;
         }
@@ -598,23 +716,43 @@ async fn export_remotion_project(
 }
 
 #[tauri::command]
-fn reveal_in_explorer(path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
-    if !target.exists() {
-        return Err("File tidak ditemukan.".to_string());
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| format!("Gagal membuka Explorer: {e}"))?;
-    }
-    Ok(())
+fn reveal_in_explorer(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let canonical = std::fs::canonicalize(&path).map_err(|_| "File tidak ditemukan.".to_string())?;
+    app.opener()
+        .reveal_item_in_dir(canonical)
+        .map_err(|e| format!("Gagal membuka Explorer: {e}"))
+}
+
+fn spawn_startup_temp_cleanup() {
+    std::thread::spawn(|| {
+        let two_hours = std::time::Duration::from_secs(2 * 3600);
+        if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let s = name.to_string_lossy();
+                if s.starts_with("synkcut_export_")
+                    || s.starts_with("synkcut_thumbs_")
+                    || s.starts_with("synkcut_ytref_")
+                {
+                    let is_stale = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > two_hours);
+                    if is_stale {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    spawn_startup_temp_cleanup();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -625,6 +763,8 @@ pub fn run() {
             probe_media,
             extract_thumbnails,
             extract_footage_frames,
+            write_export_video_chunk,
+            cleanup_export_temp,
             mux_export_mp4,
             export_remotion_project,
             reveal_in_explorer,

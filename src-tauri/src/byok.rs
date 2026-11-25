@@ -177,10 +177,21 @@ pub fn read_config(app: &AppHandle) -> StoredAppConfig {
 }
 
 fn write_config(app: &AppHandle, config: &StoredAppConfig) -> Result<(), String> {
+    use std::io::Write;
     let path = config_file_path(app)?;
     let raw = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Gagal serialisasi konfigurasi: {e}"))?;
-    std::fs::write(path, raw).map_err(|e| format!("Gagal menyimpan konfigurasi: {e}"))
+    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let mut f = std::fs::File::create(&tmp)
+        .map_err(|e| format!("Gagal menyiapkan konfigurasi sementara: {e}"))?;
+    f.write_all(raw.as_bytes())
+        .map_err(|e| format!("Gagal menulis konfigurasi: {e}"))?;
+    let _ = f.sync_all();
+    drop(f);
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Gagal menyimpan konfigurasi: {e}")
+    })
 }
 
 fn get_keyring_entry(provider: &str) -> Result<Entry, String> {
@@ -260,14 +271,13 @@ pub async fn discover_gemini_live_models(
     client: &reqwest::Client,
     api_key: &str,
 ) -> Result<Vec<String>, String> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=200"
-    );
+    let url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
     let res = client
         .get(url)
+        .header("x-goog-api-key", api_key)
         .send()
         .await
-        .map_err(|e| format!("Gagal menghubungi Gemini API: {e}"))?;
+        .map_err(|e| format!("Gagal menghubungi Gemini API: {}", e.without_url()))?;
 
     if !res.status().is_success() {
         let status = res.status().as_u16();
@@ -350,17 +360,26 @@ pub async fn probe_verified_gemini_models(api_key: &str) -> Result<Vec<String>, 
         }
     });
 
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
     let mut join_set = tokio::task::JoinSet::new();
-    for model_id in candidates {
+    for model_id in candidates.into_iter().take(12) {
+        let sem = semaphore.clone();
         let client = probe_client.clone();
         let key = api_key.to_string();
         let payload = ping_payload.clone();
         join_set.spawn(async move {
+            let _permit = sem.acquire_owned().await.ok()?;
             let start = Instant::now();
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={key}"
+                "https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
             );
-            match client.post(url).json(&payload).send().await {
+            match client
+                .post(url)
+                .header("x-goog-api-key", &key)
+                .json(&payload)
+                .send()
+                .await
+            {
                 Ok(res) if res.status().is_success() => {
                     Some((model_id, start.elapsed().as_millis() as u64))
                 }
@@ -569,6 +588,20 @@ pub async fn fetch_provider_models(
 
     let resolved_key = match api_key.as_deref().map(str::trim) {
         Some(k) if !k.is_empty() => Some(k.to_string()),
+        _ if valid == "custom" => {
+            // Security: only send stored custom Bearer key when base_url is omitted or matches saved custom_base_url!
+            let same_url = base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|u| u.trim_end_matches('/') == cfg.custom_base_url.trim().trim_end_matches('/'))
+                .unwrap_or(true);
+            if same_url {
+                read_stored_key(valid)
+            } else {
+                None
+            }
+        }
         _ => read_stored_key(valid),
     };
 
@@ -741,6 +774,20 @@ pub async fn test_byok_connection(
 
     let resolved_key = match api_key.as_deref().map(str::trim) {
         Some(k) if !k.is_empty() => Some(k.to_string()),
+        _ if valid == "custom" => {
+            // Security: only send stored custom Bearer key when base_url is omitted or matches saved custom_base_url!
+            let same_url = base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|u| u.trim_end_matches('/') == cfg.custom_base_url.trim().trim_end_matches('/'))
+                .unwrap_or(true);
+            if same_url {
+                read_stored_key(valid)
+            } else {
+                None
+            }
+        }
         _ => read_stored_key(valid),
     };
 
@@ -793,9 +840,15 @@ pub async fn test_byok_connection(
 
             for candidate in candidates {
                 let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={key}"
+                    "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent"
                 );
-                match probe_client.post(&url).json(&ping_payload).send().await {
+                match probe_client
+                    .post(&url)
+                    .header("x-goog-api-key", &key)
+                    .json(&ping_payload)
+                    .send()
+                    .await
+                {
                     Ok(res) => {
                         let status = res.status().as_u16();
                         if res.status().is_success() {
@@ -848,7 +901,7 @@ pub async fn test_byok_connection(
                             provider: "gemini".to_string(),
                             latency_ms,
                             message: "Tidak dapat terhubung ke server Google Gemini. Cek koneksi internet lo.".to_string(),
-                            detail: Some(err.to_string()),
+                            detail: Some(err.without_url().to_string()),
                             resolved_model: None,
                         });
                     }

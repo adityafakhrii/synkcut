@@ -65,6 +65,7 @@ import {
   updateSceneRole,
 } from "../engine/sceneOps";
 import { renderProjectFrame } from "../engine/canvasRenderer";
+import { clearDiorama3DCache } from "../engine/diorama3dRenderer";
 import {
   ExportCancelledError,
   checkWebCodecsSupport,
@@ -263,8 +264,9 @@ export default function StudioView({
   const [clipProbes, setClipProbes] = useState<Record<string, MediaProbeInfo>>({});
   const [footageThumbs, setFootageThumbs] = useState<string[]>([]);
   const [audioPath, setAudioPath] = useState<string | null>(initialProject.voiceover.audioPath);
-  const [generateDemoAudio, setGenerateDemoAudio] = useState(!initialProject.voiceover.audioPath);
+  const [generateDemoAudio, setGenerateDemoAudio] = useState(false);
   const [isGeneratingTts, setIsGeneratingTts] = useState(false);
+  const [seekTick, setSeekTick] = useState(0);
 
   // Bottom Scene Strip drag-drop
   const [draggedSceneIdx, setDraggedSceneIdx] = useState<number | null>(null);
@@ -444,7 +446,13 @@ export default function StudioView({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, [showExportModal, showJsonModal, totalDurationMs, pastHistory.length, futureHistory.length]);
+
+  useEffect(() => {
+    return () => {
+      clearDiorama3DCache();
+    };
+  }, []);
 
   // Debounced auto-save
   useEffect(() => {
@@ -623,9 +631,10 @@ export default function StudioView({
     activeSecondaryPath,
     isPlaying,
     currentPlayScene,
+    seekTick,
   ]);
 
-  // Playback loop + synced audio across multi-clip pool
+  // Playback loop + audio-master clock lock (zero drift, throttled ~30fps UI updates, clean loop restart!)
   useEffect(() => {
     const audioEl = audioRef.current;
     const bgmEl = bgmAudioRef.current;
@@ -669,7 +678,7 @@ export default function StudioView({
     }
     if (audioEl && audioPath) {
       const targetAudioSec = currentTimeMs / 1000;
-      if (Math.abs(audioEl.currentTime - targetAudioSec) > 0.15) {
+      if (Math.abs(audioEl.currentTime - targetAudioSec) > 0.12) {
         audioEl.currentTime = Math.min(targetAudioSec, audioEl.duration || targetAudioSec);
       }
       audioEl.play().catch(() => {});
@@ -682,24 +691,49 @@ export default function StudioView({
       bgmEl.play().catch(() => {});
     }
 
+    let playheadMs = currentTimeMs;
     lastFrameTsRef.current = performance.now();
+    let lastReactCommitTs = 0;
+
     const tick = (now: number) => {
-      const delta = now - lastFrameTsRef.current;
+      const delta = Math.min(100, Math.max(0, now - lastFrameTsRef.current));
       lastFrameTsRef.current = now;
-      setCurrentTimeMs((prev) => {
-        const next = prev + delta;
-        if (next >= totalDurationMs) {
-          for (const el of Object.values(videoPoolRef.current)) {
-            if (el) el.currentTime = 0;
-          }
-          if (audioEl) audioEl.currentTime = 0;
-          if (bgmEl) bgmEl.currentTime = 0;
-          lastTriggeredSceneIdRef.current = null;
-          lastPlaySceneIdRef.current = null;
-          return 0;
+
+      // Lock directly to real <audio> hardware clock whenever voiceover is actively playing!
+      if (audioEl && audioPath && !audioEl.paused && !audioEl.ended && audioEl.currentTime > 0) {
+        const audioMs = audioEl.currentTime * 1000;
+        if (Math.abs(audioMs - playheadMs) > 45) {
+          playheadMs = audioMs;
+        } else {
+          playheadMs += delta;
         }
-        return next;
-      });
+      } else {
+        playheadMs += delta;
+      }
+
+      if (playheadMs >= totalDurationMs) {
+        playheadMs = 0;
+        for (const el of Object.values(videoPoolRef.current)) {
+          if (el) el.currentTime = 0;
+        }
+        if (audioEl && audioPath) {
+          audioEl.currentTime = 0;
+          audioEl.play().catch(() => {});
+        }
+        if (bgmEl && bgmAssetUrl) {
+          bgmEl.currentTime = 0;
+          bgmEl.play().catch(() => {});
+        }
+        lastTriggeredSceneIdRef.current = null;
+        lastPlaySceneIdRef.current = null;
+        setCurrentTimeMs(0);
+        lastReactCommitTs = now;
+      } else if (now - lastReactCommitTs >= 31) {
+        // Throttle full React tree updates to ~32fps (avoids 144Hz main-thread thrashing!)
+        lastReactCommitTs = now;
+        setCurrentTimeMs(playheadMs);
+      }
+
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -1911,10 +1945,14 @@ export default function StudioView({
           src={toAssetUrl(clipPath)}
           muted
           playsInline
+          loop
           preload="auto"
           crossOrigin="anonymous"
           className="hidden"
-          onLoadedData={() => setCurrentTimeMs((t) => t)}
+          onLoadedData={() => setSeekTick((n) => n + 1)}
+          onSeeked={() => {
+            if (!isPlaying) setSeekTick((n) => n + 1);
+          }}
         />
       ))}
       {audioPath && (
@@ -1932,7 +1970,17 @@ export default function StudioView({
         <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
-            onClick={onBackHome}
+            onClick={async () => {
+              if (saveState === "dirty") {
+                try {
+                  await saveProject(project);
+                  onProjectSaved();
+                } catch {
+                  // ignore
+                }
+              }
+              onBackHome();
+            }}
             className="ui-btn-secondary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium cursor-pointer"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -2523,6 +2571,20 @@ export default function StudioView({
                       setSelectedSceneId(scene.id);
                       setTargetAllScenes(false);
                       setCurrentTimeMs(scene.startMs);
+                      if (audioRef.current && audioPath) {
+                        const sec = scene.startMs / 1000;
+                        audioRef.current.currentTime = Math.min(
+                          sec,
+                          audioRef.current.duration || sec
+                        );
+                        if (isPlaying && audioRef.current.paused) {
+                          audioRef.current.play().catch(() => {});
+                        }
+                      }
+                      if (bgmAudioRef.current && bgmAssetUrl) {
+                        bgmAudioRef.current.currentTime =
+                          (scene.startMs / 1000) % (bgmAudioRef.current.duration || 8);
+                      }
                     }}
                     style={{
                       width: `${widthPct}%`,

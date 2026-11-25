@@ -192,15 +192,26 @@ fn parse_data_url_mime_and_b64(data_url: &str) -> (&str, &str) {
     }
 }
 
+fn redact_secret_query_params(msg: &str) -> String {
+    if let Some(pos) = msg.find("?key=") {
+        let end = msg[pos + 5..]
+            .find(['&', ')', ' ', '"', '\''])
+            .map(|i| pos + 5 + i)
+            .unwrap_or(msg.len());
+        return format!("{}?key=[REDACTED]{}", &msg[..pos], &msg[end..]);
+    }
+    msg.to_string()
+}
+
 fn format_reqwest_error_chain(err: &reqwest::Error) -> String {
-    let mut parts = vec![err.to_string()];
+    let mut parts = vec![redact_secret_query_params(&err.to_string())];
     let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
     let mut depth = 0;
     while let Some(cause) = src {
         if depth >= 4 {
             break;
         }
-        let msg = cause.to_string();
+        let msg = redact_secret_query_params(&cause.to_string());
         if !parts.iter().any(|p| p == &msg) {
             parts.push(msg);
         }
@@ -612,10 +623,15 @@ pub async fn call_llm_json(
 
             for candidate in candidates {
                 let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={}",
-                    resolved.api_key
+                    "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent"
                 );
-                let res = match gemini_client.post(url).json(&payload).send().await {
+                let res = match gemini_client
+                    .post(url)
+                    .header("x-goog-api-key", &resolved.api_key)
+                    .json(&payload)
+                    .send()
+                    .await
+                {
                     Ok(r) => r,
                     Err(e) if e.is_timeout() => {
                         last_err = format!("Gemini model {candidate} timeout.");
@@ -934,7 +950,8 @@ pub fn sanitize_spoken_vo_line(raw: &str) -> String {
     }
 
     // If the LLM wrote `... VO: "actual spoken words" ...`, extract the spoken part cleanly!
-    let lower = s.to_lowercase();
+    // Use `.to_ascii_lowercase()` so byte indices ALWAYS match `s` 1:1 (prevents multi-byte UTF-8 panic!)
+    let lower = s.to_ascii_lowercase();
     if let Some(vo_pos) = lower.find("vo:") {
         let after = s[vo_pos + 3..].trim();
         let cleaned_after = after
@@ -954,7 +971,7 @@ pub fn sanitize_spoken_vo_line(raw: &str) -> String {
 
     // Strip leading timestamp patterns like `0-3 detik |`, `3–15 detik:`, `00:05 - 00:12 |`
     if let Some(pipe_pos) = s.find('|') {
-        let prefix = s[..pipe_pos].to_lowercase();
+        let prefix = s[..pipe_pos].to_ascii_lowercase();
         if prefix.contains("detik") || prefix.contains("scene") || prefix.contains("beat") || prefix.contains(':') {
             s = s[pipe_pos + 1..].trim().to_string();
         }
@@ -1263,7 +1280,7 @@ fn compute_scene_timings(
     total_duration_ms: u64,
     words: &[WordTimestamp],
 ) -> Vec<(u64, u64)> {
-    let safe_total = total_duration_ms.max(3000);
+    let safe_total = total_duration_ms.clamp(3000, 3_600_000);
     let counts: Vec<usize> = segments
         .iter()
         .map(|(_, t)| t.split_whitespace().count().max(1))
@@ -2408,9 +2425,15 @@ fn sanitize_single_scene_from_patch(
 ) -> Value {
     let mut scene = raw_scene.clone();
     if !scene.is_object() {
-        scene = matched_orig.cloned().unwrap_or_else(|| json!({}));
+        scene = matched_orig
+            .filter(|v| v.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
     }
-    let obj = scene.as_object_mut().unwrap();
+    if !scene.is_object() {
+        scene = json!({});
+    }
+    let obj = scene.as_object_mut().expect("scene guaranteed object");
 
     // 1. id
     let scene_id = obj
@@ -2667,7 +2690,11 @@ fn merge_and_sanitize_copilot_patch(
     selected_scene_id: Option<&str>,
     instruction: &str,
 ) -> Value {
-    let mut updated = original.clone();
+    let mut updated = if original.is_object() {
+        original.clone()
+    } else {
+        json!({})
+    };
 
     // 1. Deep-merge globalStyle safely
     if let Some(new_style) = patch.get("globalStyle").and_then(Value::as_object) {
@@ -4652,6 +4679,26 @@ mod tests {
         let fenced = "```json\n{\"ok\":true}\n```";
         assert_eq!(strip_json_fences(fenced), "{\"ok\":true}");
         assert_eq!(strip_json_fences("{\"ok\":true}"), "{\"ok\":true}");
+    }
+
+    #[test]
+    fn test_security_redaction_and_ssrf_and_utf8_panics() {
+        // 1. Secret query param redaction
+        let leaked = "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key=AIzaSySecret12345&alt=json)";
+        let redacted = redact_secret_query_params(leaked);
+        assert!(!redacted.contains("AIzaSySecret12345"));
+        assert!(redacted.contains("?key=[REDACTED]"));
+
+        // 2. Multi-byte Unicode (`İ`, `K`) before `VO:` must NEVER panic!
+        let tricky = "İK 0-5 detik | VO: \"Halo semua, ini kalimat aman!\"";
+        assert_eq!(sanitize_spoken_vo_line(tricky), "Halo semua, ini kalimat aman!");
+
+        // 3. SSRF guard blocks loopback, private LAN, and link-local metadata
+        assert!(!crate::style_ref::is_safe_public_http_url("http://localhost:20128/v1"));
+        assert!(!crate::style_ref::is_safe_public_http_url("http://127.0.0.1:8080/secret"));
+        assert!(!crate::style_ref::is_safe_public_http_url("http://169.254.169.254/latest/meta-data"));
+        assert!(!crate::style_ref::is_safe_public_http_url("http://192.168.1.1/admin"));
+        assert!(crate::style_ref::is_safe_public_http_url("https://raw.githubusercontent.com/user/repo/main/SKILL.md"));
     }
 
     #[test]

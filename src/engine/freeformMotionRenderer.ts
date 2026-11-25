@@ -12,19 +12,19 @@ import {
 
 const FORBIDDEN_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   {
-    re: /\b(window|document|globalThis|self|top|parent|frames|location|navigator|localStorage|sessionStorage|indexedDB|cookie)\b/,
+    re: /\b(window|document|globalThis|self|top|parent|frames|location|navigator|localStorage|sessionStorage|indexedDB|cookie|ownerDocument|defaultView)\b/,
     reason: "Akses DOM/browser global tidak diizinkan di sandbox motion.",
   },
   {
-    re: /\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts)\b/,
-    reason: "Akses jaringan/worker tidak diizinkan di sandbox motion.",
+    re: /\b(fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts)\b|\bimport\s*\(/,
+    reason: "Akses jaringan/modul eksternal tidak diizinkan di sandbox motion.",
   },
   {
-    re: /\b(eval|Function|__TAURI__|__TAURI_INTERNALS__|process|require)\b/,
+    re: /\b(eval|Function|Reflect|Proxy|__TAURI__|__TAURI_INTERNALS__|process|require)\b/,
     reason: "Eksekusi dinamis / API sistem tidak diizinkan di sandbox motion.",
   },
   {
-    re: /\b(__proto__|constructor\s*\(|setTimeout|setInterval|requestAnimationFrame)\b/,
+    re: /\b(__proto__|prototype|setPrototypeOf|defineProperty|setTimeout|setInterval|requestAnimationFrame)\b|\.\s*constructor\b|\[\s*['"`]constructor['"`]\s*\]|\bconstructor\s*\(/,
     reason: "Timer/prototype tampering tidak diizinkan di renderer frame deterministik.",
   },
 ];
@@ -101,14 +101,152 @@ export function validateBeatCodeSafety(code: string): BeatValidationResult {
 }
 
 /**
- * Injects a lightweight loop iteration guard so malformed `while`/`for` loops
- * can never hang the UI thread or export encoder.
+ * Balanced-parenthesis & string-aware loop guard instrumenter:
+ * Safely injects `__guard();` into `for (...)`, `while (...)`, and `do { ... }` loops
+ * even when headers contain nested function calls like `for (let i = 0; i < Math.min(a, b); i++)`,
+ * while skipping string/template literals and comments!
  */
-function instrumentLoopGuards(code: string): string {
-  return code.replace(
-    /\b(while|for)\s*\(([^)]*)\)\s*\{/g,
-    "$1 ($2) { __guard();"
-  );
+export function instrumentLoopGuards(code: string): string {
+  let out = "";
+  let i = 0;
+  const n = code.length;
+  const isIdentChar = (c: string) => /[A-Za-z0-9_$]/.test(c);
+
+  while (i < n) {
+    const ch = code[i];
+
+    // Skip single-line comments
+    if (ch === "/" && code[i + 1] === "/") {
+      const nl = code.indexOf("\n", i + 2);
+      if (nl === -1) {
+        out += code.slice(i);
+        break;
+      }
+      out += code.slice(i, nl + 1);
+      i = nl + 1;
+      continue;
+    }
+    // Skip block comments
+    if (ch === "/" && code[i + 1] === "*") {
+      const end = code.indexOf("*/", i + 2);
+      if (end === -1) {
+        out += code.slice(i);
+        break;
+      }
+      out += code.slice(i, end + 2);
+      i = end + 2;
+      continue;
+    }
+    // Skip string & template literals
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      out += ch;
+      i++;
+      while (i < n) {
+        const sc = code[i];
+        out += sc;
+        i++;
+        if (sc === "\\" && i < n) {
+          out += code[i];
+          i++;
+          continue;
+        }
+        if (sc === quote) break;
+      }
+      continue;
+    }
+
+    // Check keyword boundary for `for`, `while`, or `do`
+    const prev = i > 0 ? code[i - 1] : "";
+    if (!isIdentChar(prev) && prev !== ".") {
+      const kw = code.startsWith("while", i)
+        ? "while"
+        : code.startsWith("for", i)
+          ? "for"
+          : code.startsWith("do", i)
+            ? "do"
+            : null;
+      if (kw && !isIdentChar(code[i + kw.length] || "")) {
+        if (kw === "do") {
+          let j = i + 2;
+          while (j < n && /\s/.test(code[j])) j++;
+          if (code[j] === "{") {
+            out += code.slice(i, j + 1) + " __guard();";
+            i = j + 1;
+            continue;
+          }
+        } else {
+          let j = i + kw.length;
+          while (j < n && /\s/.test(code[j])) j++;
+          if (code[j] === "(") {
+            let depth = 0;
+            let k = j;
+            while (k < n) {
+              const kc = code[k];
+              if (kc === "'" || kc === '"' || kc === "`") {
+                const q = kc;
+                k++;
+                while (k < n) {
+                  if (code[k] === "\\") {
+                    k += 2;
+                    continue;
+                  }
+                  if (code[k] === q) {
+                    k++;
+                    break;
+                  }
+                  k++;
+                }
+                continue;
+              }
+              if (kc === "(") depth++;
+              else if (kc === ")") {
+                depth--;
+                if (depth === 0) {
+                  k++;
+                  break;
+                }
+              }
+              k++;
+            }
+            if (depth === 0) {
+              let m = k;
+              while (m < n && /\s/.test(code[m])) m++;
+              if (code[m] === "{") {
+                out += code.slice(i, m + 1) + " __guard();";
+                i = m + 1;
+                continue;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+function createSafeCanvasContextProxy(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): CanvasRenderingContext2D {
+  const safeCanvasDim = Object.freeze({ width, height });
+  return new Proxy(ctx, {
+    get(target, prop) {
+      if (prop === "canvas") return safeCanvasDim;
+      if (prop === "constructor" || prop === "__proto__") return undefined;
+      const val = Reflect.get(target, prop, target);
+      return typeof val === "function" ? val.bind(target) : val;
+    },
+    set(target, prop, value) {
+      if (prop === "canvas" || prop === "__proto__" || prop === "constructor") return false;
+      return Reflect.set(target, prop, value, target);
+    },
+  });
 }
 
 function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: string } {
@@ -139,6 +277,9 @@ function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: s
       "globalThis",
       "fetch",
       "localStorage",
+      "Reflect",
+      "Proxy",
+      "Function",
       body
     ) as (
       ctx: CanvasRenderingContext2D,
@@ -149,7 +290,21 @@ function compileBeatCode(code: string): { fn: CompiledRenderFn | null; error?: s
     ) => void;
 
     const wrapped: CompiledRenderFn = (ctx, state, M, __guard) => {
-      rawFn(ctx, state, M, __guard, undefined, undefined, undefined, undefined, undefined);
+      const safeCtx = createSafeCanvasContextProxy(ctx, state.width, state.height);
+      rawFn(
+        safeCtx,
+        state,
+        M,
+        __guard,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
     };
 
     if (compiledCache.size > 120) {

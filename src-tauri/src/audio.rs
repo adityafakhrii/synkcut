@@ -151,29 +151,29 @@ pub async fn probe_audio_duration_ms(app: &AppHandle, path: &str) -> Result<u64,
 }
 
 async fn synthesize_windows_offline_wav(text: &str, out_path: &PathBuf) -> Result<(), String> {
-    let safe_text = text
-        .replace('\'', "''")
-        .replace('\r', " ")
-        .replace('\n', ". ");
-    let out_str = out_path.to_string_lossy().replace('\'', "''");
-    // Prefer an Indonesian voice if installed on Windows (e.g. Andika/Gadis/Ardi), else best available voice
-    let script = format!(
-        "Add-Type -AssemblyName System.Speech; \
-         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-         $voices = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled }}; \
-         $idVoice = $voices | Where-Object {{ $_.VoiceInfo.Culture.Name -like 'id*' -or $_.VoiceInfo.Name -like '*Indones*' -or $_.VoiceInfo.Name -like '*Andika*' -or $_.VoiceInfo.Name -like '*Gadis*' -or $_.VoiceInfo.Name -like '*Ardi*' }} | Select-Object -First 1; \
-         if ($idVoice) {{ $s.SelectVoice($idVoice.VoiceInfo.Name) }}; \
-         $s.Rate = 1; \
-         $s.Volume = 100; \
-         $s.SetOutputToWaveFile('{out_str}'); \
-         $s.Speak('{safe_text}'); \
-         $s.Dispose();"
-    );
+    let clean_text = text.replace('\r', " ").replace('\n', ". ");
+    // Security: NEVER interpolate user/LLM text into PowerShell code (prevents Unicode curly-quote RCE & syntax breaks!)
+    const PS_SCRIPT: &str = "Add-Type -AssemblyName System.Speech; \
+        $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+        $voices = $s.GetInstalledVoices() | Where-Object { $_.Enabled }; \
+        $idVoice = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'id*' -or $_.VoiceInfo.Name -like '*Indones*' -or $_.VoiceInfo.Name -like '*Andika*' -or $_.VoiceInfo.Name -like '*Gadis*' -or $_.VoiceInfo.Name -like '*Ardi*' } | Select-Object -First 1; \
+        if ($idVoice) { $s.SelectVoice($idVoice.VoiceInfo.Name) }; \
+        $s.Rate = 1; \
+        $s.Volume = 100; \
+        $s.SetOutputToWaveFile($env:SYNKCUT_TTS_OUT); \
+        $s.Speak($env:SYNKCUT_TTS_TEXT); \
+        $s.Dispose();";
 
-    let output = tokio::process::Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .output()
+    let fut = tokio::process::Command::new("powershell")
+        .kill_on_drop(true)
+        .args(["-NoProfile", "-NonInteractive", "-Command", PS_SCRIPT])
+        .env("SYNKCUT_TTS_OUT", out_path.as_os_str())
+        .env("SYNKCUT_TTS_TEXT", &clean_text)
+        .output();
+
+    let output = tokio::time::timeout(std::time::Duration::from_secs(45), fut)
         .await
+        .map_err(|_| "Windows Offline TTS melebihi batas waktu 45 detik.".to_string())?
         .map_err(|e| format!("Gagal menjalankan Windows Offline TTS: {e}"))?;
 
     if !output.status.success() {
@@ -235,15 +235,21 @@ async fn transcribe_with_gemini(
     let mut last_status = 0u16;
     for candidate in candidates {
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={api_key}"
+            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent"
         );
-        let res = match client.post(url).json(&body).send().await {
+        let res = match client
+            .post(url)
+            .header("x-goog-api-key", api_key)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
                 last_status = 504;
                 continue;
             }
-            Err(e) => return Err(format!("Gagal menghubungi Gemini Audio API: {e}")),
+            Err(e) => return Err(format!("Gagal menghubungi Gemini Audio API: {}", e.without_url())),
         };
 
         if res.status().is_success() {
@@ -510,12 +516,18 @@ async fn generate_tts_single_engine(
 
             for tts_model in tts_models {
                 let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent?key={key}"
+                    "https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent"
                 );
-                let res = match client.post(url).json(&payload).send().await {
+                let res = match client
+                    .post(url)
+                    .header("x-goog-api-key", &key)
+                    .json(&payload)
+                    .send()
+                    .await
+                {
                     Ok(r) => r,
                     Err(e) => {
-                        last_err = format!("Gagal menghubungi Gemini TTS API: {e}");
+                        last_err = format!("Gagal menghubungi Gemini TTS API: {}", e.without_url());
                         continue;
                     }
                 };
@@ -663,15 +675,28 @@ pub async fn process_user_audio(
     let cache_dir = audio_cache_dir(&app)?;
     let stamp = now_millis();
 
+    let is_temp_recording = recorded_bytes.is_some();
     let raw_source_path: PathBuf = if let Some(bytes) = recorded_bytes {
-        let ext = recorded_ext.unwrap_or_else(|| "webm".to_string());
+        let raw_ext = recorded_ext
+            .unwrap_or_else(|| "webm".to_string())
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        let ext = match raw_ext.as_str() {
+            "webm" | "wav" | "ogg" | "mp4" | "m4a" | "mp3" => raw_ext.as_str(),
+            _ => "webm",
+        };
         let p = cache_dir.join(format!("rec_raw_{stamp}.{ext}"));
         tokio::fs::write(&p, &bytes)
             .await
             .map_err(|e| format!("Gagal menyimpan rekaman mic: {e}"))?;
         p
     } else if let Some(p) = input_path {
-        PathBuf::from(p)
+        let pb = PathBuf::from(p);
+        if !pb.is_file() {
+            return Err("File audio sumber tidak ditemukan.".to_string());
+        }
+        pb
     } else {
         return Err("Tidak ada file audio atau rekaman mic yang diberikan.".to_string());
     };
@@ -680,11 +705,15 @@ pub async fn process_user_audio(
     let src_str = raw_source_path.to_string_lossy().to_string();
     let dst_str = processed_wav.to_string_lossy().to_string();
 
-    // Normalize audio + optional Auto Trim Silence (> 0.4s) via bundled FFmpeg LGPL sidecar
+    // Normalize audio + optional single-pass Auto Trim Silence (no `areverse` full-RAM buffer!)
     let mut ff_args = vec![
         "-y".to_string(),
+        "-protocol_whitelist".to_string(),
+        "file,pipe".to_string(),
         "-i".to_string(),
         src_str,
+        "-t".to_string(),
+        "600".to_string(),
         "-ac".to_string(),
         "1".to_string(),
         "-ar".to_string(),
@@ -694,20 +723,35 @@ pub async fn process_user_audio(
     if trim_silence {
         ff_args.push("-af".to_string());
         ff_args.push(
-            "silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB,areverse,silenceremove=stop_periods=-1:stop_duration=0.4:stop_threshold=-38dB".to_string(),
+            "silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:stop_periods=-1:stop_duration=0.4:stop_threshold=-38dB".to_string(),
         );
     }
 
     ff_args.push(dst_str.clone());
 
-    let ff_out = app
+    let ff_cmd = app
         .shell()
         .sidecar("ffmpeg")
         .map_err(|e| format!("Sidecar ffmpeg tidak tersedia: {e}"))?
-        .args(&ff_args)
-        .output()
+        .args(&ff_args);
+    let ff_out = tokio::time::timeout(std::time::Duration::from_secs(60), ff_cmd.output())
         .await
-        .map_err(|e| format!("Gagal memproses audio dengan FFmpeg: {e}"))?;
+        .map_err(|_| {
+            if is_temp_recording {
+                let _ = std::fs::remove_file(&raw_source_path);
+            }
+            "Proses normalisasi audio melebihi batas waktu 60 detik.".to_string()
+        })?
+        .map_err(|e| {
+            if is_temp_recording {
+                let _ = std::fs::remove_file(&raw_source_path);
+            }
+            format!("Gagal memproses audio dengan FFmpeg: {e}")
+        })?;
+
+    if is_temp_recording {
+        let _ = tokio::fs::remove_file(&raw_source_path).await;
+    }
 
     if !ff_out.status.success() {
         let stderr = String::from_utf8_lossy(&ff_out.stderr);

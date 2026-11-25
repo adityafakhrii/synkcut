@@ -136,8 +136,72 @@ pub struct AnalyzeDesignRequest {
 
 /* ==================== COLOR CONTRAST & SANITIZATION ==================== */
 
+/// SSRF Defense: blocks loopback, private LAN (RFC1918), link-local (169.254.*), and non-HTTP(S) schemes!
+pub fn is_safe_public_http_url(raw: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw.trim()) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return false;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let h = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if h == "localhost"
+        || h.ends_with(".localhost")
+        || h.ends_with(".local")
+        || h == "0.0.0.0"
+        || h == "::1"
+    {
+        return false;
+    }
+    if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                !v4.is_loopback()
+                    && !v4.is_private()
+                    && !v4.is_link_local()
+                    && !v4.is_unspecified()
+                    && !v4.is_broadcast()
+                    && !(v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 64)
+            }
+            std::net::IpAddr::V6(v6) => !v6.is_loopback() && !v6.is_unspecified(),
+        };
+    }
+    true
+}
+
+/// Bounded streaming HTTP body reader (prevents multi-GB OOM / gzip-bomb DoS!)
+pub async fn read_body_bounded(
+    mut res: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    if res.content_length().is_some_and(|len| len > max_bytes as u64) {
+        return Err("Ukuran respons melebihi batas aman.".to_string());
+    }
+    let mut buf = Vec::with_capacity(max_bytes.min(65536));
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .map_err(|_| "Gagal membaca stream respons.".to_string())?
+    {
+        if buf.len() + chunk.len() > max_bytes {
+            return Err("Ukuran respons melebihi batas aman.".to_string());
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let clean = hex.trim().strip_prefix('#')?;
+    if !clean.is_ascii() {
+        return None;
+    }
     if clean.len() == 3 {
         let mut chars = clean.chars();
         let r = u8::from_str_radix(&format!("{0}{0}", chars.next()?), 16).ok()?;
@@ -145,7 +209,7 @@ fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
         let b = u8::from_str_radix(&format!("{0}{0}", chars.next()?), 16).ok()?;
         return Some((r, g, b));
     }
-    if clean.len() >= 6 {
+    if clean.len() == 6 || clean.len() == 8 {
         let r = u8::from_str_radix(&clean[0..2], 16).ok()?;
         let g = u8::from_str_radix(&clean[2..4], 16).ok()?;
         let b = u8::from_str_radix(&clean[4..6], 16).ok()?;
@@ -1393,8 +1457,19 @@ async fn fetch_webpage_design_context(url: &str) -> WebpageBrandContext {
         headings: Vec::new(),
     };
 
+    if !is_safe_public_http_url(url) {
+        return empty(fallback_title);
+    }
+
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(14))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 3 || !is_safe_public_http_url(attempt.url().as_str()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
     else {
@@ -1420,8 +1495,8 @@ async fn fetch_webpage_design_context(url: &str) -> WebpageBrandContext {
         .to_lowercase();
 
     if content_type.starts_with("image/") {
-        if let Ok(bytes) = res.bytes().await {
-            if !bytes.is_empty() && bytes.len() <= 5 * 1024 * 1024 {
+        if let Ok(bytes) = read_body_bounded(res, 5 * 1024 * 1024).await {
+            if !bytes.is_empty() {
                 let mime = content_type.split(';').next().unwrap_or("image/jpeg");
                 let data_url = format!("data:{mime};base64,{}", BASE64.encode(bytes));
                 return WebpageBrandContext {
@@ -1697,9 +1772,15 @@ async fn analyze_youtube_via_gemini_direct(
 
     for candidate in candidates {
         let endpoint = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent?key={gemini_key}"
+            "https://generativelanguage.googleapis.com/v1beta/models/{candidate}:generateContent"
         );
-        let Ok(res) = client.post(endpoint).json(&payload).send().await else {
+        let Ok(res) = client
+            .post(endpoint)
+            .header("x-goog-api-key", &gemini_key)
+            .json(&payload)
+            .send()
+            .await
+        else {
             continue;
         };
         if res.status().is_success() {
@@ -1755,6 +1836,7 @@ async fn try_yt_dlp_frame_sampler(app: &AppHandle, canonical_url: &str) -> Optio
 
     let out_template = temp_dir.join("clip.%(ext)s");
     let download_fut = tokio::process::Command::new(&yt_dlp_bin)
+        .kill_on_drop(true)
         .args([
             "--no-playlist",
             "--no-warnings",
@@ -1764,6 +1846,7 @@ async fn try_yt_dlp_frame_sampler(app: &AppHandle, canonical_url: &str) -> Optio
             "bv*[height<=360][ext=mp4]/b[height<=360]/worst[ext=mp4]/worst",
             "-o",
             out_template.to_string_lossy().as_ref(),
+            "--",
             canonical_url,
         ])
         .output();

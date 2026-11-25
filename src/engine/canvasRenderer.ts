@@ -21,10 +21,10 @@ export interface RenderFrameOptions {
 }
 
 const FONT_STACKS: Record<DesignFontFamily, string> = {
-  sans: '"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  sans: '"Plus Jakarta Sans", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   serif: 'Georgia, "Times New Roman", Cambria, serif',
   mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
-  display: '"Impact", "Arial Black", "IBM Plex Sans", sans-serif',
+  display: '"Inter", "Plus Jakarta Sans", "IBM Plex Sans", -apple-system, sans-serif',
 };
 
 function resolveFont(family?: DesignFontFamily): string {
@@ -487,7 +487,7 @@ function drawFootageWithMotion(
       ctx.fillStyle = streak;
       ctx.fillRect(0, 0, width, height);
     } else if (safeTrans.preset === "pop_zoom") {
-      const flash = Math.max(0, 1 - trProgress * 2.5) * 0.36;
+      const flash = Math.max(0, 1 - trProgress * 3.2) * 0.08;
       ctx.fillStyle = `rgba(255,255,255,${flash})`;
       ctx.fillRect(0, 0, width, height);
     } else if (safeTrans.preset === "glitch_flash") {
@@ -729,13 +729,23 @@ function drawKineticCaptions(
     chunks.push(sceneWords.slice(i, i + chunkSize));
   }
 
-  const activeChunk =
-    chunks.find((ch) => timeMs >= ch[0].startMs && timeMs <= ch[ch.length - 1].endMs) ??
-    chunks[chunks.length - 1];
+  // Pick exact active chunk, or hold the most recently started chunk during natural speech pauses (never flash the end of scene!)
+  let activeChunk = chunks.find(
+    (ch) => timeMs >= ch[0].startMs && timeMs <= ch[ch.length - 1].endMs
+  );
+  if (!activeChunk) {
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      if (timeMs >= chunks[i][0].startMs) {
+        activeChunk = chunks[i];
+        break;
+      }
+    }
+    if (!activeChunk) activeChunk = chunks[0];
+  }
   if (!activeChunk || activeChunk.length === 0) return;
 
-  // Viral Shorts (AkuTahu, Kenapa Yaaa?, How Come?) center captions right in the sweet spot!
-  const baseY = captionPlacement === "center_middle" ? height * 0.585 : height * 0.67;
+  // Keep bottom_safe at 78% so captions NEVER collide with 2D hero visuals (`0.11..0.68`)!
+  const baseY = captionPlacement === "center_middle" ? height * 0.585 : height * 0.78;
 
   const isViralShortsLook =
     captionLook === "black_pill" ||
@@ -781,30 +791,41 @@ function drawKineticCaptions(
   ctx.save();
   ctx.textBaseline = "middle";
 
+  // Measure static horizontal layout at scale = 1.0 so neighboring words & pill box NEVER jitter ("row breathing")!
   const measureChunk = (sz: number) => {
     ctx.font = `${fontWeight} ${sz}px ${fontFamily}`;
     const baseSpaceW = ctx.measureText(" ").width;
-    const spW = useUppercase ? baseSpaceW * 1.45 : baseSpaceW * 1.15;
+    const spW = useUppercase ? baseSpaceW * 1.4 : baseSpaceW * 1.18;
+    const canPop =
+      preset === "bold_pop" ||
+      preset === "kinetic_punch" ||
+      captionLook === "bold_outline" ||
+      captionLook === "outline_bold" ||
+      captionLook === "black_pill";
     const measured = activeChunk.map((w) => {
       const safeWord = String(w.word ?? "");
       const label = useUppercase ? safeWord.toUpperCase() : safeWord;
       const isActive = timeMs >= w.startMs && timeMs <= w.endMs;
       const wordDur = Math.max(80, w.endMs - w.startMs);
-      const wordProg = isActive ? Math.min(1, (timeMs - w.startMs) / Math.min(140, wordDur)) : 0;
-      const springBoost =
-        isActive &&
-        (preset === "bold_pop" ||
-          preset === "kinetic_punch" ||
-          captionLook === "bold_outline" ||
-          captionLook === "outline_bold")
-          ? 1 + 0.12 * easeOutCubic(wordProg)
-          : 1;
+      let boost = 1;
+      if (canPop) {
+        if (isActive) {
+          const p = Math.min(1, (timeMs - w.startMs) / Math.min(130, wordDur));
+          // Crisp slight overshoot (1.0 -> 1.12 -> 1.09)
+          const s = p < 0.7 ? easeOutCubic(p / 0.7) * 1.12 : 1.12 - ((p - 0.7) / 0.3) * 0.03;
+          boost = 1 + (s - 1);
+        } else if (timeMs > w.endMs && timeMs - w.endMs < 90) {
+          // Smooth 90ms settle decay instead of 1-frame snap!
+          const decay = 1 - (timeMs - w.endMs) / 90;
+          boost = 1 + 0.09 * decay;
+        }
+      }
       return {
         word: w,
         label,
-        width: ctx.measureText(label).width * springBoost,
+        width: ctx.measureText(label).width,
         isActive,
-        springBoost,
+        springBoost: Math.max(1, boost),
       };
     });
     const tw =
@@ -913,7 +934,11 @@ function drawKineticCaptions(
       ctx.strokeStyle = "rgba(8, 10, 14, 0.95)";
       ctx.strokeText(item.label, 0, 0);
     } else if (captionLook === "clean_shadow") {
-      ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+      ctx.lineWidth = 6;
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(8, 10, 14, 0.58)";
+      ctx.strokeText(item.label, 0, 0);
+      ctx.shadowColor = "rgba(0, 0, 0, 0.82)";
       ctx.shadowBlur = 18;
       ctx.shadowOffsetY = 5;
     } else if ((preset === "neon_tech" || custom?.visualStyle.cardStyle === "neon") && item.isActive) {
@@ -973,11 +998,15 @@ export function renderProjectFrame(
   options: RenderFrameOptions = {}
 ) {
   const { width, height } = ctx.canvas;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.clearRect(0, 0, width, height);
 
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const scene = findActiveScene(project, timeMs);
   if (!scene) return;
 
+  const sceneIdx = scenes.findIndex((s) => s.id === scene.id);
   const sceneDuration = Math.max(1, (scene.endMs || 2500) - (scene.startMs || 0));
   const sceneLocalMs = Math.max(0, timeMs - (scene.startMs || 0));
   const sceneProgress = Math.max(0, Math.min(1, sceneLocalMs / sceneDuration));
@@ -988,6 +1017,37 @@ export function renderProjectFrame(
   const customDesign = project.globalStyle?.customDesign ?? null;
   const accentColor =
     customDesign?.palette.accentPrimary || project.globalStyle?.accentColor || "#38E59D";
+
+  // True Dual-Scene A->B Transition: render outgoing scene underneath during crossfade / whip_pan / pop_zoom
+  // so transitions NEVER dip to black!
+  const transDur = scene.transitionIn?.durationMs || 0;
+  const transPreset = scene.transitionIn?.preset || "hard_cut";
+  if (
+    sceneIdx > 0 &&
+    transDur > 0 &&
+    sceneLocalMs < transDur &&
+    transPreset !== "hard_cut" &&
+    !options.isPosterThumbnail &&
+    scene.aiMotion?.engine !== "diorama_3d"
+  ) {
+    const prevScene = scenes[sceneIdx - 1];
+    if (prevScene) {
+      const prevDur = Math.max(1, (prevScene.endMs || 2500) - (prevScene.startMs || 0));
+      drawFootageWithMotion(
+        ctx,
+        width,
+        height,
+        project,
+        prevScene,
+        1,
+        prevDur,
+        null,
+        null,
+        false,
+        false
+      );
+    }
+  }
 
   // 1. Footage OR Native AI Motion + Visual Entry Transition + Optional Split-Screen
   drawFootageWithMotion(
@@ -1022,14 +1082,14 @@ export function renderProjectFrame(
   // 3. Word-level synced kinetic captions
   drawKineticCaptions(ctx, width, height, project, scene, timeMs);
 
-  // 4. Progress bar
+  // 4. Sleek minimal bottom/top progress edge (subtle 6px accent bar)
   if (project.globalStyle?.showProgressBar) {
     const totalMs = Math.max(1, getProjectDurationMs(project));
     const overallProgress = Math.max(0, Math.min(1, timeMs / totalMs));
-    ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-    ctx.fillRect(0, 0, width, 10);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+    ctx.fillRect(0, 0, width, 6);
     ctx.fillStyle = accentColor;
-    ctx.fillRect(0, 0, width * overallProgress, 10);
+    ctx.fillRect(0, 0, width * overallProgress, 6);
   }
 
   // 5. Optional Safe Zone overlay (preview only — disabled during final export)

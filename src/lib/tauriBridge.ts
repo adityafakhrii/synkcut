@@ -210,16 +210,66 @@ export async function ensureAudioPackAsset(
   return invoke<string>("ensure_audio_pack_asset", { kind, presetId });
 }
 
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+export async function writeExportVideoChunk(params: {
+  exportId: string;
+  chunk: Uint8Array;
+  append: boolean;
+}): Promise<string> {
+  return invoke<string>("write_export_video_chunk", {
+    exportId: params.exportId,
+    chunkBase64: uint8ToBase64(params.chunk),
+    append: params.append,
+  });
+}
+
+export async function cleanupExportTemp(exportId: string): Promise<void> {
+  if (!isTauriRuntime()) return;
+  try {
+    await invoke("cleanup_export_temp", { exportId });
+  } catch {
+    // ignore best-effort cleanup
+  }
+}
+
 export async function muxExportMp4(params: {
-  videoBytes: Uint8Array;
+  videoBytes?: Uint8Array;
+  tempVideoPath?: string;
   audioPath: string | null;
   generateDemoAudio: boolean;
   durationSec: number;
   outputPath: string;
   mixPlan?: AudioMixPlan;
 }): Promise<ExportResult> {
+  // Stream in 2 MB chunks to disk first so WebView2 NEVER allocates a 1.5 GB JSON number array!
+  let tempVideoPath = params.tempVideoPath;
+  if (!tempVideoPath && params.videoBytes) {
+    const exportId = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const chunkSize = 2 * 1024 * 1024;
+    for (let offset = 0; offset < params.videoBytes.byteLength; offset += chunkSize) {
+      const slice = params.videoBytes.subarray(
+        offset,
+        Math.min(params.videoBytes.byteLength, offset + chunkSize)
+      );
+      tempVideoPath = await writeExportVideoChunk({
+        exportId,
+        chunk: slice,
+        append: offset > 0,
+      });
+    }
+  }
+
   return invoke<ExportResult>("mux_export_mp4", {
-    videoBytes: Array.from(params.videoBytes),
+    videoBytes: null,
+    tempVideoPath: tempVideoPath ?? null,
     audioPath: params.audioPath,
     generateDemoAudio: params.generateDemoAudio,
     durationSec: params.durationSec,

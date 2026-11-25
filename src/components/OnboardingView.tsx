@@ -20,8 +20,10 @@ import {
   completeOnboarding,
   deleteByokKey,
   fetchProviderModels,
+  isTauriRuntime,
   openExternalUrl,
   saveProviderConfig,
+  setActiveProvider,
   testByokConnection,
 } from "../lib/tauriBridge";
 import MotionSkillsSettings from "./MotionSkillsSettings";
@@ -187,6 +189,12 @@ export default function OnboardingView({
     setTestResult(null);
     setErrorMsg(null);
     setSavedNotice(null);
+    // 1-click switch when selecting an already-configured provider!
+    if (info?.configured && byokStatus.activeProvider !== provider && isTauriRuntime()) {
+      setActiveProvider(provider)
+        .then((next) => onStatusChange(next))
+        .catch(() => {});
+    }
   }
 
   async function handleFetchLiveModels() {

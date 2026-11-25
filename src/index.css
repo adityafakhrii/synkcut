@@ -29,6 +29,8 @@
   --role-cta: #097954;
   --success: #097954;
   --success-soft: rgba(5, 150, 105, 0.11);
+  --warning: #d97706;
+  --warning-soft: rgba(217, 119, 6, 0.12);
   --danger: #dc2626;
   --danger-soft: rgba(220, 38, 38, 0.1);
 }
@@ -62,6 +64,8 @@
   --role-cta: #10b981;
   --success: #10b981;
   --success-soft: rgba(16, 185, 129, 0.12);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.14);
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.12);
 }

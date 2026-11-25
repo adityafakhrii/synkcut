@@ -154,6 +154,7 @@ export default function ProjectsHomeView({
   const [heroPrompt, setHeroPrompt] = useState("");
   const [heroVisualMode, setHeroVisualMode] = useState<"motion" | "footage" | "hybrid">("motion");
   const heroPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const heroRunIdRef = useRef(0);
 
   useEffect(() => {
     const el = heroPromptRef.current;
@@ -262,9 +263,10 @@ export default function ProjectsHomeView({
       return;
     }
 
+    const myRunId = ++heroRunIdRef.current;
     setHeroError(null);
     setIsCreatingVideo(true);
-    setCreateStatusText("1/3 Menyusun script & 3 opsi hook...");
+    setCreateStatusText("1/2 Menyusun script & hook pembuka...");
     try {
       const inferredFormat = inferFormatFromPrompt(trimmed);
       let projectTitle = trimmed.split(/\s+/).slice(0, 5).join(" ");
@@ -304,6 +306,7 @@ export default function ProjectsHomeView({
           styleReferenceSummary:
             styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,
         });
+        if (heroRunIdRef.current !== myRunId) return;
         projectTitle = generated.projectTitle || projectTitle;
         if (generated.hooks.length > 0) hooks = generated.hooks;
         if (generated.bodySegments.length > 0) bodySegments = generated.bodySegments;
@@ -317,56 +320,90 @@ export default function ProjectsHomeView({
           .join(" ");
       }
 
-      // 2/3 Auto-generate dubbing voiceover sample so user can HEAR & review it BEFORE generating video!
-      setCreateStatusText("2/3 Membuat sampel suara dubbing (voiceover)...");
-      let audioRes: ProcessedAudioResult | null = null;
-      try {
-        audioRes = await generateTtsAudio({
-          text: fullScript,
-          voiceName: heroTtsEngine === "openai" ? "nova" : "Kore",
-          tone: inferredFormat === "ad_promo" ? "persuasif" : "santai",
-          engine: heroTtsEngine === "windows_offline" ? "windows_offline" : "auto",
-        });
-      } catch {
-        audioRes = null;
-      }
+      // 2/2 Run Dubbing TTS + Micro-Beat Storyboard IN PARALLEL (saves 8–18s wait time!)
+      setCreateStatusText(
+        isFootageMode
+          ? "2/2 Membuat sampel suara dubbing (voiceover)..."
+          : "2/2 Membuat suara dubbing & storyboard visual secara paralel..."
+      );
 
-      // 3/3 Plan micro-beat storyboard + AI medium & custom palette direction!
+      const estimatedMs = Math.max(
+        6000,
+        Math.round(fullScript.trim().split(/\s+/).filter(Boolean).length * 410)
+      );
+      const styleReference: ProjectStyleReference | null = styleRef
+        ? {
+            sourceType: styleRef.sourceType,
+            url: styleRef.url ?? undefined,
+            title: styleRef.title,
+            thumbnails: styleRef.thumbnails,
+            styleDnaSummary: styleRef.styleDnaSummary,
+            logoDataUrl: styleRef.logoDataUrl ?? null,
+            brandHeadings: styleRef.brandHeadings,
+            brandColors: styleRef.brandColors,
+            customDesign: styleRef.customDesign,
+          }
+        : null;
+
+      const ttsPromise = generateTtsAudio({
+        text: fullScript,
+        voiceName: heroTtsEngine === "openai" ? "nova" : "Kore",
+        tone: inferredFormat === "ad_promo" ? "persuasif" : "santai",
+        engine: heroTtsEngine,
+      });
+
+      const storyboardPromise = !isFootageMode
+        ? aiPlanStoryboard({
+            projectTitle,
+            format: inferredFormat,
+            fullScript,
+            durationMs: estimatedMs,
+            words: [],
+            customDesign: styleRef?.customDesign ?? null,
+            styleReference,
+          })
+        : Promise.resolve(null);
+
+      const [ttsSettled, sbSettled] = await Promise.allSettled([ttsPromise, storyboardPromise]);
+      if (heroRunIdRef.current !== myRunId) return;
+
+      const audioRes: ProcessedAudioResult | null =
+        ttsSettled.status === "fulfilled" ? ttsSettled.value : null;
+
       let beats: StoryboardBeat[] = [];
       let aiRecommendedMedium: "2d_freeform" | "3d_diorama" | null = null;
       let aiMediumReason: string | null = null;
       let autoDesign = null;
-      if (!isFootageMode) {
-        setCreateStatusText("3/3 Merancang storyboard & arahan visual kustom dari prompt...");
-        const styleReference: ProjectStyleReference | null = styleRef
-          ? {
-              sourceType: styleRef.sourceType,
-              url: styleRef.url ?? undefined,
-              title: styleRef.title,
-              thumbnails: styleRef.thumbnails,
-              styleDnaSummary: styleRef.styleDnaSummary,
-              logoDataUrl: styleRef.logoDataUrl ?? null,
-              brandHeadings: styleRef.brandHeadings,
-              brandColors: styleRef.brandColors,
-              customDesign: styleRef.customDesign,
-            }
-          : null;
-        try {
-          const planned = await aiPlanStoryboard({
-            projectTitle,
-            format: inferredFormat,
-            fullScript,
-            durationMs: audioRes?.durationMs ?? 24000,
-            words: audioRes?.words ?? [],
-            customDesign: styleRef?.customDesign ?? null,
-            styleReference,
+
+      if (sbSettled.status === "fulfilled" && sbSettled.value) {
+        const planned = sbSettled.value;
+        beats = planned.beats;
+        aiRecommendedMedium = planned.recommendedMedium ?? null;
+        aiMediumReason = planned.mediumReason ?? null;
+        autoDesign = planned.autoDesign ?? null;
+
+        // Lock parallel storyboard beat timings 100% to actual voiceover duration!
+        if (audioRes && audioRes.durationMs >= 1000 && beats.length > 0) {
+          const weights = beats.map((b) =>
+            Math.max(1, (b.text || "").trim().split(/\s+/).filter(Boolean).length)
+          );
+          const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+          let cursor = 0;
+          beats = beats.map((b, idx) => {
+            const startMs = cursor;
+            const endMs =
+              idx === beats.length - 1
+                ? audioRes.durationMs
+                : Math.min(
+                    audioRes.durationMs - (beats.length - 1 - idx) * 600,
+                    Math.max(
+                      startMs + 600,
+                      Math.round(startMs + (weights[idx] / totalW) * audioRes.durationMs)
+                    )
+                  );
+            cursor = endMs;
+            return { ...b, startMs, endMs };
           });
-          beats = planned.beats;
-          aiRecommendedMedium = planned.recommendedMedium ?? null;
-          aiMediumReason = planned.mediumReason ?? null;
-          autoDesign = planned.autoDesign ?? null;
-        } catch {
-          beats = [];
         }
       }
 
@@ -998,14 +1035,27 @@ export default function ProjectsHomeView({
 
             {isCreatingVideo && createStatusText && (
               <div
-                className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+                className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
                 style={{
                   backgroundColor: "var(--bg-elevated)",
                   color: "var(--text-secondary)",
                 }}
               >
-                <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "var(--accent)" }} />
-                {createStatusText}
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "var(--accent)" }} />
+                  {createStatusText}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    heroRunIdRef.current += 1;
+                    setIsCreatingVideo(false);
+                    setCreateStatusText("");
+                  }}
+                  className="ui-btn-secondary rounded-md px-2.5 py-1 text-[11px] font-semibold cursor-pointer"
+                >
+                  Batalkan
+                </button>
               </div>
             )}
           </form>

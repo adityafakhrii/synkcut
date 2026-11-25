@@ -11,6 +11,7 @@ import {
 import {
   buildBeatRenderState,
   defaultDesignFromTheme,
+  instrumentLoopGuards,
   renderFreeformBeat,
   validateBeatCodeSafety,
 } from "./freeformMotionRenderer";
@@ -38,17 +39,13 @@ const setupFnCache = new Map<string, { fn: CompiledSetupFn | null; error?: strin
 const animateFnCache = new Map<string, { fn: CompiledAnimateFn | null; error?: string }>();
 const builtWorldCache = new Map<string, CachedWorldEntry>();
 
-const D3_SDK = createDiorama3DSdk();
+const D3_SDK = Object.freeze(createDiorama3DSdk());
 
 let sharedCanvas: HTMLCanvasElement | null = null;
 let sharedRenderer: THREE.WebGLRenderer | null = null;
 let sharedEnvTexture: THREE.Texture | null = null;
 let rendererWidth = 1080;
 let rendererHeight = 1920;
-
-function instrumentLoopGuards(code: string): string {
-  return code.replace(/\b(while|for)\s*\(([^)]*)\)\s*\{/g, "$1 ($2) { __guard();");
-}
 
 function getSharedWebGL(width: number, height: number): {
   canvas: HTMLCanvasElement;
@@ -81,7 +78,9 @@ function getSharedWebGL(width: number, height: number): {
       sharedRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
       const pmrem = new THREE.PMREMGenerator(sharedRenderer);
-      sharedEnvTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      const roomEnv = new RoomEnvironment();
+      sharedEnvTexture = pmrem.fromScene(roomEnv, 0.04).texture;
+      roomEnv.dispose();
       pmrem.dispose();
 
       rendererWidth = w;
@@ -106,13 +105,26 @@ function getSharedWebGL(width: number, height: number): {
 
 function disposeWorld(world: DioramaWorldHandle) {
   world.scene.traverse((obj) => {
+    const light = obj as THREE.Light & { shadow?: { map?: THREE.WebGLRenderTarget | null } };
+    if (light.isLight) {
+      if (light.shadow?.map) {
+        light.shadow.map.dispose();
+      }
+      if (typeof light.dispose === "function") {
+        light.dispose();
+      }
+    }
     const mesh = obj as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
     if (mesh.material) {
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((m) => m.dispose());
-      } else {
-        mesh.material.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const std = m as THREE.MeshStandardMaterial;
+        std.map?.dispose();
+        std.emissiveMap?.dispose();
+        std.roughnessMap?.dispose();
+        std.metalnessMap?.dispose();
+        m.dispose();
       }
     }
   });
@@ -293,7 +305,7 @@ function getOrBuildWorld(
       const guard = () => {
         if (++guardSteps > 12000) throw new Error("Loop guard setupCode terlampaui.");
       };
-      setActiveDioramaWorld(world);
+      setActiveDioramaWorld(world, "setup");
       try {
         compiled.fn(world, D3_SDK, guard);
         // Ensure basic lighting exists if LLM omitted explicit lights
@@ -303,7 +315,7 @@ function getOrBuildWorld(
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);
       } finally {
-        setActiveDioramaWorld(null);
+        setActiveDioramaWorld(null, "setup");
       }
     }
   }
@@ -466,19 +478,21 @@ export function renderDiorama3DFrame(params: {
   const guard = () => {
     if (++guardSteps > 12000) throw new Error("Loop guard animateCode terlampaui.");
   };
-  setActiveDioramaWorld(world);
+  setActiveDioramaWorld(world, "animate");
   try {
     compiledAnim.fn(world, frameState, D3_SDK, guard);
   } catch (err) {
     renderNeutralTypographyFallback({ ctx, width, height, project, scene, sceneProgress });
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
-    setActiveDioramaWorld(null);
+    setActiveDioramaWorld(null, "setup");
   }
 
   // Render WebGL scene and blit seamlessly onto target 2D canvas
   webgl.renderer.render(world.scene, world.camera);
   ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(webgl.canvas, 0, 0, width, height);
 
   // Render 3D-tracked 2D HUD overlays

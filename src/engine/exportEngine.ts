@@ -8,6 +8,7 @@ import {
 } from "mediabunny";
 import type { SynkcutProject } from "../types/scene";
 import { renderProjectFrame } from "./canvasRenderer";
+import { ensureBrandLogoDecoded } from "./motionSdk";
 import { getProjectDurationMs } from "./sampleProject";
 import {
   isTauriRuntime,
@@ -201,6 +202,11 @@ export async function exportProjectToMp4(
 
     checkAborted(options.signal);
 
+    // Pre-decode brand logo image before frame 0 so initial frames never drop the logo!
+    if (project.styleReference?.logoDataUrl) {
+      await ensureBrandLogoDecoded(project.styleReference.logoDataUrl);
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -208,10 +214,15 @@ export async function exportProjectToMp4(
     if (!ctx) {
       throw new Error("Gagal membuat Canvas 2D context untuk export.");
     }
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
+    // Use `fastStart: false` during desktop Tauri export (FFmpeg writes `+faststart` on disk, saving 50% RAM!)
     const target = new BufferTarget();
     const output = new Output({
-      format: new Mp4OutputFormat({ fastStart: "in-memory" }),
+      format: new Mp4OutputFormat({
+        fastStart: isTauriRuntime() ? false : "in-memory",
+      }),
       target,
     });
 
@@ -222,82 +233,101 @@ export async function exportProjectToMp4(
 
     output.addVideoTrack(videoSource, { frameRate: fps });
     await output.start();
+    let encoderClosed = false;
+    let outputFinalized = false;
 
-    if (options.videoElement && !options.videoElement.paused) {
-      options.videoElement.pause();
-    }
-
-    const encodeStartTs = performance.now();
-
-    for (let frame = 0; frame < totalFrames; frame++) {
-      checkAborted(options.signal);
-
-      const timeSec = frame / fps;
-      const timeMs = timeSec * 1000;
-
-      const activeScene =
-        project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
-        project.scenes[project.scenes.length - 1];
-
-      const isMotionScene = activeScene?.visualSource === "motion";
-      const sceneVideo = isMotionScene
-        ? null
-        : (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
-          options.videoElement ??
-          null;
-      const secondaryVideo = activeScene?.media.secondaryPath
-        ? videoMap.get(activeScene.media.secondaryPath) ?? null
-        : null;
-
-      if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
-        const localSceneSec =
-          Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
-        await seekVideoDeterministic(sceneVideo, localSceneSec);
-      }
-      if (secondaryVideo && secondaryVideo.readyState >= 2 && activeScene) {
-        const localSec = Math.max(0, timeMs - activeScene.startMs) / 1000;
-        await seekVideoDeterministic(secondaryVideo, localSec);
+    try {
+      if (options.videoElement && !options.videoElement.paused) {
+        options.videoElement.pause();
       }
 
-      renderProjectFrame(ctx, project, timeMs, {
-        videoElement: sceneVideo,
-        secondaryVideoElement: secondaryVideo,
-        showSafeZone: false,
-      });
+      const encodeStartTs = performance.now();
 
-      await videoSource.add(timeSec, 1 / fps, {
-        keyFrame: frame % (fps * 2) === 0,
-      });
+      for (let frame = 0; frame < totalFrames; frame++) {
+        checkAborted(options.signal);
 
-      if (frame % 4 === 0 || frame === totalFrames - 1) {
-        const now = performance.now();
-        const elapsedMs = now - startedAt;
-        const encodeElapsed = Math.max(1, now - encodeStartTs);
-        const msPerFrame = encodeElapsed / (frame + 1);
-        const remainingFrames = totalFrames - frame - 1;
-        // Include modest ~1.8s buffer for FFmpeg audio mixing & faststart muxing
-        const etaMs = Math.max(0, Math.round(remainingFrames * msPerFrame + 1800));
-        const encodePct = 5 + ((frame + 1) / totalFrames) * 73;
+        const timeSec = frame / fps;
+        const timeMs = timeSec * 1000;
 
-        options.onProgress?.({
-          percent: encodePct,
-          stage: "encoding",
-          message: `Encoding frame ${frame + 1} / ${totalFrames} (WebCodecs H.264)...`,
-          currentFrame: frame + 1,
-          totalFrames,
-          elapsedMs,
-          etaMs,
+        const activeScene =
+          project.scenes.find((s) => timeMs >= s.startMs && timeMs < s.endMs) ??
+          project.scenes[project.scenes.length - 1];
+
+        const isMotionScene = activeScene?.visualSource === "motion";
+        const sceneVideo = isMotionScene
+          ? null
+          : (activeScene?.media.path ? videoMap.get(activeScene.media.path) : null) ??
+            options.videoElement ??
+            null;
+        const secondaryVideo = activeScene?.media.secondaryPath
+          ? videoMap.get(activeScene.media.secondaryPath) ?? null
+          : null;
+
+        if (sceneVideo && sceneVideo.readyState >= 2 && activeScene) {
+          const localSceneSec =
+            Math.max(0, timeMs - activeScene.startMs + (activeScene.media.trimStartMs || 0)) / 1000;
+          await seekVideoDeterministic(sceneVideo, localSceneSec);
+        }
+        if (secondaryVideo && secondaryVideo.readyState >= 2 && activeScene) {
+          const localSec = Math.max(0, timeMs - activeScene.startMs) / 1000;
+          await seekVideoDeterministic(secondaryVideo, localSec);
+        }
+
+        renderProjectFrame(ctx, project, timeMs, {
+          videoElement: sceneVideo,
+          secondaryVideoElement: secondaryVideo,
+          showSafeZone: false,
         });
+
+        await videoSource.add(timeSec, 1 / fps, {
+          keyFrame: frame % (fps * 2) === 0,
+        });
+
+        if (frame % 4 === 0 || frame === totalFrames - 1) {
+          const now = performance.now();
+          const elapsedMs = now - startedAt;
+          const encodeElapsed = Math.max(1, now - encodeStartTs);
+          const msPerFrame = encodeElapsed / (frame + 1);
+          const remainingFrames = totalFrames - frame - 1;
+          const etaMs = Math.max(0, Math.round(remainingFrames * msPerFrame + 1800));
+          const encodePct = 5 + ((frame + 1) / totalFrames) * 73;
+
+          options.onProgress?.({
+            percent: encodePct,
+            stage: "encoding",
+            message: `Encoding frame ${frame + 1} / ${totalFrames} (WebCodecs H.264)...`,
+            currentFrame: frame + 1,
+            totalFrames,
+            elapsedMs,
+            etaMs,
+          });
+        }
+
+        if (frame % 15 === 14) {
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+        }
       }
 
-      // Periodically yield to UI thread so Windows WebView2 stays responsive on long 60s exports
-      if (frame % 15 === 14) {
-        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      videoSource.close();
+      encoderClosed = true;
+      await output.finalize();
+      outputFinalized = true;
+    } finally {
+      if (!encoderClosed) {
+        try {
+          videoSource.close();
+        } catch {
+          // ignore
+        }
+      }
+      if (!outputFinalized) {
+        try {
+          await output.cancel();
+        } catch {
+          // ignore
+        }
       }
     }
-
-    videoSource.close();
-    await output.finalize();
 
     checkAborted(options.signal);
 
