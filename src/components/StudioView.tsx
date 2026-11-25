@@ -238,6 +238,18 @@ export default function StudioView({
   const [isPatchingAi, setIsPatchingAi] = useState(false);
   const [directorLog, setDirectorLog] = useState<DirectorLogItem[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const directorPromptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = directorPromptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const minH = 52;
+    const maxH = 190;
+    const nextH = Math.min(maxH, Math.max(minH, el.scrollHeight));
+    el.style.height = `${nextH}px`;
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+  }, [promptInput]);
 
   // Diagnostics (surfaced quietly inside Export Modal)
   const [webCodecs, setWebCodecs] = useState({ supported: false, avcSupported: false });
@@ -2232,13 +2244,13 @@ export default function StudioView({
 
             <form
               onSubmit={handleDirectorPromptSubmit}
-              className="rounded-xl p-3 space-y-2.5"
+              className="ui-composer rounded-xl p-3 space-y-2.5"
               style={{
                 backgroundColor: "var(--bg-app)",
-                border: "1px solid var(--border-strong)",
               }}
             >
               <textarea
+                ref={directorPromptRef}
                 rows={2}
                 value={promptInput}
                 onChange={(e) => setPromptInput(e.target.value)}
@@ -2249,8 +2261,8 @@ export default function StudioView({
                   }
                 }}
                 placeholder="Suruh AI ubah video... mis. ubah ke 3D smartphone, ganti grafik, atau musik lo-fi"
-                className="w-full resize-none bg-transparent text-sm leading-relaxed outline-none"
-                style={{ color: "var(--text-primary)" }}
+                className="w-full resize-none bg-transparent px-0.5 py-0.5 text-sm leading-relaxed outline-none"
+                style={{ color: "var(--text-primary)", minHeight: 52, maxHeight: 190 }}
               />
 
               <div className="flex items-center justify-between gap-2">

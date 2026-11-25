@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUp,
@@ -153,6 +153,18 @@ export default function ProjectsHomeView({
   // Lovable-style 1-Prompt / Footage Auto-Cut Home Composer
   const [heroPrompt, setHeroPrompt] = useState("");
   const [heroVisualMode, setHeroVisualMode] = useState<"motion" | "footage" | "hybrid">("motion");
+  const heroPromptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = heroPromptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const minH = heroVisualMode === "footage" ? 104 : 56;
+    const maxH = 280;
+    const nextH = Math.min(maxH, Math.max(minH, el.scrollHeight));
+    el.style.height = `${nextH}px`;
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+  }, [heroPrompt, heroVisualMode]);
   const [showDesignPanel, setShowDesignPanel] = useState(false);
   const [styleRef, setStyleRef] = useState<StyleReferenceResult | null>(null);
   const [attachedClips, setAttachedClips] = useState<FootageInputItem[]>([]);
@@ -673,11 +685,7 @@ export default function ProjectsHomeView({
 
           <form
             onSubmit={handleInstantCreate}
-            className="rounded-2xl p-3.5 shadow-sm space-y-3"
-            style={{
-              backgroundColor: "var(--bg-panel)",
-              border: "1px solid var(--border-strong)",
-            }}
+            className="ui-composer rounded-2xl p-4 shadow-sm space-y-3"
           >
             {/* Mode-Specific Prompt / Mandatory Footage Script Box */}
             <div className="space-y-2">
@@ -705,6 +713,7 @@ export default function ProjectsHomeView({
               )}
 
               <textarea
+                ref={heroPromptRef}
                 rows={isFootageMode ? 4 : 2}
                 value={heroPrompt}
                 onChange={(e) => setHeroPrompt(e.target.value)}
@@ -719,8 +728,8 @@ export default function ProjectsHomeView({
                     ? "Tempel atau tulis script lengkap video lo di sini (mis. 3–8 kalimat). AI akan men-generate suara voiceover & memotong otomatis semua footage menjadi 1 video utuh sesuai durasi script..."
                     : "Contoh: Jelasin cara kerja internet dalam 30 detik pakai animasi diagram & grafik..."
                 }
-                className="w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none"
-                style={{ color: "var(--text-primary)" }}
+                className="w-full resize-none bg-transparent px-1 py-0.5 text-sm leading-relaxed outline-none"
+                style={{ color: "var(--text-primary)", minHeight: isFootageMode ? 104 : 56, maxHeight: 280 }}
               />
             </div>
 

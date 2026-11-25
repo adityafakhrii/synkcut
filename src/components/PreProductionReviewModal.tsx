@@ -489,7 +489,7 @@ export default function PreProductionReviewModal({
               type="text"
               value={projectTitle}
               onChange={(e) => setProjectTitle(e.target.value)}
-              className="mt-1 w-full bg-transparent text-base font-bold outline-none"
+              className="mt-1 -mx-1.5 w-full rounded-md bg-transparent px-1.5 py-0.5 text-base font-bold outline-none transition-colors focus:bg-[var(--bg-elevated)]"
               style={{ color: "var(--text-primary)" }}
               aria-label="Judul proyek"
             />

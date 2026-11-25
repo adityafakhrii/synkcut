@@ -99,12 +99,20 @@ textarea {
   font-family: inherit;
 }
 
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+@layer base {
+  button:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  input:focus,
+  input:focus-visible,
+  select:focus,
+  select:focus-visible,
+  textarea:focus,
+  textarea:focus-visible {
+    outline: none;
+  }
 }
 
 .font-mono-num {
@@ -169,23 +177,55 @@ textarea:focus-visible {
   background-color: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  transition: border-color 150ms ease;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .ui-input::placeholder,
 input::placeholder,
 textarea::placeholder {
   color: var(--text-muted);
-  opacity: 1;
+  opacity: 0.78;
 }
 
 .ui-input:hover:not(:disabled) {
   border-color: var(--border-strong);
 }
 
+.ui-input:focus,
+.ui-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Modern unified composer card (focus highlights outer rounded card, never inner textarea) */
+.ui-composer {
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ui-composer:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+}
+
+.ui-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 24px -12px rgba(8, 108, 75, 0.16);
+}
+
+.ui-composer textarea:focus,
+.ui-composer textarea:focus-visible,
+.ui-composer input:focus,
+.ui-composer input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -193,6 +233,10 @@ textarea::placeholder {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: color-mix(in srgb, var(--border-strong) 72%, transparent);
   border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }

@@ -185,6 +185,18 @@ export default function WizardView({
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [scriptProviderUsed, setScriptProviderUsed] = useState<string | null>(null);
+  const wizardTopicRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const el = wizardTopicRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const minH = 84;
+    const maxH = 260;
+    const nextH = Math.min(maxH, Math.max(minH, el.scrollHeight));
+    el.style.height = `${nextH}px`;
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+  }, [topic]);
 
   // Step 2: Footage & Audio Auto-Sync
   const [footageClips, setFootageClips] = useState<FootageInputItem[]>([]);
@@ -911,12 +923,14 @@ export default function WizardView({
                     Topik / Produk / Promo
                   </label>
                   <textarea
+                    ref={wizardTopicRef}
                     id="wizard-topic"
                     rows={3}
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
                     placeholder="Contoh: Cara kerja DNS internet dalam 30 detik, atau kopi susu gula aren botolan 1 liter Rp45.000..."
-                    className="ui-input w-full resize-none rounded-md p-3 text-xs leading-relaxed"
+                    className="ui-input w-full resize-none rounded-lg p-3 text-xs leading-relaxed"
+                    style={{ minHeight: 84, maxHeight: 260 }}
                   />
                 </div>
 
