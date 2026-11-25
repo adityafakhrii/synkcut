@@ -388,6 +388,29 @@ export default function PreProductionReviewModal({
         });
         activeBeats = planned.beats;
         setBeats(activeBeats);
+      } else if (activeAudio.durationMs >= 1000) {
+        // Always lock beat timeline 100% to actual voiceover duration so audio & video NEVER drift!
+        const oldTotal = activeBeats.reduce((m, b) => Math.max(m, b.endMs), 0);
+        if (Math.abs(oldTotal - activeAudio.durationMs) > 250) {
+          const weights = activeBeats.map((b) =>
+            Math.max(1, (b.text || "").trim().split(/\s+/).filter(Boolean).length)
+          );
+          const totalW = weights.reduce((a, b) => a + b, 0) || 1;
+          let cursor = 0;
+          activeBeats = activeBeats.map((b, idx) => {
+            const startMs = cursor;
+            const endMs =
+              idx === activeBeats.length - 1
+                ? activeAudio.durationMs
+                : Math.min(
+                    activeAudio.durationMs - (activeBeats.length - 1 - idx) * 600,
+                    Math.max(startMs + 600, Math.round(startMs + (weights[idx] / totalW) * activeAudio.durationMs))
+                  );
+            cursor = endMs;
+            return { ...b, startMs, endMs };
+          });
+          setBeats(activeBeats);
+        }
       }
 
       const targetBgm = customDesign?.recommendedBgm || bgmPreset;

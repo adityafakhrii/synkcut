@@ -1189,6 +1189,17 @@ export async function aiGenerate3dDiorama(req: {
   return normalizeProject(raw);
 }
 
+export async function aiCritique3dFrames(req: {
+  projectTitle: string;
+  worldSummary: string;
+  frames: string[];
+}): Promise<{ ok: boolean; skipped: boolean; issue: string; fixHint: string }> {
+  return invoke<{ ok: boolean; skipped: boolean; issue: string; fixHint: string }>(
+    "ai_critique_3d_frames",
+    { req }
+  );
+}
+
 export async function aiRepair3dDiorama(req: {
   projectTitle: string;
   worldPreset: string;
@@ -1196,6 +1207,7 @@ export async function aiRepair3dDiorama(req: {
   brokenAnimateCode: string;
   errorMessage: string;
   beatsSummary: string;
+  previewFrames?: string[];
 }): Promise<{ setupCode: string; animateCode: string; providerUsed: string }> {
   return invoke<{ setupCode: string; animateCode: string; providerUsed: string }>(
     "ai_repair_3d_diorama",

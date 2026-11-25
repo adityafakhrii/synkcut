@@ -926,6 +926,106 @@ pub async fn call_llm_json(
     }
 }
 
+/// Strip stage directions, timestamps, and visual notes so TTS & captions ONLY contain pure spoken words!
+pub fn sanitize_spoken_vo_line(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return s;
+    }
+
+    // If the LLM wrote `... VO: "actual spoken words" ...`, extract the spoken part cleanly!
+    let lower = s.to_lowercase();
+    if let Some(vo_pos) = lower.find("vo:") {
+        let after = s[vo_pos + 3..].trim();
+        let cleaned_after = after
+            .trim_start_matches(['"', '“', '”', '\'', ' '])
+            .split("Subtitle")
+            .next()
+            .unwrap_or(after)
+            .split("[Visual")
+            .next()
+            .unwrap_or(after)
+            .trim()
+            .trim_end_matches(['"', '“', '”', '\'', ' ']);
+        if cleaned_after.split_whitespace().count() >= 3 {
+            s = cleaned_after.to_string();
+        }
+    }
+
+    // Strip leading timestamp patterns like `0-3 detik |`, `3–15 detik:`, `00:05 - 00:12 |`
+    if let Some(pipe_pos) = s.find('|') {
+        let prefix = s[..pipe_pos].to_lowercase();
+        if prefix.contains("detik") || prefix.contains("scene") || prefix.contains("beat") || prefix.contains(':') {
+            s = s[pipe_pos + 1..].trim().to_string();
+        }
+    }
+
+    // Strip bracketed stage directions like `[Kamera zoom ke laptop]` or `(3D diorama)`
+    let mut out = String::with_capacity(s.len());
+    let mut bracket_depth = 0usize;
+    for ch in s.chars() {
+        match ch {
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ if bracket_depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+
+    // Remove trailing cue phrases like "Subtitle tebal di tengah."
+    let mut cleaned = out.trim().to_string();
+    for cue in [
+        "Subtitle tebal di tengah.",
+        "Subtitle tebal di tengah",
+        "Subtitle di tengah.",
+        "Subtitle di tengah",
+    ] {
+        cleaned = cleaned.replace(cue, "");
+    }
+
+    cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Rescale beat timings proportionally so the entire video timeline matches `target_duration_ms` 100%!
+pub fn rescale_beats_to_duration(beats: &mut [StoryboardBeat], target_duration_ms: u64) {
+    if beats.is_empty() || target_duration_ms < 1000 {
+        return;
+    }
+    let old_total = beats.iter().map(|b| b.end_ms).max().unwrap_or(0);
+    if old_total > 0 && old_total.abs_diff(target_duration_ms) <= 180 {
+        if let Some(last) = beats.last_mut() {
+            last.end_ms = target_duration_ms;
+        }
+        return;
+    }
+
+    // Use word count weights if old_total is 0 or heavily skewed (e.g. last beat stuck at 20s)
+    let word_counts: Vec<usize> = beats
+        .iter()
+        .map(|b| b.text.split_whitespace().count().max(1))
+        .collect();
+    let total_words: usize = word_counts.iter().sum::<usize>().max(1);
+    let mut cursor = 0u64;
+    let n = beats.len();
+    for (i, beat) in beats.iter_mut().enumerate() {
+        beat.start_ms = cursor;
+        if i == n - 1 {
+            beat.end_ms = target_duration_ms;
+        } else {
+            let span = (((word_counts[i] as f64) / (total_words as f64)) * (target_duration_ms as f64))
+                .round()
+                .max(700.0) as u64;
+            let remaining_min = ((n - 1 - i) as u64) * 600;
+            let end = (cursor + span).min(target_duration_ms.saturating_sub(remaining_min));
+            beat.end_ms = end.max(cursor + 500);
+            cursor = beat.end_ms;
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn ai_generate_script(
     app: AppHandle,
@@ -940,11 +1040,14 @@ pub async fn ai_generate_script(
     let body_count = match req.target_duration_sec {
         0..=20 => 1,
         21..=45 => 2,
-        _ => 3,
+        _ => 4,
     };
 
-    let system_prompt = "Kamu adalah Creative Director & Copywriter video pendek (Reels, TikTok, Shorts) kelas dunia di Indonesia. \
-        Tulis naskah yang tajam, spoken-word (enak diucapkan voiceover), langsung stop-scroll di 3 detik pertama, tanpa basa-basi klise. \
+    let system_prompt = "Kamu adalah Creative Director & Copywriter video pendek (Reels, TikTok, Shorts) kelas dunia di Indonesia.\n\
+        ATURAN KERAS WAJIB:\n\
+        1. Tulis HANYA kalimat lisan (spoken-word voiceover) yang BENAR-BENAR DIUCAPKAN narator dengan suara lantang — mengalir natural, tajam, langsung stop-scroll di 3 detik pertama.\n\
+        2. DILARANG KERAS memasukkan arahan visual, arahan kamera, timestamp, label 'VO:', 'Narator:', '3–15 detik |', '3D diorama:', 'Kartu teks:', 'Subtitle tebal di tengah', atau tanda kurung siku `[...]` ke dalam `hooks`, `bodySegments`, maupun `cta`! Jika prompt user berisi poin-poin arahan visual, ubah maknanya menjadi kalimat narasi lisan yang mulus.\n\
+        3. Sesuaikan panjang kata dengan target durasi (~2.3 kata per detik; misal 60 detik = ~125-145 kata total, 30 detik = ~65-75 kata total).\n\
         Balas HANYA dalam JSON valid.";
 
     let visual_hint = match req.visual_mode.as_deref() {
@@ -996,13 +1099,14 @@ pub async fn ai_generate_script(
     let mut hooks: Vec<HookOption> = Vec::new();
     if let Some(arr) = val["hooks"].as_array() {
         for (i, h) in arr.iter().take(3).enumerate() {
+            let cleaned = sanitize_spoken_vo_line(h["text"].as_str().unwrap_or(""));
             hooks.push(HookOption {
                 id: h["id"]
                     .as_str()
                     .map(ToString::to_string)
                     .unwrap_or_else(|| format!("h{}", i + 1)),
                 angle: h["angle"].as_str().unwrap_or("Hook").to_string(),
-                text: h["text"].as_str().unwrap_or("").trim().to_string(),
+                text: cleaned,
             });
         }
     }
@@ -1014,17 +1118,17 @@ pub async fn ai_generate_script(
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter_map(|v| v.as_str().map(sanitize_spoken_vo_line))
                 .filter(|s| !s.is_empty())
                 .collect()
         })
         .unwrap_or_else(|| vec!["Tunjukkan keunggulan utama produk secara langsung.".to_string()]);
 
-    let cta = val["cta"]
-        .as_str()
-        .unwrap_or("Cek link sekarang sebelum promo berakhir!")
-        .trim()
-        .to_string();
+    let cta = sanitize_spoken_vo_line(
+        val["cta"]
+            .as_str()
+            .unwrap_or("Cek link sekarang sebelum promo berakhir!"),
+    );
 
     Ok(GeneratedScriptResponse {
         project_title,
@@ -1169,6 +1273,19 @@ fn compute_scene_timings(
     let mut ranges: Vec<(u64, u64)> = Vec::with_capacity(segments.len());
 
     if !words.is_empty() && words.len() >= segments.len() {
+        // Guard against compressed/mismatched word timestamps stretching the last beat into a long silent tail!
+        let last_word_end = words.last().map(|w| w.end_ms).unwrap_or(0);
+        let word_scale = if last_word_end > 0 {
+            let ratio = (last_word_end as f64) / (safe_total as f64);
+            if !(0.86..=1.04).contains(&ratio) {
+                (safe_total as f64) / (last_word_end as f64)
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+
         let mut word_idx = 0usize;
         for (i, count) in counts.iter().enumerate() {
             let start_ms = if i == 0 { 0 } else { ranges[i - 1usize].1 };
@@ -1181,15 +1298,16 @@ fn compute_scene_timings(
                 (word_idx + proportional_words.max(1)).min(words.len() - (counts.len() - 1 - i))
             };
 
+            let remaining_min = ((counts.len() - 1 - i) as u64) * 600;
             let end_ms = if i == counts.len() - 1 {
                 safe_total
             } else {
                 words
                     .get(next_idx.saturating_sub(1))
-                    .map(|w| w.end_ms)
+                    .map(|w| ((w.end_ms as f64) * word_scale).round() as u64)
                     .unwrap_or(start_ms + 1500)
-                    .max(start_ms + 800)
-                    .min(safe_total.saturating_sub(400))
+                    .max(start_ms + 700)
+                    .min(safe_total.saturating_sub(remaining_min))
             };
 
             ranges.push((start_ms, end_ms));
@@ -3636,9 +3754,40 @@ pub async fn ai_generate_beat_codes(
         }
     }
 
+    // Lock 2D beat timings & words 100% to actual voiceover file duration on disk!
+    let mut synced_beats = req.beats.clone();
+    let mut synced_words = req.words.clone();
+    if let Some(ref ap) = req.audio_path {
+        if !ap.trim().is_empty() {
+            if let Ok(actual_ms) = crate::audio::probe_audio_duration_ms(&app, ap).await {
+                if actual_ms >= 1500 {
+                    rescale_beats_to_duration(&mut synced_beats, actual_ms);
+                    if let Some(last_end) = synced_words.last().map(|w| w.end_ms) {
+                        if last_end > 0 {
+                            let ratio = (last_end as f64) / (actual_ms as f64);
+                            if !(0.88..=1.04).contains(&ratio) {
+                                let sc = (actual_ms as f64) / (last_end as f64);
+                                for w in &mut synced_words {
+                                    w.start_ms = ((w.start_ms as f64) * sc).round().min(actual_ms as f64) as u64;
+                                    w.end_ms = ((w.end_ms as f64) * sc).round().min(actual_ms as f64) as u64;
+                                    if w.end_ms < w.start_ms {
+                                        w.end_ms = w.start_ms;
+                                    }
+                                }
+                                if let Some(last) = synced_words.last_mut() {
+                                    last.end_ms = actual_ms;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let vmode = req.visual_mode.as_deref().unwrap_or("motion");
     let mut scenes_json = Vec::with_capacity(total_beats);
-    for (idx, beat) in req.beats.iter().enumerate() {
+    for (idx, beat) in synced_beats.iter().enumerate() {
         let use_footage = vmode == "hybrid" && !req.footage.is_empty() && idx % 2 == 0;
         let clip = if use_footage {
             req.footage.get((idx / 2) % req.footage.len())
@@ -3745,7 +3894,7 @@ pub async fn ai_generate_beat_codes(
             "source": req.audio_source,
             "audioPath": req.audio_path,
             "trimSilence": req.trim_silence,
-            "words": req.words
+            "words": synced_words
         },
         "scenes": scenes_json
     }))
@@ -3831,7 +3980,20 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - `const hero = D3.createCharacter(world, { name:'hero', pos:[x,y,z], rotY:0, scale:1, skin:'#F2C39B', outfitColor:'#2563EB', pantsColor:'#1E293B', hat:'hair'|'peci'|'cap'|'turban'|'helmet'|'none', glasses:false, mustache:false })`
 - In `animateCode`: `D3.poseCharacter(world.characters.hero, { action:'idle'|'point'|'wave'|'handshake'|'walk'|'think'|'surprised'|'sit'|'sleep'|'talk'|'cheer', phase: tSec, headTurn?: 0 })`
 
-`D3` 3D Prop Primitives (pass `world` OR a parent THREE.Group as 1st arg!):
+`D3` HIGH-CRAFT BLENDER-STYLE 3D PREFABS (ALWAYS PREFER THESE over raw boxes! All accept `(parent, opts)` & have crisp PBR materials + Canvas UI textures):
+- `D3.laptop(parent, { name?, pos?, rot?, scale?, screenText:'Makasih!', accent:'#FACC15', bodyColor? })`
+- `D3.smartphone(parent, { name?, pos?, rot?, scale?, screenText:'Chat AI', accent:'#38BDF8', bodyColor? })`
+- `D3.serverRack(parent, { name?, pos?, rot?, scale?, blades:6, ledColor:'#FF4D2E', heatGlow:true })`
+- `D3.gpuChip(parent, { name?, pos?, rot?, scale?, glowColor:'#FF5722', hot:true })`
+- `D3.coolingTower(parent, { name?, pos?, rot?, scale?, color?, steam:true })`
+- `D3.waterBottle(parent, { name?, pos?, rot?, scale?, fill:0.75, waterColor:'#38BDF8', label:'500 ml' })`
+- `D3.chatBubble3D(parent, { name?, pos?, rot?, scale?, text:'Makasih ya!', subtitle?, bg:'#FACC15', textColor:'#0F172A' })`
+- `D3.barChart3D(parent, { name?, pos?, rot?, scale?, title:'Energi', items:[{ label:'Search', value:1, color:'#38BDF8' }, { label:'AI', value:10, color:'#F97316' }] })`
+- `D3.building(parent, { name?, pos?, rot?, scale?, width:4.2, height:3.6, depth:3.2, color:'#334155', windowColor:'#38BDF8' })`
+- `D3.globe(parent, { name?, pos?, rot?, scale?, radius:1.6, ringColor:'#38BDF8' })`
+- `D3.lightbulb(parent, { name?, pos?, rot?, scale?, on:true, glowColor:'#FACC15' })`
+
+`D3` Basic 3D Primitives (pass `world` OR a parent THREE.Group as 1st arg!):
 - `D3.group(parent, { name?, pos?, rot?, scale? })`
 - `D3.box(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, emissiveIntensity?, pos?, rot?, scale? })`
 - `D3.roundedBox(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, pos?, rot?, scale? })`
@@ -3847,6 +4009,11 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - `D3.tree(parent, { style:'palm'|'round'|'pine', scale=1, pos:[x,y,z] })`
 - `D3.fish(parent, { color, scale, pos })`
 - `D3.particles3D(world, { name?, count=24, area:[6,5,6], center:[0,2,0], color:'#FFFFFF', radius:0.09 })`
+
+`D3` Beat Stage Isolation & Auto-Framing (CRITICAL — NEVER let props from other beats block the camera!):
+- `D3.showOnly(world, ['stage_1'], ['stage_1', 'stage_2', 'stage_3'])` -> shows ONLY active stage groups and hides others!
+- `D3.setVisible(world, ['propName'], true|false)` -> toggles visibility cleanly per beat!
+- `D3.focusCameraOn(world, 'stage_1', [4.5, 3.2, 6.5], 38)` -> auto-aims camera at the exact 3D bounding-box center of an object!
 
 `D3` Continuous 3D Camera Choreography (CRITICAL for viral Shorts flow!):
 - `D3.setCamera(world, [x,y,z], [lx,ly,lz], fov=38)`
@@ -3890,6 +4057,25 @@ pub struct Repair3DDioramaRequest {
     pub broken_animate_code: String,
     pub error_message: String,
     pub beats_summary: String,
+    #[serde(default)]
+    pub preview_frames: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Critique3DFramesRequest {
+    pub project_title: String,
+    pub world_summary: String,
+    pub frames: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Critique3DFramesResponse {
+    pub ok: bool,
+    pub skipped: bool,
+    pub issue: String,
+    pub fix_hint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -4022,21 +4208,21 @@ pub async fn ai_generate_3d_diorama(
         );
 
         let setup_system = format!(
-            "Kamu adalah Technical 3D Artist (Three.js PBR) di Synkcut.\n\
-            Tugasmu HANYA menulis `setupCode` (body fungsi `setupWorld(world, D3)`) yang RINGKAS, PADAT (target 30–55 baris), CERAH/JERNIH, dan 100% sesuai topik & referensi user.\n\
-            ATURAN:\n\
-            1. Atur suasana & pencahayaan 100% sesuai mood prompt/referensi dengan `D3.setupAtmosphere` (atau helper cutaway OPSIONAL hanya jika benar-benar cocok dengan topik).\n\
-            2. Bangun objek utama topik dari primitif `D3` (beri `name` unik agar bisa dianimasikan di tahap 2) + 1–2 karakter (`D3.createCharacter`) HANYA jika relevan.\n\
-            3. DILARANG menulis komentar panjang atau boilerplate berlebih — jaga tetap ringkas agar cepat selesai!\n\
+            "Kamu adalah Technical 3D Artist (Blender Diorama / Three.js PBR) kelas dunia di Synkcut.\n\
+            Tugasmu menulis `setupCode` (body fungsi `setupWorld(world, D3)`) yang DETAIL, TAJAM, KONTRAS TINGGI, dan 100% sesuai topik user (target 35–65 baris).\n\
+            ATURAN WAJIB ANTI-JELEK:\n\
+            1. WAJIB pakai **High-Craft 3D Prefabs** (`D3.laptop`, `D3.smartphone`, `D3.serverRack`, `D3.gpuChip`, `D3.coolingTower`, `D3.waterBottle`, `D3.chatBubble3D`, `D3.barChart3D`, `D3.building`, `D3.globe`, `D3.lightbulb`, `D3.createCharacter`) kapan pun objek itu cocok dengan topik — JANGAN membangun laptop/server/grafik cuma dari kotak polos tanpa detail!\n\
+            2. WAJIB KELOMPOKKAN OBJEK KE DALAM 3–5 STAGE GROUP (`const s1 = D3.group(world, {{ name:'stage_1', pos:[0,0,0] }}); ...`) agar tiap fase cerita punya panggung bersih di pusat `[0,0,0]` dan bisa di-toggle dengan `D3.showOnly(world, ...)` di Tahap 2 — DILARANG menumpuk papan/kartu di depan kamera (`z > 1.5`) saat stage lain tampil!\n\
+            3. KONTRAS & PENCAHAYAAN ANTI-SILAU: DILARANG membuat semua objek + lantai + langit sama-sama krem/putih pucat! Jika tema terang, pakai langit biru cerah (`bgTop:'#3B9AE1'`, `bgBottom:'#CFE9FA'`) atau studio kontras gelap-terang (`#1E293B` vs `#FACC15` / `#38BDF8` / `#F97316`). Pastikan setiap objek utama punya siluet dan warna yang langsung menonjol!\n\
             4. Balas HANYA JSON valid:\n\
             {{\n\
               \"worldPreset\": \"custom|ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
               \"worldSummary\": \"Ringkasan 1 kalimat Bahasa Indonesia\",\n\
-              \"objectNames\": [\"namaObjek1\", \"namaObjek2\"],\n\
+              \"objectNames\": [\"stage_1\", \"stage_2\", \"namaObjek1\"],\n\
               \"characterNames\": [\"namaKarakter1\"],\n\
               \"recommendedCaptionLook\": \"outline_bold|black_pill|clean_shadow|bold_outline|custom_pill\",\n\
               \"recommendedBgm\": \"upbeat_promo|lofi_chill|cinematic_pulse|minimal_tech\",\n\
-              \"setupCode\": \"...pure JS body of setupWorld(world, D3), ringkas 30-55 baris...\"\n\
+              \"setupCode\": \"...pure JS body of setupWorld(world, D3)...\"\n\
             }}\n\n\
             {DIORAMA_3D_SDK_REFERENCE}\n\n\
             {skills_rules}"
@@ -4135,26 +4321,29 @@ pub async fn ai_generate_3d_diorama(
 
     let anim_system = format!(
         "Kamu adalah 3D Camera & Motion Choreographer (Three.js) di Synkcut.\n\
-        Dunia 3D sudah dibangun di Tahap 1. Tugasmu HANYA menulis `animateCode` (body fungsi `animateFrame(world, state, D3)`) yang RINGKAS, PADAT (target 25–50 baris), dan 100% bebas error.\n\
-        ATURAN:\n\
+        Dunia 3D sudah dibangun di Tahap 1 (`setupCode` dilampirkan agar kamu tahu koordinat `[x,y,z]` persis tiap objek!). Tugasmu menulis `animateCode` (body fungsi `animateFrame(world, state, D3)`) yang sinematik, rapi (30–55 baris), dan 100% bebas halangan kamera.\n\
+        ATURAN WAJIB:\n\
         1. Hitung `const tSec = state.globalTimeMs / 1000;`. Panggil `D3.animateClouds(world, tSec)` / `D3.animateOcean(world, tSec)` jika relevan.\n\
-        2. Gunakan `D3.lerpCamera(world, [...4-6 keyframe dari t:0 sampai t:1...], state.globalProgress)` agar kamera 3D bergerak mulus lintas seluruh beat dan SELALU menghadap objek utama.\n\
-        3. Cek eksistensi `if (world.objects.nama)` atau `if (world.characters.nama)` sebelum memodifikasi properti agar tidak pernah null error!\n\
-        4. Gerakkan objek/karakter sesuai `state.beatIndex` & `state.beatProgress`, plus `D3.drawPopupTitle` di Beat 0 dan `D3.drawBadgeAt3D`/`D3.drawCalloutAt3D` bila relevan.\n\
-        5. Balas HANYA JSON valid: {{\"animateCode\": \"...pure JS body, ringkas 25-50 baris...\", \"beatNotes\": [\"arah kamera beat 0\", \"...\"]}}\n\n\
+        2. ISOLASI STAGE PER BEAT: Jika `setupCode` membuat grup stage (`stage_1`, `stage_2`, dll.), WAJIB panggil `D3.showOnly(world, [stageAktif], [semuaStage])` sesuai `state.beatIndex` agar properti beat lain TIDAK PERNAH menutupi kamera!\n\
+        3. FRAMING KAMERA AKURAT: Pastikan kamera (`D3.lerpCamera` atau `D3.focusCameraOn(world, namaStageAktif, [dx, dy, dz], 38)`) SELALU melihat objek utama dari jarak ideal (`4.5`–`11` unit, sudut agak serong 3/4 dari atas) dan TIDAK PERNAH berada di belakang papan/dinding!\n\
+        4. Gerakkan objek/karakter secara hidup sesuai `state.beatIndex` & `state.beatProgress`, plus `D3.drawPopupTitle` di Beat 0 dan `D3.drawBadgeAt3D`/`D3.drawCalloutAt3D` bila relevan.\n\
+        5. Balas HANYA JSON valid: {{\"animateCode\": \"...pure JS body, ringkas 30-55 baris...\", \"beatNotes\": [\"arah kamera beat 0\", \"...\"]}}\n\n\
         {DIORAMA_3D_SDK_REFERENCE}"
     );
 
+    let setup_preview: String = stage1.setup_code.chars().take(3600).collect();
     let anim_user = format!(
         "Proyek: \"{}\" | Dunia 3D: {}\n\
         `world.objects` tersedia: {:?}\n\
         `world.characters` tersedia: {:?}\n\n\
+        Kode `setupCode` Tahap 1 (baca koordinat `[x,y,z]` dan nama stage agar kamera 100% tepat & tidak terhalang!):\n```js\n{}\n```\n\n\
         Daftar Beat ({} beat):\n{}\n\n\
-        Tulis `animateCode` ringkas & sinematik dalam JSON!",
+        Tulis `animateCode` sinematik dengan framing kamera 100% akurat & bebas halangan dalam JSON!",
         req.project_title.trim(),
         stage1.world_summary,
         stage1.object_names,
         stage1.character_names,
+        setup_preview,
         req.beats.len(),
         beat_lines
     );
@@ -4219,8 +4408,39 @@ pub async fn ai_generate_3d_diorama(
         req.accent_color.clone()
     };
 
-    let mut scenes_json = Vec::with_capacity(req.beats.len());
-    for (idx, beat) in req.beats.iter().enumerate() {
+    // Lock beat timeline & words 100% to actual voiceover file duration on disk so audio & video NEVER drift!
+    let mut synced_beats = req.beats.clone();
+    let mut synced_words = req.words.clone();
+    if let Some(ref ap) = req.audio_path {
+        if !ap.trim().is_empty() {
+            if let Ok(actual_ms) = crate::audio::probe_audio_duration_ms(&app, ap).await {
+                if actual_ms >= 1500 {
+                    rescale_beats_to_duration(&mut synced_beats, actual_ms);
+                    if let Some(last_end) = synced_words.last().map(|w| w.end_ms) {
+                        if last_end > 0 {
+                            let ratio = (last_end as f64) / (actual_ms as f64);
+                            if !(0.88..=1.04).contains(&ratio) {
+                                let sc = (actual_ms as f64) / (last_end as f64);
+                                for w in &mut synced_words {
+                                    w.start_ms = ((w.start_ms as f64) * sc).round().min(actual_ms as f64) as u64;
+                                    w.end_ms = ((w.end_ms as f64) * sc).round().min(actual_ms as f64) as u64;
+                                    if w.end_ms < w.start_ms {
+                                        w.end_ms = w.start_ms;
+                                    }
+                                }
+                                if let Some(last) = synced_words.last_mut() {
+                                    last.end_ms = actual_ms;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut scenes_json = Vec::with_capacity(synced_beats.len());
+    for (idx, beat) in synced_beats.iter().enumerate() {
         let sfx_arr = if req.auto_sfx && !beat.sfx.is_empty() && beat.sfx != "none" {
             vec![json!({
                 "preset": beat.sfx,
@@ -4313,10 +4533,72 @@ pub async fn ai_generate_3d_diorama(
             "source": req.audio_source,
             "audioPath": req.audio_path,
             "trimSilence": req.trim_silence,
-            "words": req.words
+            "words": synced_words
         },
         "scenes": scenes_json
     }))
+}
+
+#[tauri::command]
+pub async fn ai_critique_3d_frames(
+    app: AppHandle,
+    req: Critique3DFramesRequest,
+) -> Result<Critique3DFramesResponse, String> {
+    if req.frames.is_empty() {
+        return Ok(Critique3DFramesResponse {
+            ok: true,
+            skipped: true,
+            issue: String::new(),
+            fix_hint: String::new(),
+        });
+    }
+    let resolved = match byok::resolve_active_provider(&app) {
+        Ok(r) => r,
+        Err(_) => {
+            return Ok(Critique3DFramesResponse {
+                ok: true,
+                skipped: true,
+                issue: String::new(),
+                fix_hint: String::new(),
+            })
+        }
+    };
+
+    let system_prompt = "Kamu adalah 3D Art Director & Visual QA Inspector.\n\
+        Lihat 2 screenshot render Three.js WebGL dari video 3D vertikal 9:16 ini.\n\
+        Cek dengan kritis apakah ada masalah FATAL:\n\
+        - Kamera terhalang papan/kotak putih/tembok di depan lensa\n\
+        - Gambar terlalu putih pucat / silau (overexposed / washed out) sampai objek tidak jelas\n\
+        - Objek utama tidak terlihat, terlalu jauh/kecil, atau cuma bentuk abstrak tidak jelas\n\
+        Balas HANYA JSON valid:\n\
+        {\"ok\": true|false, \"issue\": \"masalah utama singkat jika ok=false\", \"fixHint\": \"instruksi konkret memperbaiki kamera/warna/stage jika ok=false\"}";
+
+    let user_prompt = format!(
+        "Proyek 3D: \"{}\" — Konsep: {}\n\
+        Periksa 2 frame render WebGL terlampir (Frame Awal & Frame Tengah). Apakah visual 3D-nya sudah jelas, kontras baik, dan bebas halangan kamera?",
+        req.project_title, req.world_summary
+    );
+
+    // Gracefully skip if user's custom model is text-only / does not accept images
+    match call_llm_json(&resolved, system_prompt, &user_prompt, &req.frames).await {
+        Ok((val, _)) => {
+            let ok = val["ok"].as_bool().unwrap_or(true);
+            let issue = val["issue"].as_str().unwrap_or("").trim().to_string();
+            let fix_hint = val["fixHint"].as_str().unwrap_or("").trim().to_string();
+            Ok(Critique3DFramesResponse {
+                ok,
+                skipped: false,
+                issue,
+                fix_hint,
+            })
+        }
+        Err(_) => Ok(Critique3DFramesResponse {
+            ok: true,
+            skipped: true,
+            issue: String::new(),
+            fix_hint: String::new(),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -4326,13 +4608,13 @@ pub async fn ai_repair_3d_diorama(
 ) -> Result<Repair3DDioramaResponse, String> {
     let resolved = byok::resolve_active_provider(&app)?;
     let system_prompt = format!(
-        "Kamu adalah Three.js 3D Debugger di Synkcut.\n\
-        Perbaiki `setupCode` dan `animateCode` berikut agar 100% bebas syntax/runtime error, objek berada di depan kamera, terang bergaya daylight, dan lolos verifikasi 4 frame WebGL!\n\
+        "Kamu adalah Senior Three.js 3D Artist & Debugger di Synkcut.\n\
+        Perbaiki `setupCode` dan `animateCode` berikut agar 100% bebas error, pakai High-Craft 3D Prefabs (`D3.laptop`, `D3.serverRack`, `D3.gpuChip`, `D3.waterBottle`, `D3.chatBubble3D`, `D3.barChart3D`, `D3.coolingTower`, `D3.building`), pisahkan stage tiap fase dengan `D3.showOnly(...)` agar kamera TIDAK PERNAH terhalang papan/dinding, dan pastikan kontras warna tajam tidak pucat silau!\n\
         Balas HANYA JSON: {{\"setupCode\": \"...\", \"animateCode\": \"...\"}}.\n\n\
         {DIORAMA_3D_SDK_REFERENCE}"
     );
     let user_prompt = format!(
-        "Proyek: \"{}\" (worldPreset: {})\nBeat: {}\nError Validasi: \"{}\"\n\nsetupCode sebelumnya:\n```js\n{}\n```\n\nanimateCode sebelumnya:\n```js\n{}\n```",
+        "Proyek: \"{}\" (worldPreset: {})\nBeat: {}\nMasalah / Kritik Visual: \"{}\"\n\nsetupCode sebelumnya:\n```js\n{}\n```\n\nanimateCode sebelumnya:\n```js\n{}\n```",
         req.project_title,
         req.world_preset,
         req.beats_summary,
@@ -4341,7 +4623,14 @@ pub async fn ai_repair_3d_diorama(
         req.broken_animate_code.chars().take(4000).collect::<String>()
     );
 
-    let (val, provider_used) = call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?;
+    let (val, provider_used) = if !req.preview_frames.is_empty() {
+        match call_llm_json(&resolved, &system_prompt, &user_prompt, &req.preview_frames).await {
+            Ok(res) => res,
+            Err(_) => call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?,
+        }
+    } else {
+        call_llm_json(&resolved, &system_prompt, &user_prompt, &[]).await?
+    };
     let fixed_setup = clean_js_code_output(val["setupCode"].as_str().unwrap_or(""));
     let fixed_anim = clean_js_code_output(val["animateCode"].as_str().unwrap_or(""));
     if fixed_setup.len() < 30 || fixed_anim.len() < 30 {
@@ -4363,6 +4652,56 @@ mod tests {
         let fenced = "```json\n{\"ok\":true}\n```";
         assert_eq!(strip_json_fences(fenced), "{\"ok\":true}");
         assert_eq!(strip_json_fences("{\"ok\":true}"), "{\"ok\":true}");
+    }
+
+    #[test]
+    fn test_sanitize_spoken_vo_line_strips_stage_directions() {
+        let dirty = "3–15 detik | Dinding terbuka: rak GPU hitam. VO: \"Pesan lo dikirim ke server, dan GPU langsung kerja keras.\" Subtitle tebal di tengah.";
+        let clean = sanitize_spoken_vo_line(dirty);
+        assert_eq!(clean, "Pesan lo dikirim ke server, dan GPU langsung kerja keras.");
+
+        let dirty2 = "0-3 detik | [Kamera zoom ke laptop] Setiap kali lo bilang makasih ke AI!";
+        assert_eq!(
+            sanitize_spoken_vo_line(dirty2),
+            "Setiap kali lo bilang makasih ke AI!"
+        );
+    }
+
+    #[test]
+    fn test_rescale_beats_to_duration_locks_audio_length() {
+        let mut beats = vec![
+            StoryboardBeat {
+                id: "b1".into(),
+                role: "hook".into(),
+                start_ms: 0,
+                end_ms: 5000,
+                text: "Satu dua tiga empat lima".into(),
+                title: "Hook".into(),
+                visual_concept: "A".into(),
+                emotional_intent: "bold".into(),
+                skills_used: vec![],
+                transition_in: "hard_cut".into(),
+                sfx: "pop_text".into(),
+            },
+            StoryboardBeat {
+                id: "b2".into(),
+                role: "cta".into(),
+                start_ms: 5000,
+                end_ms: 51200,
+                text: "Enam tujuh delapan sembilan sepuluh".into(),
+                title: "CTA".into(),
+                visual_concept: "B".into(),
+                emotional_intent: "bold".into(),
+                skills_used: vec![],
+                transition_in: "hard_cut".into(),
+                sfx: "riser".into(),
+            },
+        ];
+        rescale_beats_to_duration(&mut beats, 32000);
+        assert_eq!(beats[0].start_ms, 0);
+        assert_eq!(beats[1].end_ms, 32000);
+        assert_eq!(beats[0].end_ms, beats[1].start_ms);
+        assert!(beats[0].end_ms >= 14000 && beats[0].end_ms <= 18000);
     }
 
     #[test]

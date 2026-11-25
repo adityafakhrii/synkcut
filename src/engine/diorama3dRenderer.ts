@@ -76,7 +76,7 @@ function getSharedWebGL(width: number, height: number): {
       sharedRenderer.setSize(w, h, false);
       sharedRenderer.outputColorSpace = THREE.SRGBColorSpace;
       sharedRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-      sharedRenderer.toneMappingExposure = 1.08;
+      sharedRenderer.toneMappingExposure = 0.94;
       sharedRenderer.shadowMap.enabled = true;
       sharedRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -246,7 +246,10 @@ function getOrBuildWorld(
   }
 
   const scene = new THREE.Scene();
-  if (envTexture) scene.environment = envTexture;
+  if (envTexture) {
+    scene.environment = envTexture;
+    scene.environmentIntensity = 0.45;
+  }
   const root = new THREE.Group();
   scene.add(root);
   const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 400);
@@ -493,14 +496,15 @@ export function renderDiorama3DFrame(params: {
 
 /**
  * 4-Frame Offscreen WebGL Verifier for `diorama_3d` worlds:
- * Verifies compile safety, zero runtime crashes, non-blank pixels, and real camera/scene motion across 4 frames!
+ * Verifies compile safety, zero runtime crashes, non-blank pixels, anti-washout contrast,
+ * real camera/scene motion across 4 frames, AND captures 2 compact JPEG snapshots for Vision Self-Check!
  */
 export function verifyDiorama3DOffscreen(params: {
   setupCode: string;
   animateCode: string;
   worldPreset: string;
   project: SynkcutProject;
-}): { ok: boolean; error?: string; warning?: string } {
+}): { ok: boolean; error?: string; warning?: string; snapshots?: string[] } {
   const { setupCode, animateCode, worldPreset, project } = params;
 
   const sCheck = validateBeatCodeSafety(setupCode);
@@ -541,8 +545,10 @@ export function verifyDiorama3DOffscreen(params: {
 
   const samplePoints = [0.08, 0.35, 0.68, 0.92];
   const fingerprints: number[] = [];
+  const snapshots: string[] = [];
 
-  for (const gp of samplePoints) {
+  for (let sIdx = 0; sIdx < samplePoints.length; sIdx++) {
+    const gp = samplePoints[sIdx];
     const tMs = gp * totalMs;
     const sc =
       scenes.find((s) => tMs >= s.startMs && tMs < s.endMs) ?? scenes[scenes.length - 1];
@@ -566,19 +572,37 @@ export function verifyDiorama3DOffscreen(params: {
     let minL = 255;
     let maxL = 0;
     let checksum = 0;
+    let sampledCount = 0;
+    let washedOutCount = 0;
     for (let i = 0; i < img.length; i += 4 * 29) {
       const lum = 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
       if (lum < minL) minL = lum;
       if (lum > maxL) maxL = lum;
       checksum += lum;
+      sampledCount++;
+      if (lum > 232) washedOutCount++;
     }
-    if (maxL - minL < 12) {
+    if (maxL - minL < 18) {
       return {
         ok: false,
-        error: "Render 3D terlihat kosong / kontras sangat datar (kamera mungkin tidak menghadap objek).",
+        error: "Render 3D terlihat kosong / kontras sangat datar (kamera mungkin terhalang papan/tembok atau tidak menghadap objek).",
+      };
+    }
+    if (sampledCount > 0 && washedOutCount / sampledCount > 0.82) {
+      return {
+        ok: false,
+        error: "Render 3D terlalu putih/silau (overexposed atau kamera terlalu dekat menatap papan putih). Gunakan warna kontras & pastikan tidak ada papan menghalangi kamera!",
       };
     }
     fingerprints.push(checksum);
+
+    if (sIdx === 0 || sIdx === 2) {
+      try {
+        snapshots.push(canvas.toDataURL("image/jpeg", 0.78));
+      } catch {
+        // ignore export error
+      }
+    }
   }
 
   const maxDiff = Math.max(
@@ -590,8 +614,9 @@ export function verifyDiorama3DOffscreen(params: {
     return {
       ok: true,
       warning: "Gerakan kamera/objek 3D terdeteksi halus.",
+      snapshots,
     };
   }
 
-  return { ok: true };
+  return { ok: true, snapshots };
 }

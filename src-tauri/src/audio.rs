@@ -610,11 +610,29 @@ async fn generate_tts_single_engine(
         if let Some(key) = byok::read_stored_key("gemini") {
             if let Ok(bytes) = tokio::fs::read(&audio_path).await {
                 if bytes.len() <= 8 * 1024 * 1024 {
-                    if let Ok((_, aligned)) =
+                    if let Ok((_, mut aligned)) =
                         transcribe_with_gemini(app, &key, &bytes, "audio/wav", Some(trimmed), duration_ms)
                             .await
                     {
                         if aligned.len() >= (trimmed.split_whitespace().count() / 2).max(1) {
+                            // Guard against Gemini timestamp compression/drift (e.g. ending at 20s for a 32s clip!)
+                            let last_end = aligned.last().map(|w| w.end_ms).unwrap_or(0);
+                            if last_end > 0 && duration_ms > 0 {
+                                let ratio = (last_end as f64) / (duration_ms as f64);
+                                if !(0.85..=1.05).contains(&ratio) {
+                                    let scale = (duration_ms as f64) / (last_end as f64);
+                                    for w in &mut aligned {
+                                        w.start_ms = ((w.start_ms as f64) * scale).round().min(duration_ms as f64) as u64;
+                                        w.end_ms = ((w.end_ms as f64) * scale).round().min(duration_ms as f64) as u64;
+                                        if w.end_ms < w.start_ms {
+                                            w.end_ms = w.start_ms;
+                                        }
+                                    }
+                                    if let Some(last) = aligned.last_mut() {
+                                        last.end_ms = duration_ms;
+                                    }
+                                }
+                            }
                             words = aligned;
                         }
                     }

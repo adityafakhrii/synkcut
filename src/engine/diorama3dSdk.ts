@@ -237,6 +237,103 @@ function createWaterSurfaceTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+function createCardTexture(opts: {
+  title: string;
+  subtitle?: string;
+  bg?: string;
+  textColor?: string;
+  accent?: string;
+  width?: number;
+  height?: number;
+}): THREE.CanvasTexture {
+  const w = opts.width ?? 512;
+  const h = opts.height ?? 256;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const x = c.getContext("2d");
+  if (x) {
+    const bg = opts.bg || "#0F172A";
+    const fg = opts.textColor || "#F8FAFC";
+    const acc = opts.accent || "#FACC15";
+    x.fillStyle = bg;
+    roundRectPath(x, 6, 6, w - 12, h - 12, 28);
+    x.fill();
+    x.lineWidth = 8;
+    x.strokeStyle = acc;
+    x.stroke();
+
+    x.fillStyle = fg;
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    const title = String(opts.title || "").trim() || "Synkcut 3D";
+    const fontSize = title.length > 18 ? 38 : title.length > 11 ? 48 : 60;
+    x.font = `800 ${fontSize}px ${SANS_FONT}`;
+    const yTitle = opts.subtitle ? h * 0.41 : h * 0.52;
+    x.fillText(title, w / 2, yTitle, w - 56);
+
+    if (opts.subtitle) {
+      x.fillStyle = acc;
+      x.font = `700 28px ${SANS_FONT}`;
+      x.fillText(String(opts.subtitle).trim(), w / 2, h * 0.72, w - 56);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  if (activeWorldRef) activeWorldRef.ownedTextures.push(tex);
+  return tex;
+}
+
+function createScreenTexture(opts: {
+  text?: string;
+  accent?: string;
+  dark?: boolean;
+}): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 512;
+  c.height = 320;
+  const x = c.getContext("2d");
+  if (x) {
+    const dark = opts.dark ?? true;
+    const acc = opts.accent || "#38BDF8";
+    const g = x.createLinearGradient(0, 0, 512, 320);
+    g.addColorStop(0, dark ? "#0B1120" : "#F8FAFC");
+    g.addColorStop(1, dark ? "#162036" : "#E2E8F0");
+    x.fillStyle = g;
+    x.fillRect(0, 0, 512, 320);
+
+    // Top window dots
+    ["#F87171", "#FBBF24", "#34D399"].forEach((col, i) => {
+      x.fillStyle = col;
+      x.beginPath();
+      x.arc(28 + i * 20, 24, 6, 0, Math.PI * 2);
+      x.fill();
+    });
+
+    // Prompt / chat pill on screen
+    x.fillStyle = acc;
+    roundRectPath(x, 42, 74, 428, 96, 22);
+    x.fill();
+    x.fillStyle = "#0B1120";
+    x.font = `800 34px ${SANS_FONT}`;
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    x.fillText(String(opts.text || "AI Prompt...").slice(0, 22), 256, 122, 390);
+
+    // Decorative waveform / response bars
+    for (let i = 0; i < 4; i++) {
+      x.fillStyle = dark ? "rgba(148,163,184,0.34)" : "rgba(51,65,85,0.22)";
+      const bw = 340 - i * 44;
+      roundRectPath(x, 46, 196 + i * 26, bw, 14, 7);
+      x.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  if (activeWorldRef) activeWorldRef.ownedTextures.push(tex);
+  return tex;
+}
+
 function roundRectPath(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -443,8 +540,8 @@ export function createDiorama3DSdk() {
       world.scene.background = skyTex;
       world.scene.fog = new THREE.Fog(
         toColor(opts?.fogColor || bottom, isDark ? 0x101932 : 0xd8eefc),
-        opts?.fogNear ?? 36,
-        opts?.fogFar ?? 135
+        Math.max(32, opts?.fogNear ?? 42),
+        Math.max(115, opts?.fogFar ?? 150)
       );
 
       if (world.hemiLight) world.scene.remove(world.hemiLight);
@@ -455,15 +552,15 @@ export function createDiorama3DSdk() {
 
       const hemi = new THREE.HemisphereLight(
         toColor(opts?.ambientColor || (isDark ? "#7AA2F7" : "#DDF1FF"), 0xddf1ff),
-        toColor(isDark ? "#1A1B26" : "#9C8A78", 0x9c8a78),
-        opts?.ambientIntensity ?? (isDark ? 0.85 : 1.15)
+        toColor(isDark ? "#1A1B26" : "#6E5D4F", 0x6e5d4f),
+        clamp(opts?.ambientIntensity ?? (isDark ? 0.68 : 0.82), 0.35, 0.95)
       );
       world.scene.add(hemi);
       world.hemiLight = hemi;
 
       const key = new THREE.DirectionalLight(
         toColor(opts?.keyColor || (isDark ? "#E0F2FE" : "#FFF6E5"), 0xfff6e5),
-        opts?.keyIntensity ?? (isDark ? 2.1 : 2.35)
+        clamp(opts?.keyIntensity ?? (isDark ? 1.65 : 1.72), 0.8, 1.9)
       );
       const sp = opts?.keyPos ?? [18, 28, 16];
       key.position.set(sp[0], sp[1], sp[2]);
@@ -483,8 +580,8 @@ export function createDiorama3DSdk() {
       world.sunLight = key;
 
       const fill = new THREE.DirectionalLight(
-        toColor(opts?.fillColor || (isDark ? "#A855F7" : "#AAD4FF"), 0xaad4ff),
-        opts?.fillIntensity ?? (isDark ? 0.95 : 0.55)
+        toColor(opts?.fillColor || (isDark ? "#A855F7" : "#8CC8FF"), 0x8cc8ff),
+        clamp(opts?.fillIntensity ?? (isDark ? 0.72 : 0.45), 0.2, 0.8)
       );
       fill.position.set(-16, 10, -14);
       world.root.add(fill);
@@ -1787,6 +1884,688 @@ export function createDiorama3DSdk() {
         grp.add(m);
       }
       return attach3D(parent, grp, opts?.name || "__particles");
+    },
+
+    /* ==================== HIGH-CRAFT BLENDER-STYLE 3D PREFABS ==================== */
+
+    /** Realistic stylized 3D Laptop with metallic chassis, keyboard deck, angled lid & glowing Canvas UI screen */
+    laptop(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        screenText?: string;
+        accent?: string;
+        bodyColor?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const bodyMat = makeMat({ color: opts?.bodyColor || "#94A3B8", roughness: 0.34, metalness: 0.68 });
+      const darkMat = makeMat({ color: "#1E293B", roughness: 0.6, metalness: 0.2 });
+
+      const base = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.14, 1.65), bodyMat);
+      base.position.set(0, 0.07, 0);
+      grp.add(base);
+
+      const kb = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.04, 0.92), darkMat);
+      kb.position.set(0, 0.15, -0.14);
+      grp.add(kb);
+
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.025, 0.42), makeMat({ color: "#64748B", roughness: 0.4, metalness: 0.5 }));
+      pad.position.set(0, 0.145, 0.52);
+      grp.add(pad);
+
+      const lidPivot = new THREE.Group();
+      lidPivot.position.set(0, 0.14, -0.8);
+      lidPivot.rotation.x = -0.22;
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.55, 0.09), bodyMat);
+      lid.position.set(0, 0.78, 0);
+      lidPivot.add(lid);
+
+      const screenTex = createScreenTexture({
+        text: opts?.screenText || "Makasih AI!",
+        accent: opts?.accent || "#FACC15",
+        dark: true,
+      });
+      const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.16, 1.32),
+        new THREE.MeshBasicMaterial({ map: screenTex })
+      );
+      screen.position.set(0, 0.78, 0.052);
+      lidPivot.add(screen);
+      grp.add(lidPivot);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Realistic stylized 3D Smartphone with metallic rim, camera island & glowing OLED screen */
+    smartphone(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        screenText?: string;
+        accent?: string;
+        bodyColor?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.15, 2.25, 0.14),
+        makeMat({ color: opts?.bodyColor || "#1E293B", roughness: 0.28, metalness: 0.72 })
+      );
+      grp.add(body);
+      const tex = createScreenTexture({
+        text: opts?.screenText || "Chat AI",
+        accent: opts?.accent || "#38BDF8",
+        dark: true,
+      });
+      const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.02, 2.04),
+        new THREE.MeshBasicMaterial({ map: tex })
+      );
+      screen.position.set(0, 0, 0.075);
+      grp.add(screen);
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** High-craft 3D Data Center Server Rack with stacked GPU blades, glowing status LEDs & thermal core */
+    serverRack(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        blades?: number;
+        ledColor?: string;
+        heatGlow?: boolean;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const blades = clamp(opts?.blades ?? 6, 3, 8);
+      const ledCol = opts?.ledColor || (opts?.heatGlow ? "#FF4D2E" : "#38BDF8");
+      const frameMat = makeMat({ color: "#111827", roughness: 0.45, metalness: 0.62 });
+      const bladeMat = makeMat({ color: "#1F2937", roughness: 0.38, metalness: 0.55 });
+      const ledMat = makeMat({
+        color: ledCol,
+        emissive: ledCol,
+        emissiveIntensity: 1.6,
+        roughness: 0.2,
+      });
+
+      const h = blades * 0.62 + 0.6;
+      const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.2, h, 1.75), frameMat);
+      chassis.position.set(0, h / 2, 0);
+      grp.add(chassis);
+
+      // Base feet + top vent cap
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.16, 1.85), makeMat({ color: "#334155", roughness: 0.4, metalness: 0.65 }));
+      cap.position.set(0, h + 0.08, 0);
+      grp.add(cap);
+
+      for (let i = 0; i < blades; i++) {
+        const y = 0.52 + i * 0.62;
+        const unit = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.44, 0.18), bladeMat);
+        unit.position.set(0, y, 0.85);
+        grp.add(unit);
+
+        // Glowing LED bar + status dots
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.06, 0.06), ledMat);
+        strip.position.set(-0.36, y, 0.95);
+        grp.add(strip);
+        for (let d = 0; d < 3; d++) {
+          const dot = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), ledMat);
+          dot.position.set(0.38 + d * 0.18, y, 0.95);
+          grp.add(dot);
+        }
+      }
+
+      if (opts?.heatGlow) {
+        const core = new THREE.Mesh(
+          new THREE.BoxGeometry(1.92, h * 0.85, 1.45),
+          makeMat({ color: "#FF5722", emissive: "#FF3D00", emissiveIntensity: 0.8, opacity: 0.35, transparent: true })
+        );
+        core.position.set(0, h / 2, 0);
+        grp.add(core);
+      }
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Detailed 3D AI GPU Processor Chip with PCB, gold pins, heatsink fins & glowing silicon die */
+    gpuChip(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        glowColor?: string;
+        hot?: boolean;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const glow = opts?.glowColor || (opts?.hot ? "#FF5722" : "#38BDF8");
+      const pcb = new THREE.Mesh(
+        new THREE.BoxGeometry(2.8, 0.22, 2.8),
+        makeMat({ color: "#0F3D2E", roughness: 0.55, metalness: 0.25 })
+      );
+      grp.add(pcb);
+
+      const die = new THREE.Mesh(
+        new THREE.BoxGeometry(1.35, 0.28, 1.35),
+        makeMat({ color: "#1E293B", emissive: glow, emissiveIntensity: 0.95, roughness: 0.22, metalness: 0.8 })
+      );
+      die.position.set(0, 0.22, 0);
+      grp.add(die);
+
+      const pinMat = makeMat({ color: "#F59E0B", roughness: 0.3, metalness: 0.88 });
+      for (let i = -3; i <= 3; i++) {
+        for (const side of [-1, 1]) {
+          const px = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.3), pinMat);
+          px.position.set(i * 0.34, 0.02, side * 1.48);
+          grp.add(px);
+          const pz = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.08, 0.14), pinMat);
+          pz.position.set(side * 1.48, 0.02, i * 0.34);
+          grp.add(pz);
+        }
+      }
+
+      // Glowing power ring around silicon die
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.95, 0.055, 8, 32),
+        makeMat({ color: glow, emissive: glow, emissiveIntensity: 1.4, roughness: 0.2 })
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.set(0, 0.2, 0);
+      grp.add(ring);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Iconic industrial Cooling Tower with water basin & rising steam clouds */
+    coolingTower(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        color?: string;
+        steam?: boolean;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const mat = makeMat({ color: opts?.color || "#CBD5E1", roughness: 0.78, metalness: 0.12 });
+      const lower = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.75, 2.2, 24), mat);
+      lower.position.set(0, 1.1, 0);
+      grp.add(lower);
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(1.38, 1.15, 1.5, 24), mat);
+      upper.position.set(0, 2.95, 0);
+      grp.add(upper);
+      const basin = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.9, 1.95, 0.32, 24),
+        makeMat({ color: "#0EA5E9", roughness: 0.2, opacity: 0.85, transparent: true })
+      );
+      basin.position.set(0, 0.16, 0);
+      grp.add(basin);
+
+      if (opts?.steam !== false) {
+        const steamMat = makeMat({ color: "#FFFFFF", roughness: 0.95, opacity: 0.82, transparent: true });
+        for (let i = 0; i < 4; i++) {
+          const puff = new THREE.Mesh(new THREE.SphereGeometry(0.68 + i * 0.18, 14, 12), steamMat);
+          puff.position.set((i % 2 === 0 ? -0.25 : 0.28) * i * 0.3, 4.1 + i * 0.75, 0);
+          puff.scale.set(1.2, 0.8, 1.1);
+          grp.add(puff);
+        }
+      }
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Translucent 3D Mineral Water Bottle with visible blue water fill level & crisp label */
+    waterBottle(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        fill?: number;
+        waterColor?: string;
+        label?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const fill = clamp(opts?.fill ?? 0.72, 0.08, 0.95);
+
+      const glassMat = makeMat({ color: "#E0F2FE", roughness: 0.12, metalness: 0.05, opacity: 0.38, transparent: true });
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 2.2, 24), glassMat);
+      body.position.set(0, 1.1, 0);
+      grp.add(body);
+
+      const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.62, 0.55, 24), glassMat);
+      shoulder.position.set(0, 2.47, 0);
+      grp.add(shoulder);
+
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.26, 0.26, 0.28, 20),
+        makeMat({ color: "#0284C7", roughness: 0.42 })
+      );
+      cap.position.set(0, 2.86, 0);
+      grp.add(cap);
+
+      const waterH = 2.02 * fill;
+      const water = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.55, waterH, 24),
+        makeMat({ color: opts?.waterColor || "#38BDF8", emissive: "#0284C7", emissiveIntensity: 0.18, roughness: 0.16, opacity: 0.88, transparent: true })
+      );
+      water.position.set(0, 0.08 + waterH / 2, 0);
+      grp.add(water);
+
+      const labelTex = createCardTexture({
+        title: opts?.label || "500 ml",
+        bg: "#0369A1",
+        textColor: "#FFFFFF",
+        accent: "#7DD3FC",
+        width: 384,
+        height: 128,
+      });
+      const labelBand = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.635, 0.635, 0.62, 24, 1, true),
+        new THREE.MeshBasicMaterial({ map: labelTex, side: THREE.DoubleSide })
+      );
+      labelBand.position.set(0, 1.12, 0);
+      grp.add(labelBand);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** 3D Chat Bubble with crisp Canvas-rendered readable text (e.g. "Makasih ya!") */
+    chatBubble3D(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        text?: string;
+        subtitle?: string;
+        bg?: string;
+        textColor?: string;
+        accent?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const bg = opts?.bg || "#FACC15";
+      const pill = new THREE.Mesh(
+        new THREE.BoxGeometry(2.6, 1.15, 0.24),
+        makeMat({ color: bg, roughness: 0.36, metalness: 0.06 })
+      );
+      grp.add(pill);
+
+      const tail = new THREE.Mesh(
+        new THREE.ConeGeometry(0.24, 0.42, 4),
+        makeMat({ color: bg, roughness: 0.36 })
+      );
+      tail.rotation.z = Math.PI * 0.82;
+      tail.position.set(-0.78, -0.68, 0);
+      grp.add(tail);
+
+      const tex = createCardTexture({
+        title: opts?.text || "Makasih ya!",
+        subtitle: opts?.subtitle,
+        bg,
+        textColor: opts?.textColor || "#0F172A",
+        accent: opts?.accent || "#FFFFFF",
+      });
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.48, 1.04),
+        new THREE.MeshBasicMaterial({ map: tex })
+      );
+      face.position.set(0, 0, 0.128);
+      grp.add(face);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Crisp 3D Comparison Bar Chart with elevated podium, color-coded bars & front header */
+    barChart3D(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        title?: string;
+        items?: Array<{ label: string; value: number; color?: string }>;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const items =
+        Array.isArray(opts?.items) && opts.items.length > 0
+          ? opts.items.slice(0, 5)
+          : [
+              { label: "Search", value: 1, color: "#38BDF8" },
+              { label: "AI Prompt", value: 10, color: "#F97316" },
+            ];
+      const maxVal = Math.max(1, ...items.map((it) => Math.abs(Number(it.value) || 0)));
+      const w = Math.max(3.2, items.length * 1.45 + 0.8);
+
+      const podium = new THREE.Mesh(
+        new THREE.BoxGeometry(w, 0.28, 1.8),
+        makeMat({ color: "#1E293B", roughness: 0.5, metalness: 0.35 })
+      );
+      podium.position.set(0, 0.14, 0);
+      grp.add(podium);
+
+      items.forEach((it, idx) => {
+        const ratio = clamp((Number(it.value) || 0.1) / maxVal, 0.12, 1);
+        const h = 0.4 + ratio * 3.1;
+        const x = (idx - (items.length - 1) / 2) * 1.35;
+        const col = it.color || (idx === items.length - 1 ? "#F97316" : "#38BDF8");
+        const bar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.78, h, 0.78),
+          makeMat({ color: col, emissive: col, emissiveIntensity: 0.18, roughness: 0.35, metalness: 0.18 })
+        );
+        bar.position.set(x, 0.28 + h / 2, 0);
+        grp.add(bar);
+      });
+
+      if (opts?.title) {
+        const tex = createCardTexture({
+          title: opts.title,
+          bg: "#0F172A",
+          textColor: "#FFFFFF",
+          accent: "#FACC15",
+          width: 512,
+          height: 128,
+        });
+        const sign = new THREE.Mesh(
+          new THREE.PlaneGeometry(w * 0.92, 0.72),
+          new THREE.MeshBasicMaterial({ map: tex })
+        );
+        sign.position.set(0, 0.14, 0.92);
+        grp.add(sign);
+      }
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Modern Data Center / Tech Building with glowing windows & rooftop cooling units */
+    building(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        width?: number;
+        height?: number;
+        depth?: number;
+        color?: string;
+        windowColor?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const w = opts?.width ?? 4.2;
+      const h = opts?.height ?? 3.6;
+      const d = opts?.depth ?? 3.2;
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, d),
+        makeMat({ color: opts?.color || "#334155", roughness: 0.65, metalness: 0.22 })
+      );
+      wall.position.set(0, h / 2, 0);
+      grp.add(wall);
+
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(w + 0.18, 0.22, d + 0.18),
+        makeMat({ color: "#475569", roughness: 0.55, metalness: 0.35 })
+      );
+      roof.position.set(0, h + 0.1, 0);
+      grp.add(roof);
+
+      // Glowing front window grid
+      const winCol = opts?.windowColor || "#38BDF8";
+      const winMat = makeMat({ color: winCol, emissive: winCol, emissiveIntensity: 0.75, roughness: 0.2 });
+      const cols = 4;
+      const rows = 3;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(w * 0.15, h * 0.16, 0.08), winMat);
+          win.position.set(
+            ((c - (cols - 1) / 2) / cols) * (w * 0.85),
+            0.75 + r * ((h - 1.1) / rows),
+            d / 2 + 0.02
+          );
+          grp.add(win);
+        }
+      }
+
+      // Rooftop AC chillers
+      for (let i = -1; i <= 1; i += 2) {
+        const ac = new THREE.Mesh(
+          new THREE.BoxGeometry(0.95, 0.52, 0.85),
+          makeMat({ color: "#94A3B8", roughness: 0.5, metalness: 0.45 })
+        );
+        ac.position.set(i * (w * 0.24), h + 0.46, 0);
+        grp.add(ac);
+      }
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Stylized 3D Earth Globe with ocean, continents & glowing orbital data ring */
+    globe(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        radius?: number;
+        ringColor?: string;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const r = opts?.radius ?? 1.6;
+      const ocean = new THREE.Mesh(
+        new THREE.SphereGeometry(r, 24, 20),
+        makeMat({ color: "#0284C7", roughness: 0.35, metalness: 0.12 })
+      );
+      grp.add(ocean);
+
+      const landMat = makeMat({ color: "#22C55E", roughness: 0.78 });
+      const blobs: Array<[number, number, number, number]> = [
+        [0.4, 0.6, 0.7, 0.52],
+        [-0.7, 0.3, 0.65, 0.46],
+        [0.1, -0.5, 0.85, 0.38],
+        [0.85, 0.1, -0.45, 0.5],
+        [-0.5, -0.4, -0.7, 0.44],
+      ];
+      for (const [bx, by, bz, bs] of blobs) {
+        const v = new THREE.Vector3(bx, by, bz).normalize().multiplyScalar(r * 0.92);
+        const land = new THREE.Mesh(new THREE.DodecahedronGeometry(r * bs * 0.55, 1), landMat);
+        land.position.copy(v);
+        grp.add(land);
+      }
+
+      const ringCol = opts?.ringColor || "#38BDF8";
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(r * 1.28, 0.045, 8, 48),
+        makeMat({ color: ringCol, emissive: ringCol, emissiveIntensity: 1.2, roughness: 0.2 })
+      );
+      ring.rotation.set(0.55, 0.3, 0);
+      grp.add(ring);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /** Glowing 3D Lightbulb (great for electricity / energy metaphors) */
+    lightbulb(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+        glowColor?: string;
+        on?: boolean;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const on = opts?.on ?? true;
+      const col = opts?.glowColor || "#FACC15";
+      const glass = new THREE.Mesh(
+        new THREE.SphereGeometry(0.68, 20, 16),
+        makeMat({
+          color: on ? col : "#CBD5E1",
+          emissive: on ? col : "#000000",
+          emissiveIntensity: on ? 1.1 : 0,
+          roughness: 0.18,
+          opacity: 0.92,
+          transparent: true,
+        })
+      );
+      glass.position.set(0, 1.05, 0);
+      grp.add(glass);
+
+      const screw = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.28, 0.24, 0.48, 16),
+        makeMat({ color: "#94A3B8", roughness: 0.35, metalness: 0.78 })
+      );
+      screw.position.set(0, 0.36, 0);
+      grp.add(screw);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /* ==================== STAGE VISIBILITY & AUTO-FRAMING HELPERS ==================== */
+
+    /** Show or hide one or more named objects/groups (prevents props from other beats blocking the camera!) */
+    setVisible(
+      worldOrNames: DioramaWorldHandle | string | string[] | null | undefined,
+      namesOrVis?: string | string[] | boolean,
+      maybeVisible?: boolean
+    ) {
+      const firstIsWorld = isWorldHandle(worldOrNames);
+      const world = firstIsWorld ? worldOrNames : activeWorldRef;
+      const namesRaw = firstIsWorld ? namesOrVis : worldOrNames;
+      const visible = Boolean(firstIsWorld ? maybeVisible : namesOrVis);
+      if (!world) return;
+      const list = Array.isArray(namesRaw)
+        ? namesRaw
+        : typeof namesRaw === "string"
+          ? [namesRaw]
+          : [];
+      for (const n of list) {
+        if (world.objects[n]) world.objects[n].visible = visible;
+        if (world.characters[n]) world.characters[n].group.visible = visible;
+      }
+    },
+
+    /**
+     * Beat Stage Isolation: shows ONLY `activeNames` and hides all other names in `allStageNames`!
+     * Eliminates camera occlusion from props belonging to other beats.
+     */
+    showOnly(
+      worldOrActive: DioramaWorldHandle | string[] | null | undefined,
+      activeOrAll?: string[],
+      maybeAll?: string[]
+    ) {
+      const firstIsWorld = isWorldHandle(worldOrActive);
+      const world = firstIsWorld ? worldOrActive : activeWorldRef;
+      const activeList = (firstIsWorld ? activeOrAll : worldOrActive) as string[] | undefined;
+      const allList = (firstIsWorld ? maybeAll : activeOrAll) as string[] | undefined;
+      if (!world || !Array.isArray(activeList)) return;
+      const activeSet = new Set(activeList);
+      const targets =
+        Array.isArray(allList) && allList.length > 0
+          ? allList
+          : Object.keys(world.objects).filter((k) => !k.startsWith("__"));
+      for (const name of targets) {
+        const show = activeSet.has(name);
+        if (world.objects[name]) world.objects[name].visible = show;
+        if (world.characters[name]) world.characters[name].group.visible = show;
+      }
+      for (const name of activeList) {
+        if (world.objects[name]) world.objects[name].visible = true;
+        if (world.characters[name]) world.characters[name].group.visible = true;
+      }
+    },
+
+    /** Auto-frame the camera cleanly on any named object/group using its real 3D bounding box! */
+    focusCameraOn(
+      worldOrTarget: DioramaWorldHandle | string | THREE.Object3D | null | undefined,
+      targetOrOffset?: string | THREE.Object3D | Vec3Tuple,
+      offsetOrFov?: Vec3Tuple | number,
+      maybeFov = 38
+    ) {
+      const firstIsWorld = isWorldHandle(worldOrTarget);
+      const world = firstIsWorld ? worldOrTarget : activeWorldRef;
+      const target = firstIsWorld ? targetOrOffset : worldOrTarget;
+      const offset = (firstIsWorld
+        ? Array.isArray(offsetOrFov)
+          ? offsetOrFov
+          : [4.5, 3.2, 6.5]
+        : Array.isArray(targetOrOffset)
+          ? targetOrOffset
+          : [4.5, 3.2, 6.5]) as Vec3Tuple;
+      const fov = firstIsWorld
+        ? typeof offsetOrFov === "number"
+          ? offsetOrFov
+          : maybeFov
+        : typeof offsetOrFov === "number"
+          ? offsetOrFov
+          : 38;
+      if (!world) return;
+      const obj =
+        typeof target === "string"
+          ? world.objects[target] || world.characters[target]?.group
+          : isObject3D(target)
+            ? target
+            : null;
+      if (!obj) return;
+      const box = new THREE.Box3().setFromObject(obj);
+      const center = new THREE.Vector3();
+      if (box.isEmpty()) {
+        obj.getWorldPosition(center);
+      } else {
+        box.getCenter(center);
+      }
+      this.setCamera(
+        world,
+        [center.x + offset[0], center.y + offset[1], center.z + offset[2]],
+        [center.x, center.y, center.z],
+        fov
+      );
     },
 
     /* ==================== CONTINUOUS 3D CAMERA CHOREOGRAPHY ==================== */

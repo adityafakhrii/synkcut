@@ -292,11 +292,14 @@ export default function ProjectsHomeView({
             .join(" ") || "Video Footage Auto-Cut";
         fullScript = trimmed;
       } else if (isTauriRuntime() && hasAnyByok) {
+        const durMatch = trimmed.match(/(\d{2,3})\s*(?:detik|dtk|sec|s\b)/i);
+        const parsedSec = durMatch ? Number(durMatch[1]) : 30;
+        const targetDurationSec = Math.max(15, Math.min(90, Number.isFinite(parsedSec) ? parsedSec : 30));
         const generated = await aiGenerateScript({
           topic: trimmed,
           format: inferredFormat,
           tone: "santai",
-          targetDurationSec: 30,
+          targetDurationSec,
           visualMode: heroVisualMode,
           styleReferenceSummary:
             styleRef?.customDesign?.artDirectionNotes ?? styleRef?.styleDnaSummary ?? null,

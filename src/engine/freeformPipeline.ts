@@ -1,5 +1,10 @@
 import type { StoryboardBeat, SynkcutProject } from "../types/scene";
-import { aiRepair3dDiorama, aiRepairBeatCode, isTauriRuntime } from "../lib/tauriBridge";
+import {
+  aiCritique3dFrames,
+  aiRepair3dDiorama,
+  aiRepairBeatCode,
+  isTauriRuntime,
+} from "../lib/tauriBridge";
 import { verifyBeatCodeOffscreen } from "./freeformMotionRenderer";
 import { verifyDiorama3DOffscreen } from "./diorama3dRenderer";
 
@@ -48,6 +53,8 @@ export async function verifyAndRepairProjectBeats(
 
     let passed3d = false;
     let lastErr3d = "";
+    let lastSnapshots: string[] = [];
+    let visionChecked = false;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!setupCode || !animateCode) {
@@ -59,14 +66,52 @@ export async function verifyAndRepairProjectBeats(
           worldPreset,
           project,
         });
+        if (check.snapshots && check.snapshots.length > 0) {
+          lastSnapshots = check.snapshots;
+        }
         if (check.ok) {
+          // Antigravity-style Vision Self-Check on the first passing render!
+          if (!visionChecked && isTauriRuntime() && lastSnapshots.length > 0 && attempt < 2) {
+            visionChecked = true;
+            onProgress?.("Inspeksi visual 3D (cek sudut kamera & kejernihan gambar)...");
+            try {
+              const critique = await aiCritique3dFrames({
+                projectTitle: project.meta.name,
+                worldSummary: nextWorld3d.summary || project.meta.name,
+                frames: lastSnapshots,
+              });
+              if (!critique.skipped && !critique.ok && (critique.issue || critique.fixHint)) {
+                lastErr3d = `Kritik Visual AI: ${critique.issue || "Komposisi kamera/objek kurang jelas"}. Perbaikan: ${critique.fixHint || "Perjelas objek utama & hilangkan penghalang kamera."}`;
+                onProgress?.("Memperbaiki komposisi kamera & kualitas visual 3D otomatis...");
+                try {
+                  const repaired = await aiRepair3dDiorama({
+                    projectTitle: project.meta.name,
+                    worldPreset,
+                    brokenSetupCode: setupCode,
+                    brokenAnimateCode: animateCode,
+                    errorMessage: lastErr3d,
+                    beatsSummary,
+                    previewFrames: lastSnapshots,
+                  });
+                  setupCode = repaired.setupCode;
+                  animateCode = repaired.animateCode;
+                  continue;
+                } catch {
+                  // If visual polish repair fails, keep the valid rendered 3D instead of falling back to 2D text!
+                }
+              }
+            } catch {
+              // Vision critique is best-effort and never blocks valid 3D output
+            }
+          }
+
           passed3d = true;
           verifiedCount++;
           if (attempt > 0) repairedCount++;
           const note =
             attempt > 0
-              ? "3D Diorama diperbaiki otomatis & lolos cek 4 frame WebGL"
-              : check.warning || "Lolos cek 4 frame WebGL 3D";
+              ? "3D Diorama dipoles otomatis & lolos cek visual WebGL"
+              : check.warning || "Lolos cek visual 4 frame WebGL 3D";
           nextWorld3d = {
             ...nextWorld3d,
             setupCode,
@@ -104,6 +149,7 @@ export async function verifyAndRepairProjectBeats(
             brokenAnimateCode: animateCode || "// empty",
             errorMessage: lastErr3d,
             beatsSummary,
+            previewFrames: lastSnapshots,
           });
           setupCode = repaired.setupCode;
           animateCode = repaired.animateCode;

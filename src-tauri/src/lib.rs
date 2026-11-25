@@ -647,6 +647,7 @@ pub fn run() {
             ai::ai_generate_beat_codes,
             ai::ai_repair_beat_code,
             ai::ai_generate_3d_diorama,
+            ai::ai_critique_3d_frames,
             ai::ai_repair_3d_diorama,
             ai::ai_assemble_project,
             ai::ai_copilot_patch,
