@@ -500,6 +500,30 @@ pub async fn capture_hyperframe_poster(
     Ok(format!("data:image/jpeg;base64,{}", BASE64.encode(jpeg)))
 }
 
+/// Captures multiple real rendered keyframes (540x960 JPEG data URLs) in ONE headless CDP session
+/// for Synkcut v3.1 Antigravity-style Vision Self-Critique & Impeccable Polish!
+pub(crate) async fn capture_hyperframe_keyframes_internal(
+    html: String,
+    times_sec: &[f64],
+) -> Result<Vec<String>, String> {
+    if html.trim().len() < 80 || times_sec.is_empty() {
+        return Err("HTML atau timestamp keyframe kosong.".to_string());
+    }
+    let mut sess = CdpSession::launch(html, 1080, 1920, 0.5).await?;
+    let mut out = Vec::with_capacity(times_sec.len());
+    for &t in times_sec {
+        match sess.render_and_capture_jpeg(t.max(0.1), 78).await {
+            Ok(jpg) => out.push(format!("data:image/jpeg;base64,{}", BASE64.encode(jpg))),
+            Err(e) => {
+                sess.close().await;
+                return Err(e);
+            }
+        }
+    }
+    sess.close().await;
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn export_hyperframe_mp4(
     app: AppHandle,

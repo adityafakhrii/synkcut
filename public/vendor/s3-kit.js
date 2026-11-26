@@ -499,6 +499,271 @@ export function buildBarMonolith(items = [], opts = {}) {
   return grp;
 }
 
+export function buildNeuralLattice(opts = {}) {
+  const grp = new THREE.Group();
+  const layers = opts.layers ?? [3, 4, 3];
+  const nodeColor = opts.nodeColor ?? 0xd6dde6;
+  const accentColor = opts.accentColor ?? 0x0b63a6;
+  const layerSpacing = opts.layerSpacing ?? 2.0;
+  const nodeSpacing = opts.nodeSpacing ?? 1.25;
+  const startX = -((layers.length - 1) * layerSpacing) / 2;
+
+  const nodePositions = [];
+  const nodeMeshes = [];
+  layers.forEach((count, lIdx) => {
+    const col = [];
+    const x = startX + lIdx * layerSpacing;
+    const startY = 1.1 + ((count - 1) * nodeSpacing) / 2;
+    for (let i = 0; i < count; i++) {
+      const y = startY - i * nodeSpacing + 1.2;
+      const z = ((lIdx + i) % 2 === 0 ? 0.35 : -0.35);
+      const isCenter = lIdx === Math.floor(layers.length / 2);
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(isCenter ? 0.34 : 0.27, 24, 24),
+        new THREE.MeshStandardMaterial({
+          color: isCenter ? accentColor : nodeColor,
+          roughness: 0.28,
+          metalness: isCenter ? 0.35 : 0.18,
+        })
+      );
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      grp.add(m);
+      col.push(new THREE.Vector3(x, y, z));
+      nodeMeshes.push(m);
+    }
+    nodePositions.push(col);
+  });
+
+  const pulses = [];
+  const lineMat = new THREE.MeshStandardMaterial({
+    color: opts.wireColor ?? 0x8a95a5,
+    roughness: 0.45,
+    metalness: 0.35,
+  });
+  for (let l = 0; l < nodePositions.length - 1; l++) {
+    for (let a = 0; a < nodePositions[l].length; a++) {
+      for (let b = 0; b < nodePositions[l + 1].length; b++) {
+        if ((a + b) % 2 !== 0 && nodePositions[l].length > 2) continue;
+        const p0 = nodePositions[l][a];
+        const p1 = nodePositions[l + 1][b];
+        const curve = new THREE.LineCurve3(p0, p1);
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 6, 0.032, 8, false), lineMat);
+        grp.add(tube);
+        if (pulses.length < 10) {
+          const pulse = new THREE.Mesh(
+            new THREE.SphereGeometry(0.09, 10, 10),
+            new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.2, metalness: 0.2 })
+          );
+          grp.add(pulse);
+          pulses.push({ mesh: pulse, p0, p1, offset: pulses.length * 0.13 });
+        }
+      }
+    }
+  }
+
+  grp.userData.update = (t) => {
+    pulses.forEach((p) => {
+      const u = (t * 0.65 + p.offset) % 1;
+      p.mesh.position.lerpVectors(p.p0, p.p1, u);
+    });
+    nodeMeshes.forEach((m, idx) => {
+      const s = 1 + Math.sin(t * 2.4 + idx * 0.7) * 0.06;
+      m.scale.setScalar(s);
+    });
+  };
+  return grp;
+}
+
+export function buildTokenBlocks(labels = ['Prompt', 'Pola', 'Prediksi'], opts = {}) {
+  const grp = new THREE.Group();
+  const list = Array.isArray(labels) && labels.length > 0 ? labels : ['Token 1', 'Token 2', 'Token 3'];
+  const accent = opts.accentColor ?? '#0B63A6';
+  const dark = Boolean(opts.dark);
+  const spacing = opts.spacing ?? 1.85;
+  const startX = -((list.length - 1) * spacing) / 2;
+  const tiles = [];
+
+  list.slice(0, 5).forEach((lbl, idx) => {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 128;
+    const x = c.getContext('2d');
+    x.fillStyle = dark ? '#182130' : '#F8FAFC';
+    x.fillRect(0, 0, 256, 128);
+    x.strokeStyle = dark ? 'rgba(241,245,249,0.22)' : 'rgba(17,22,29,0.16)';
+    x.lineWidth = 6;
+    x.strokeRect(6, 6, 244, 116);
+    x.fillStyle = idx === list.length - 1 ? accent : dark ? '#F1F5F9' : '#11161D';
+    x.font = '700 34px "DM Sans", sans-serif';
+    x.textAlign = 'center';
+    x.textBaseline = 'middle';
+    x.fillText(String(lbl).slice(0, 12), 128, 66);
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sideMat = new THREE.MeshStandardMaterial({
+      color: idx === list.length - 1 ? new THREE.Color(accent) : dark ? 0x1e293b : 0xd6dde6,
+      roughness: 0.42,
+      metalness: 0.18,
+    });
+    const faceMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35, metalness: 0.06 });
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1.55, 0.82, 0.48),
+      [sideMat, sideMat, sideMat, sideMat, faceMat, sideMat]
+    );
+    mesh.position.set(startX + idx * spacing, 1.45 + (idx % 2) * 0.18, 0);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    grp.add(mesh);
+    tiles.push(mesh);
+  });
+
+  grp.userData.highlight = (activeIdx) => {
+    tiles.forEach((m, i) => {
+      const active = i === activeIdx;
+      m.position.y = (active ? 1.88 : 1.45) + (i % 2) * 0.12;
+      m.scale.setScalar(active ? 1.09 : 0.96);
+    });
+  };
+  return grp;
+}
+
+export function buildScaleBalance(opts = {}) {
+  const grp = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({
+    color: opts.metalColor ?? 0x334155,
+    roughness: 0.32,
+    metalness: 0.65,
+  });
+  const accent = new THREE.MeshStandardMaterial({
+    color: opts.accentColor ?? 0x0b63a6,
+    roughness: 0.38,
+    metalness: 0.28,
+  });
+  const stone = new THREE.MeshStandardMaterial({
+    color: opts.stoneColor ?? 0xdbe2ea,
+    roughness: 0.72,
+    metalness: 0.06,
+  });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.15, 0.38, 32), stone);
+  base.position.y = 0.19;
+  base.castShadow = true;
+  grp.add(base);
+
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 3.1, 20), metal);
+  pillar.position.y = 1.75;
+  pillar.castShadow = true;
+  grp.add(pillar);
+
+  const beamPivot = new THREE.Group();
+  beamPivot.position.y = 3.22;
+  grp.add(beamPivot);
+
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.14, 0.22), metal);
+  beam.castShadow = true;
+  beamPivot.add(beam);
+
+  const leftPan = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.62, 0.22, 28), accent);
+  leftPan.position.set(-1.95, -0.95, 0);
+  leftPan.castShadow = true;
+  beamPivot.add(leftPan);
+
+  const rightPan = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.62, 0.22, 28), stone);
+  rightPan.position.set(1.95, -0.95, 0);
+  rightPan.castShadow = true;
+  beamPivot.add(rightPan);
+
+  for (const sx of [-1.95, 1.95]) {
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.95, 10), metal);
+    rod.position.set(sx, -0.48, 0);
+    beamPivot.add(rod);
+  }
+
+  grp.userData.setTilt = (rad) => {
+    beamPivot.rotation.z = Number(rad) || 0;
+  };
+  return grp;
+}
+
+export function buildGlassLens(opts = {}) {
+  const grp = new THREE.Group();
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.45, 1.45, 0.52, 40, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: opts.rimColor ?? 0x1e293b,
+      roughness: 0.32,
+      metalness: 0.72,
+      side: THREE.DoubleSide,
+    })
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.castShadow = true;
+  grp.add(barrel);
+
+  const rimFront = new THREE.Mesh(
+    new THREE.TorusGeometry(1.45, 0.09, 16, 48),
+    new THREE.MeshStandardMaterial({ color: opts.accentColor ?? 0x0b63a6, roughness: 0.28, metalness: 0.55 })
+  );
+  rimFront.position.z = 0.24;
+  grp.add(rimFront);
+
+  const glass = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.38, 1.38, 0.16, 40),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xe0f2fe,
+      roughness: 0.06,
+      metalness: 0.04,
+      transmission: 0.82,
+      thickness: 0.5,
+      transparent: true,
+      opacity: 0.62,
+    })
+  );
+  glass.rotation.x = Math.PI / 2;
+  grp.add(glass);
+
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.22, 1.75, 18),
+    new THREE.MeshStandardMaterial({ color: opts.rimColor ?? 0x1e293b, roughness: 0.4, metalness: 0.5 })
+  );
+  handle.position.set(0, -2.15, 0);
+  handle.castShadow = true;
+  grp.add(handle);
+
+  grp.position.y = 2.8;
+  return grp;
+}
+
+export function buildDocumentStack(opts = {}) {
+  const grp = new THREE.Group();
+  const count = opts.count ?? 5;
+  const pageMat = new THREE.MeshStandardMaterial({
+    color: opts.pageColor ?? 0xf8fafc,
+    roughness: 0.78,
+    metalness: 0.02,
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: opts.accentColor ?? 0x0b63a6,
+    roughness: 0.38,
+    metalness: 0.22,
+  });
+
+  for (let i = 0; i < count; i++) {
+    const page = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.14, 3.2), i === count - 1 ? pageMat : pageMat);
+    page.position.set((i % 2 === 0 ? 1 : -1) * 0.08 * i, 0.1 + i * 0.22, 0);
+    page.rotation.y = (i - count / 2) * 0.07;
+    page.castShadow = true;
+    page.receiveShadow = true;
+    grp.add(page);
+  }
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 0.22), accentMat);
+  bar.position.set(-0.25, 0.1 + count * 0.22, -0.9);
+  grp.add(bar);
+  return grp;
+}
+
 export function project3D(vec3, camera, width = 1080, height = 1920) {
   const v = vec3.clone().project(camera);
   return {

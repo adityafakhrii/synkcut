@@ -34,21 +34,35 @@ Group `BEATS` evenly into 4 or 5 Editorial Acts (`act0..act4` with exact start/e
 BUILT-IN `S3` ARCHITECTURAL 3D MAQUETTE KIT (`./vendor/s3-kit.js`):
 - `const { renderer, scene, camera } = S3.createStudioWorld(canvas, { width:1080, height:1920, fogHex:0xe7ecf1, isDark:false, fov:34 });`
 - `S3.makeStoneTexture(baseHex, grainRgba)` / `S3.makeConcreteRibTexture(baseHex)` / `S3.makeScreenTexture({ header, lines, highlight, accent, dark })`
-- `S3.buildPlinth(w, d, h, { topColor, sideColor })` -> sculpted architectural plinth (top sits at y = 0!)
+- `S3.buildPlinth(w, d, h, { topColor, sideColor })` -> sculpted architectural stone plinth (top sits at y = 0!)
 - `S3.buildSmartphone({ header, lines, highlight, accent, dark })` -> matte aluminum phone with clean UI
-- `S3.buildServerRack({ blades:7, bodyColor, ledColor })` -> returns group with `.userData.leds`
+- `S3.buildServerRack({ blades:7, bodyColor, ledColor })` -> data center rack with `.userData.leds`
 - `S3.buildGpuModule({ heatColor })` -> copper heatsink + silicon die (`.userData.coreMat`)
 - `S3.buildCoolingTower({ scale, waterColor })` -> sculpted LatheGeometry hyperbolic concrete tower
 - `S3.buildGlassBottle({ liquidColor, initialFill })` -> crystal LatheGeometry bottle (`.userData.setFill(0..1)`)
 - `S3.buildGlobe({ radius, color, accentColor })` -> architectural wireframe globe + orbital ring
 - `S3.buildConduit([[x,y,z], ...], { radius, color, beadCount })` -> smooth TubeGeometry pipe + `.userData.updateBeads(t)`
 - `S3.buildBarMonolith([{ value, color, accent }], { maxHeight })` -> 3D bar comparison (`.userData.setProgress(0..1)`)
+- `S3.buildNeuralLattice({ layers:[3,4,3], nodeColor, accentColor })` -> sculptural 3D neural network with `.userData.update(t)` traveling pulses
+- `S3.buildTokenBlocks(['Prompt','Pola','Prediksi'], { accentColor, dark })` -> crisp 3D architectural token tiles with `.userData.highlight(idx)`
+- `S3.buildScaleBalance({ metalColor, accentColor })` -> architectural balance scale with `.userData.setTilt(rad)`
+- `S3.buildGlassLens({ rimColor, accentColor })` -> sculptural physical refractive lens assembly
+- `S3.buildDocumentStack({ count:5, accentColor })` -> layered crisp architectural folio pages
 - `S3.project3D(vec3, camera, 1080, 1920)` -> `{ x, y, visible }` for SVG hairline pointers!
-- Plus full `THREE` (`S3.THREE`) for any custom subject-specific 3D objects (`LatheGeometry`, `ExtrudeGeometry`, `TubeGeometry`, particles, meshes)!
+- Plus full `THREE` (`S3.THREE`) for any custom subject-specific sculptural objects (`LatheGeometry`, `ExtrudeGeometry`, `TubeGeometry`).
 
-ANTI-PHOTOBOMB GALLERY RAIL RULE:
-- Place each act's 3D plinth along the horizontal X gallery rail (`x = -13, 0, +13, +26`) with `z = 0` so NO act's foreground prop ever blocks another act's camera!
-- Final act camera pulls back (`camZ ~ 38, camY ~ 14`) to reveal the full illuminated miniature panorama!
+STRICT EDITORIAL & 3D QUALITY LAWS (APPLE / NYT / VOX STUDIO STANDARD):
+1. ZERO PRIMITIVE SLABS: NEVER build flat green grass slabs, raw untextured grey boxes, or floating blue sticks! ALWAYS place a sculpted `S3.buildPlinth(...)` at EACH Act's gallery X coordinate (`x = -26, -13, 0, +13, +26`, `z = 0`) and top it with a rich, topic-specific sculptural `S3` hero assembly + subtle secondary props so EVERY Act feels like a distinct museum diorama!
+2. DYNAMIC CAMERA CHOREOGRAPHY: Frame each Act boldly (`camZ: 12.5..16.5`, `camY: 4.5..7.0`, `fov: 34`) so the 3D hero fills 55-70% of the middle stage! Glide smoothly along X between plinths with GSAP (`ease: 'power2.inOut'`) and pull back on the final Act (`camZ: 34..38, camY: 13`) to reveal the full illuminated gallery panorama!
+3. GUARANTEED WCAG AAA SUBTITLE & TYPE CONTRAST:
+   - Light theme (`isLight: true`): `--paper: #EAEEF2; --ink: #11161D; --ink-soft: #475361; --accent: #0B63A6; --accent-2: #C2411D;`
+   - Dark theme (`isDark: true`): `--paper: #0E131B; --ink: #F1F5F9; --ink-soft: #94A3B8; --accent: #38BDF8; --accent-2: #F59E0B;`
+   - SUBTITLES MUST ALWAYS USE `color: var(--ink)` (`#11161D` on light, `#F1F5F9` on dark) with `font-size: 40px; font-weight: 700; line-height: 1.32;` and active-word underline (`border-bottom: 3px solid var(--accent)`). NEVER `#FFFFFF` text on a light background!
+4. MOBILE-READABLE TYPE SCALE & BALANCED VERTICAL RHYTHM (1080x1920):
+   - Top Editorial Zone (`top: 108px`, `padding: 0 76px`): Headline `h1` `64px–70px` (`Newsreader` or `Bricolage Grotesque`, `line-height: 1.06`), Deck `28px–30px` (`DM Sans`, `color: var(--ink-soft)`). NEVER tiny `14px–18px` body text!
+   - Middle Hero 3D Stage (`y: 420px..1260px`): Full-bleed sculptural 3D plinth + 1–2 crisp SVG hairline callout labels (`20px–22px`, never overlapping the 3D object center!).
+   - Bottom Editorial Data/Note Band (`top: 1290px..1510px`): Swiss hairline rule + 2-column architectural notes (`24px–26px`) OR comparative data table / live tabular KPI counter (`76px–88px`). NO giant empty blank voids!
+   - Karaoke Subtitle Zone (`bottom: 196px`): Quiet underlined 3–5 word chunks synchronized to `ALL_WORDS`.
 
 DETERMINISTIC SEEK CONTRACT (MANDATORY):
 - Define `window.render = function(t) { ... };` which:
@@ -385,7 +399,7 @@ pub async fn ai_generate_hyperframe_video(
         return Err("AI mengembalikan HTML HyperFrames terlalu pendek atau kosong.".to_string());
     }
 
-    let (polished_html, lint_fixes) = lint_and_polish_hyperframe_html(raw_html);
+    let (mut polished_html, mut lint_fixes) = lint_and_polish_hyperframe_html(raw_html);
     let world_theme = val["worldTheme"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -398,6 +412,108 @@ pub async fn ai_generate_hyperframe_video(
         .unwrap_or("Komposisi HyperFrames 3D + GSAP + SVG anti-slop")
         .trim()
         .to_string();
+
+    // PASS 2: Antigravity-style Live 3-Frame CDP Vision Self-Critique & Impeccable Polish!
+    let total_sec_f64 = (total_ms as f64) / 1000.0;
+    let transcript_for_critic = json!({
+        "totalDurationSec": (total_sec_f64 * 1000.0).round() / 1000.0,
+        "fps": 30,
+        "totalFrames": ((total_sec_f64 * 30.0).round() as u64).max(30),
+        "beats": synced_beats.iter().map(|b| {
+            let ss = (b.start_ms as f64) / 1000.0;
+            let es = (b.end_ms as f64) / 1000.0;
+            json!({
+                "id": b.id,
+                "role": b.role,
+                "title": b.title,
+                "text": b.text,
+                "startSec": ss,
+                "speechEndSec": es,
+                "endSec": es,
+                "words": synced_words.iter()
+                    .filter(|w| (w.end_ms as f64) / 1000.0 > ss && (w.start_ms as f64) / 1000.0 < es)
+                    .map(|w| json!({
+                        "word": w.word,
+                        "start": (w.start_ms as f64) / 1000.0,
+                        "end": (w.end_ms as f64) / 1000.0
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>(),
+        "words": synced_words.iter().map(|w| json!({
+            "word": w.word,
+            "start": (w.start_ms as f64) / 1000.0,
+            "end": (w.end_ms as f64) / 1000.0
+        })).collect::<Vec<_>>()
+    });
+    let safe_tr_json = transcript_for_critic.to_string().replace("</", "<\\/");
+    let critic_preview_html = if polished_html.contains("/*TRANSCRIPT*/null") {
+        polished_html.replace("/*TRANSCRIPT*/null", &safe_tr_json)
+    } else if polished_html.contains("</head>") {
+        polished_html.replace(
+            "</head>",
+            &format!("<script>window.__SYNKCUT_TRANSCRIPT__ = {safe_tr_json};</script>\n</head>"),
+        )
+    } else {
+        polished_html.clone()
+    };
+
+    let _ = app.emit(
+        "generation-progress",
+        "Tahap 2/2: Menginspeksi 3 frame asli & memoles visual (Impeccable Vision Critic)...",
+    );
+
+    let sample_times = [
+        (total_sec_f64 * 0.14).max(0.8),
+        (total_sec_f64 * 0.50).max(2.0),
+        (total_sec_f64 * 0.85).max(3.0),
+    ];
+    if let Ok(keyframes) =
+        crate::hyperframes_export::capture_hyperframe_keyframes_internal(critic_preview_html, &sample_times)
+            .await
+    {
+        if !keyframes.is_empty() {
+            let critic_sys = format!(
+                "Kamu adalah Art Director & Impeccable Visual Critic di Synkcut v3.1.\n\
+                Tugasmu melihat 3 screenshot ASLI hasil render HTML HyperFrames (awal, tengah, akhir) dan memoles kode HTML-nya agar benar-benar sekelas studio editorial Apple / NYT / Vox!\n\
+                AUDIT KETAT 5 HAL WAJIB:\n\
+                1. KONTRAS SUBTITLE & TEKS: Jika subtitle berwarna putih/pudar di atas background terang (atau teks kurang terbaca), WAJIB ubah ke `color: var(--ink)` (`#11161D` pada tema terang, `#F1F5F9` pada tema gelap), `font-size: 40px; font-weight: 700`.\n\
+                2. SKALA TIPOGRAFI MOBILE: Pastikan `h1` 64–70px, deck 28–30px, catatan/tabel bawah 24–26px. DILARANG teks mikro `14px–18px` yang susah dibaca di HP!\n\
+                3. KUALITAS 3D MAQUETTE: Jika objek 3D terlihat seperti papan hijau flat / kotak abu-abu polos / terlalu kecil / tidak berubah antar Act, WAJIB ganti dengan `S3.buildPlinth` + objek skulptural dari `S3` Kit (`buildNeuralLattice`, `buildTokenBlocks`, `buildScaleBalance`, `buildGlassLens`, `buildDocumentStack`, `buildSmartphone`, `buildServerRack`, `buildGpuModule`, `buildCoolingTower`, `buildGlassBottle`, `buildGlobe`, `buildConduit`, `buildBarMonolith`) di X gallery rail berbeda per Act dengan kamera `camZ: 12.5..16.5` yang megah!\n\
+                4. TATA LETAK & RUANG KOSONG: Tidak boleh ada teks/SVG menumpuk objek 3D atau area kosong hampa besar di bawah. Isi band bawah (`top: 1290px..1510px`) dengan catatan editorial / data rail yang rapi.\n\
+                5. PERTAHANKAN `/*TRANSCRIPT*/null`, `./vendor/gsap.min.js`, `./vendor/s3-kit.js`, `window.render(t)`, dan 0% AI slop.\n\
+                Balas HANYA JSON: {{\"needsPolish\": true|false, \"critique\": \"1 kalimat temuan\", \"html\": \"<!DOCTYPE html>...HTML lengkap yang sudah dipoles (isi hanya jika needsPolish=true)...</html>\"}}\n\n\
+                {HYPERFRAMES_S3_SDK_REFERENCE}"
+            );
+            let critic_user = format!(
+                "Proyek: \"{}\" (Tema: {})\n\
+                3 gambar terlampir adalah hasil render asli di detik {:.1}s, {:.1}s, dan {:.1}s.\n\
+                Inspeksi secara jujur dan poles HTML berikut jika ada kekurangan visual sekecil apa pun:\n\n{}",
+                req.project_title.trim(),
+                world_theme,
+                sample_times[0],
+                sample_times[1],
+                sample_times[2],
+                polished_html
+            );
+            if let Ok((cval, _)) =
+                call_llm_json(&resolved, &critic_sys, &critic_user, &keyframes).await
+            {
+                let needs = cval["needsPolish"].as_bool().unwrap_or(false);
+                if let Some(better_html) = cval["html"].as_str() {
+                    if needs && better_html.trim().len() >= 400 && better_html.contains("window.render") {
+                        let (re_polished, re_fixes) = lint_and_polish_hyperframe_html(better_html);
+                        polished_html = re_polished;
+                        lint_fixes.extend(re_fixes);
+                        let note = cval["critique"]
+                            .as_str()
+                            .unwrap_or("Dipoles otomatis oleh Impeccable 3-Frame Vision Critic");
+                        lint_fixes.push(format!("Vision Polish: {note}"));
+                    }
+                }
+            }
+        }
+    }
 
     let now = Utc::now().to_rfc3339();
     let proj_id = format!("proj_{}", Utc::now().timestamp_millis());
