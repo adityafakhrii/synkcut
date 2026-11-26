@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SynkcutProject } from "../types/scene";
 import { buildPlayableHyperframeHtml } from "../engine/hyperframeRuntime";
+import { isTauriRuntime, registerHyperframePreview } from "../lib/tauriBridge";
 
 interface HyperframeCanvasProps {
   project: SynkcutProject;
@@ -11,7 +12,8 @@ interface HyperframeCanvasProps {
 
 /**
  * Live 60fps deterministic 1080x1920 HyperFrames preview player inside StudioView.
- * Scales smoothly to fit any desktop viewport while keeping exact 1:1 fidelity with CDP MP4 export.
+ * Uses Synkcut's Rust localhost HTTP/1.1 preview server + postMessage bridge in Tauri
+ * so ES modules (Three.js r187 + s3-kit.js) and GSAP 3 run 1:1 with MP4 export.
  */
 export default function HyperframeCanvas({
   project,
@@ -29,7 +31,14 @@ export default function HyperframeCanvas({
   const [isLoading, setIsLoading] = useState(true);
   const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
 
-  const playableHtml = useMemo(() => buildPlayableHyperframeHtml(project), [project]);
+  const playableHtmlLocal = useMemo(
+    () => buildPlayableHyperframeHtml(project, "./vendor/"),
+    [project]
+  );
+  const playableHtmlOrigin = useMemo(
+    () => buildPlayableHyperframeHtml(project),
+    [project]
+  );
 
   // Dynamically measure container height/width so the 1080x1920 stage fits pixel-perfectly
   useEffect(() => {
@@ -47,80 +56,78 @@ export default function HyperframeCanvas({
     return () => ro.disconnect();
   }, []);
 
-  // Load composition into isolated blob URL iframe
+  // Load composition via Rust localhost HTTP server (Tauri) or srcdoc (browser dev) + postMessage bridge
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!iframe || !playableHtml) return;
+    if (!iframe || !playableHtmlLocal) return;
     readyRef.current = false;
     setIsLoading(true);
     setRuntimeErr(null);
     onRuntimeError?.(null);
 
-    const blob = new Blob([playableHtml], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
     let cancelled = false;
 
-    const handleLoad = () => {
-      if (cancelled) return;
-      const win = iframe.contentWindow as (Window & { render?: (t: number) => void }) | null;
-      if (!win) return;
+    const onMessage = (ev: MessageEvent) => {
+      if (cancelled || ev.source !== iframe.contentWindow) return;
+      const data = ev.data as { type?: string; message?: string } | null;
+      if (!data || typeof data !== "object") return;
 
-      win.addEventListener("error", (ev) => {
-        if (cancelled) return;
-        const msg = ev.message || "Error render HyperFrames";
+      if (data.type === "hf_ready") {
+        readyRef.current = true;
+        setIsLoading(false);
+        setRuntimeErr(null);
+        onRuntimeError?.(null);
+        iframe.contentWindow?.postMessage(
+          { type: "hf_render", t: timeRef.current / 1000 },
+          "*"
+        );
+      } else if (data.type === "hf_error") {
+        const msg = data.message || "Error render HyperFrames";
+        setIsLoading(false);
         setRuntimeErr(msg);
         onRuntimeError?.(msg);
-      });
-
-      const started = Date.now();
-      const waitForRender = () => {
-        if (cancelled) return;
-        if (typeof win.render === "function") {
-          readyRef.current = true;
-          setIsLoading(false);
-          try {
-            win.render(timeRef.current / 1000);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setRuntimeErr(msg);
-            onRuntimeError?.(msg);
-          }
-          return;
-        }
-        if (Date.now() - started < 6000) {
-          window.setTimeout(waitForRender, 80);
-        } else {
-          setIsLoading(false);
-          const msg = "window.render(t) belum tersedia pada komposisi HTML.";
-          setRuntimeErr(msg);
-          onRuntimeError?.(msg);
-        }
-      };
-      waitForRender();
+      }
     };
 
-    iframe.addEventListener("load", handleLoad, { once: true });
-    iframe.src = url;
+    window.addEventListener("message", onMessage);
+
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled && !readyRef.current) {
+        setIsLoading(false);
+        const msg = "window.render(t) belum tersedia pada komposisi HTML.";
+        setRuntimeErr(msg);
+        onRuntimeError?.(msg);
+      }
+    }, 9000);
+
+    (async () => {
+      let url: string | null = null;
+      if (isTauriRuntime()) {
+        url = await registerHyperframePreview(playableHtmlLocal);
+      }
+      if (cancelled) return;
+      if (url) {
+        iframe.removeAttribute("srcdoc");
+        iframe.src = url;
+      } else {
+        iframe.removeAttribute("src");
+        iframe.srcdoc = playableHtmlOrigin;
+      }
+    })();
 
     return () => {
       cancelled = true;
-      iframe.removeEventListener("load", handleLoad);
-      URL.revokeObjectURL(url);
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("message", onMessage);
     };
-  }, [playableHtml, onRuntimeError]);
+  }, [playableHtmlLocal, playableHtmlOrigin, onRuntimeError]);
 
-  // Synchronous 60fps seek on every timeline scrub or animation frame
+  // Synchronous 60fps seek on every timeline scrub or animation frame via postMessage
   useEffect(() => {
     if (!readyRef.current) return;
-    const win = iframeRef.current?.contentWindow as
-      | (Window & { render?: (t: number) => void })
-      | null;
-    if (!win || typeof win.render !== "function") return;
-    try {
-      win.render(currentTimeMs / 1000);
-    } catch {
-      // Ignore transient frame errors during fast scrub
-    }
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ type: "hf_render", t: currentTimeMs / 1000 }, "*");
   }, [currentTimeMs]);
 
   return (
@@ -132,7 +139,6 @@ export default function HyperframeCanvas({
       <iframe
         ref={iframeRef}
         title="HyperFrames 9:16 Preview"
-        sandbox="allow-scripts allow-same-origin"
         style={{
           position: "absolute",
           top: "50%",

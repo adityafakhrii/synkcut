@@ -122,7 +122,7 @@ export function createStudioWorld(canvas, opts = {}) {
   renderer.setSize(width, height, false);
   renderer.setPixelRatio(1);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = isDark ? 1.0 : 1.04;
 

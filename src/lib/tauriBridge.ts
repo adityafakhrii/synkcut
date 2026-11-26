@@ -1339,6 +1339,15 @@ export async function captureHyperframePoster(params: {
   }
 }
 
+export async function registerHyperframePreview(html: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<string>("register_hyperframe_preview", { html });
+  } catch {
+    return null;
+  }
+}
+
 export async function exportHyperframeMp4(params: {
   html: string;
   durationSec: number;

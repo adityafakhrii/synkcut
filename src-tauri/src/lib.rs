@@ -821,6 +821,7 @@ pub fn run() {
             hyperframes::ai_patch_hyperframe_video,
             hyperframes_export::export_hyperframe_mp4,
             hyperframes_export::capture_hyperframe_poster,
+            hyperframes_export::register_hyperframe_preview,
             motion_skills::list_motion_skills,
             motion_skills::toggle_motion_skill,
             motion_skills::save_custom_motion_skill,

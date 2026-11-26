@@ -1,5 +1,6 @@
 import type { SynkcutProject } from "../types/scene";
 import { getProjectDurationMs } from "./sampleProject";
+import { isTauriRuntime, registerHyperframePreview } from "../lib/tauriBridge";
 
 export interface HyperframeTranscriptBeat {
   id: string;
@@ -115,6 +116,15 @@ export function buildPlayableHyperframeHtml(
     }
   }
 
+  // Inject cross-origin-safe postMessage bridge (for live 60fps Studio preview + 5-frame verifier)
+  const bridgeScript = `<script>(function(){var r=false;function p(m){try{if(window.parent&&window.parent!==window)window.parent.postMessage(m,'*');}catch(_){}}window.addEventListener('error',function(e){p({type:'hf_error',message:(e&&e.message)?String(e.message):'Script error'});});window.addEventListener('unhandledrejection',function(e){p({type:'hf_error',message:e&&e.reason?String(e.reason.message||e.reason):'Unhandled rejection'});});window.addEventListener('message',function(ev){var d=ev&&ev.data;if(!d||typeof d!=='object')return;if(d.type==='hf_render'&&typeof window.render==='function'){try{window.render(Number(d.t)||0);}catch(err){p({type:'hf_error',message:err&&err.message?err.message:String(err)});}}else if(d.type==='hf_verify'&&Array.isArray(d.samples)){if(typeof window.render!=='function'){p({type:'hf_verified',reqId:d.reqId,ok:false,error:'window.render(t) tidak tersedia.'});return;}try{for(var i=0;i<d.samples.length;i++)window.render(Number(d.samples[i])||0);p({type:'hf_verified',reqId:d.reqId,ok:true});}catch(err){p({type:'hf_verified',reqId:d.reqId,ok:false,error:err&&err.message?err.message:String(err)});}}});function poll(){if(typeof window.render==='function'){if(!r){r=true;p({type:'hf_ready'});}return;}setTimeout(poll,50);}poll();})();</script>`;
+
+  if (html.includes("</head>")) {
+    html = html.replace("</head>", `${bridgeScript}\n</head>`);
+  } else {
+    html = `${bridgeScript}\n${html}`;
+  }
+
   return html;
 }
 
@@ -125,7 +135,7 @@ export interface HyperframeVerifyResult {
 
 /**
  * Verifies a generated HyperFrames HTML composition across 5 timestamps inside a hidden offscreen iframe.
- * Catches syntax errors, missing window.render(), WebGL crashes, or GSAP exceptions before entering Studio.
+ * Uses Synkcut's local HTTP/1.1 preview server in Tauri (100% identical to MP4 export, zero WebView2 blob/CORS bugs).
  */
 export async function verifyHyperframeOffscreen(
   project: SynkcutProject
@@ -134,12 +144,18 @@ export async function verifyHyperframeOffscreen(
     return { ok: true };
   }
 
-  const html = buildPlayableHyperframeHtml(project);
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const blobUrl = URL.createObjectURL(blob);
+  let previewUrl: string | null = null;
+  let srcdocHtml: string | null = null;
+
+  if (isTauriRuntime()) {
+    const localHtml = buildPlayableHyperframeHtml(project, "./vendor/");
+    previewUrl = await registerHyperframePreview(localHtml);
+  }
+  if (!previewUrl) {
+    srcdocHtml = buildPlayableHyperframeHtml(project);
+  }
 
   const iframe = document.createElement("iframe");
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
   iframe.style.position = "fixed";
   iframe.style.left = "-9999px";
   iframe.style.top = "-9999px";
@@ -149,74 +165,70 @@ export async function verifyHyperframeOffscreen(
   iframe.style.opacity = "0";
   iframe.style.pointerEvents = "none";
 
+  const reqId = `v_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
   try {
     const result = await new Promise<HyperframeVerifyResult>((resolve) => {
       let settled = false;
+      let verifySent = false;
+
+      const onMessage = (ev: MessageEvent) => {
+        if (ev.source !== iframe.contentWindow) return;
+        const data = ev.data as
+          | { type?: string; message?: string; reqId?: string; ok?: boolean; error?: string }
+          | null;
+        if (!data || typeof data !== "object") return;
+
+        if (data.type === "hf_error") {
+          done({ ok: false, error: data.message || "Runtime error pada komposisi HyperFrame." });
+          return;
+        }
+        if (data.type === "hf_ready" && !verifySent) {
+          verifySent = true;
+          const totalSec = Math.max(4, getProjectDurationMs(project) / 1000);
+          const samples = [
+            0.5,
+            totalSec * 0.25,
+            totalSec * 0.5,
+            totalSec * 0.75,
+            Math.max(0.5, totalSec - 0.5),
+          ];
+          iframe.contentWindow?.postMessage({ type: "hf_verify", reqId, samples }, "*");
+          return;
+        }
+        if (data.type === "hf_verified" && data.reqId === reqId) {
+          done(
+            data.ok
+              ? { ok: true }
+              : { ok: false, error: data.error || "Verifikasi 5-frame HyperFrame gagal." }
+          );
+        }
+      };
+
       const done = (res: HyperframeVerifyResult) => {
         if (settled) return;
         settled = true;
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
         resolve(res);
       };
 
       const timeout = window.setTimeout(() => {
-        done({ ok: false, error: "HyperFrame timeout: window.render tidak siap dalam 8 detik." });
-      }, 8000);
+        done({ ok: false, error: "HyperFrame timeout: window.render tidak siap dalam 9 detik." });
+      }, 9000);
 
-      iframe.onload = () => {
-        const win = iframe.contentWindow as (Window & { render?: (t: number) => void }) | null;
-        if (!win) {
-          window.clearTimeout(timeout);
-          done({ ok: false, error: "Gagal mengakses contentWindow iframe HyperFrame." });
-          return;
-        }
+      window.addEventListener("message", onMessage);
 
-        let runtimeErr: string | null = null;
-        win.addEventListener("error", (ev) => {
-          runtimeErr = ev.message || "Runtime error pada komposisi HyperFrame.";
-        });
-
-        const started = Date.now();
-        const poll = () => {
-          if (runtimeErr) {
-            window.clearTimeout(timeout);
-            done({ ok: false, error: runtimeErr });
-            return;
-          }
-          if (typeof win.render === "function") {
-            try {
-              const totalSec = Math.max(4, getProjectDurationMs(project) / 1000);
-              const samples = [0.5, totalSec * 0.25, totalSec * 0.5, totalSec * 0.75, Math.max(0.5, totalSec - 0.5)];
-              for (const t of samples) {
-                win.render(t);
-              }
-              window.clearTimeout(timeout);
-              done(runtimeErr ? { ok: false, error: runtimeErr } : { ok: true });
-            } catch (err) {
-              window.clearTimeout(timeout);
-              done({
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-            return;
-          }
-          if (Date.now() - started > 6500) {
-            window.clearTimeout(timeout);
-            done({ ok: false, error: "Fungsi window.render(t) tidak didefinisikan di komposisi HTML." });
-            return;
-          }
-          window.setTimeout(poll, 120);
-        };
-        poll();
-      };
-
-      iframe.src = blobUrl;
+      if (previewUrl) {
+        iframe.src = previewUrl;
+      } else if (srcdocHtml) {
+        iframe.srcdoc = srcdocHtml;
+      }
       document.body.appendChild(iframe);
     });
 
     return result;
   } finally {
     if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-    URL.revokeObjectURL(blobUrl);
   }
 }

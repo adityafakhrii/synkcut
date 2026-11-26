@@ -3,10 +3,11 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,6 +16,122 @@ use tokio::process::Command;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 static CDP_SEQ: AtomicU64 = AtomicU64::new(1);
+static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(1);
+
+struct PreviewServerState {
+    port: u16,
+    pages: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+}
+
+static PREVIEW_SERVER: OnceLock<PreviewServerState> = OnceLock::new();
+
+async fn ensure_preview_server() -> Result<&'static PreviewServerState, String> {
+    if let Some(state) = PREVIEW_SERVER.get() {
+        return Ok(state);
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Gagal memulai HyperFrames preview server: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Gagal membaca port preview server: {e}"))?
+        .port();
+    let pages: Arc<RwLock<HashMap<String, Vec<u8>>>> = Arc::new(RwLock::new(HashMap::new()));
+    let pages_for_task = Arc::clone(&pages);
+
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let pages_ref = Arc::clone(&pages_for_task);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let Ok(n) = stream.read(&mut buf).await else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let path = req_str
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .split('?')
+                    .next()
+                    .unwrap_or("/");
+
+                let (status, mime, owned_body): (&str, &str, Vec<u8>) = match path {
+                    "/vendor/gsap.min.js" | "/preview/vendor/gsap.min.js" => (
+                        "200 OK",
+                        "application/javascript; charset=utf-8",
+                        VENDOR_GSAP_JS.to_vec(),
+                    ),
+                    "/vendor/three.module.js" | "/preview/vendor/three.module.js" => (
+                        "200 OK",
+                        "application/javascript; charset=utf-8",
+                        VENDOR_THREE_MODULE_JS.to_vec(),
+                    ),
+                    "/vendor/three.core.js" | "/preview/vendor/three.core.js" => (
+                        "200 OK",
+                        "application/javascript; charset=utf-8",
+                        VENDOR_THREE_CORE_JS.to_vec(),
+                    ),
+                    "/vendor/s3-kit.js" | "/preview/vendor/s3-kit.js" => (
+                        "200 OK",
+                        "application/javascript; charset=utf-8",
+                        VENDOR_S3_KIT_JS.to_vec(),
+                    ),
+                    p if p.starts_with("/preview/") && p.ends_with(".html") => {
+                        let id = p.trim_start_matches("/preview/").trim_end_matches(".html");
+                        let found = pages_ref
+                            .read()
+                            .ok()
+                            .and_then(|m| m.get(id).cloned());
+                        match found {
+                            Some(bytes) => ("200 OK", "text/html; charset=utf-8", bytes),
+                            None => ("404 Not Found", "text/plain", b"Preview expired".to_vec()),
+                        }
+                    }
+                    _ => ("404 Not Found", "text/plain", b"Not Found".to_vec()),
+                };
+
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                    owned_body.len()
+                );
+                let _ = stream.write_all(header.as_bytes()).await;
+                let _ = stream.write_all(&owned_body).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+
+    let _ = PREVIEW_SERVER.set(PreviewServerState { port, pages });
+    PREVIEW_SERVER
+        .get()
+        .ok_or_else(|| "Gagal menginisialisasi preview server HyperFrames.".to_string())
+}
+
+#[tauri::command]
+pub async fn register_hyperframe_preview(html: String) -> Result<String, String> {
+    if html.trim().len() < 40 {
+        return Err("HTML HyperFrames kosong.".to_string());
+    }
+    let state = ensure_preview_server().await?;
+    let id = format!("hf_{}", PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed));
+    if let Ok(mut guard) = state.pages.write() {
+        if guard.len() >= 24 {
+            let mut keys: Vec<String> = guard.keys().cloned().collect();
+            keys.sort();
+            for old_key in keys.into_iter().take(12) {
+                guard.remove(&old_key);
+            }
+        }
+        guard.insert(id.clone(), html.into_bytes());
+    }
+    Ok(format!("http://127.0.0.1:{}/preview/{id}.html", state.port))
+}
 
 // Embed local vendored HyperFrames runtimes directly in the desktop binary (100% offline-proof!)
 const VENDOR_GSAP_JS: &[u8] = include_bytes!("../../public/vendor/gsap.min.js");
@@ -581,4 +698,37 @@ pub async fn export_hyperframe_mp4(
         file_size_bytes: res.file_size_bytes,
         duration_ms: res.duration_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_hyperframe_preview_serves_html_and_vendor() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let sample_html =
+                "<!DOCTYPE html><html><head><title>HF Test</title></head><body>ok</body></html>"
+                    .to_string();
+            let url = register_hyperframe_preview(sample_html.clone())
+                .await
+                .expect("preview server should register HTML");
+            assert!(url.starts_with("http://127.0.0.1:"));
+            assert!(url.contains("/preview/hf_"));
+
+            let client = reqwest::Client::new();
+            let html_resp = client.get(&url).send().await.expect("GET preview HTML");
+            assert!(html_resp.status().is_success());
+            let body = html_resp.text().await.unwrap();
+            assert_eq!(body, sample_html);
+
+            let base = url.rsplit_once('/').unwrap().0;
+            let s3_url = format!("{base}/vendor/s3-kit.js");
+            let s3_resp = client.get(&s3_url).send().await.expect("GET s3-kit.js");
+            assert!(s3_resp.status().is_success());
+            let s3_txt = s3_resp.text().await.unwrap();
+            assert!(s3_txt.contains("createStudioWorld"));
+        });
+    }
 }
