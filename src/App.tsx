@@ -31,6 +31,7 @@ import {
 } from "./lib/tauriBridge";
 import ErrorBoundary from "./components/ErrorBoundary";
 import OnboardingView from "./components/OnboardingView";
+import { captureProjectPosterDataUrl } from "./components/ProjectPosterCanvas";
 import ProjectsHomeView from "./components/ProjectsHomeView";
 import StudioView from "./components/StudioView";
 import WizardView from "./components/WizardView";
@@ -417,6 +418,12 @@ export default function App() {
     generationDurationMs?: number
   ) {
     const safeProject = normalizeProject(project);
+    if (!safeProject.meta.posterDataUrl) {
+      const poster = captureProjectPosterDataUrl(safeProject, 1000);
+      if (poster) {
+        safeProject.meta = { ...safeProject.meta, posterDataUrl: poster };
+      }
+    }
     setHasActiveWizardDraft(false);
     setReturnViewFromSettings(null);
     await saveProject(safeProject);
@@ -428,6 +435,10 @@ export default function App() {
 
   async function handleUseSample(sample: SampleTemplate) {
     const fresh = normalizeProject(sample.buildProject());
+    const poster = captureProjectPosterDataUrl(fresh, 1000);
+    if (poster) {
+      fresh.meta = { ...fresh.meta, posterDataUrl: poster };
+    }
     await saveProject(fresh);
     await refreshProjects();
     setActiveProject(fresh);
@@ -437,6 +448,16 @@ export default function App() {
   async function handleOpenProject(projectId: string) {
     try {
       const loaded = normalizeProject(await loadProject(projectId));
+      // Backfill 1-second video frame thumbnail for legacy projects created before v2.4.0
+      if (!loaded.meta.posterDataUrl) {
+        const poster = captureProjectPosterDataUrl(loaded, 1000);
+        if (poster) {
+          loaded.meta = { ...loaded.meta, posterDataUrl: poster };
+          saveProject(loaded)
+            .then(() => refreshProjects())
+            .catch(() => {});
+        }
+      }
       setActiveProject(loaded);
       setView("studio");
     } catch (err) {

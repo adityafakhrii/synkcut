@@ -130,6 +130,108 @@ function toColor(c: string | number | undefined, fallback = 0xffffff): THREE.Col
   return new THREE.Color(fallback);
 }
 
+export type ProceduralSurfaceKind =
+  | "wood"
+  | "concrete"
+  | "grid"
+  | "grass"
+  | "asphalt"
+  | "tile"
+  | "metal";
+
+function createProceduralSurfaceTexture(
+  kind: ProceduralSurfaceKind,
+  baseHex = "#334155",
+  accentHex = "#38BDF8"
+): THREE.CanvasTexture {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = baseHex;
+    ctx.fillRect(0, 0, size, size);
+    const rng = seededRng(
+      kind.split("").reduce((acc, ch) => acc * 31 + ch.charCodeAt(0), 17)
+    );
+
+    if (kind === "wood") {
+      for (let i = 0; i < 42; i++) {
+        const y = rng() * size;
+        ctx.fillStyle = i % 2 === 0 ? "rgba(0,0,0,0.09)" : "rgba(255,255,255,0.06)";
+        ctx.fillRect(0, y, size, 2 + rng() * 5);
+      }
+      ctx.strokeStyle = "rgba(0,0,0,0.14)";
+      ctx.lineWidth = 2;
+      for (let y = 0; y < size; y += 64) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(size, y);
+        ctx.stroke();
+      }
+    } else if (kind === "grid") {
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i <= size; i += 32) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i, size);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i);
+        ctx.lineTo(size, i);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = accentHex;
+      ctx.globalAlpha = 0.24;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(1, 1, size - 2, size - 2);
+      ctx.globalAlpha = 1;
+    } else if (kind === "tile") {
+      ctx.strokeStyle = "rgba(0,0,0,0.16)";
+      ctx.lineWidth = 3;
+      for (let y = 0; y < size; y += 64) {
+        for (let x = 0; x < size; x += 64) {
+          ctx.fillStyle = (x / 64 + y / 64) % 2 === 0 ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)";
+          ctx.fillRect(x, y, 64, 64);
+          ctx.strokeRect(x, y, 64, 64);
+        }
+      }
+    } else if (kind === "grass") {
+      for (let i = 0; i < 320; i++) {
+        const gx = rng() * size;
+        const gy = rng() * size;
+        ctx.fillStyle = i % 3 === 0 ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.11)";
+        ctx.fillRect(gx, gy, 3, 7 + rng() * 5);
+      }
+    } else if (kind === "metal") {
+      for (let y = 0; y < size; y += 2) {
+        ctx.fillStyle = y % 4 === 0 ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)";
+        ctx.fillRect(0, y, size, 1);
+      }
+    } else {
+      // concrete / asphalt micro-speckle
+      const dots = kind === "asphalt" ? 420 : 260;
+      for (let i = 0; i < dots; i++) {
+        const sx = rng() * size;
+        const sy = rng() * size;
+        const sz = 1.5 + rng() * 3.5;
+        ctx.fillStyle = i % 2 === 0 ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.08)";
+        ctx.fillRect(sx, sy, sz, sz);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  if (activeWorldRef) {
+    activeWorldRef.ownedTextures.push(tex);
+  }
+  return tex;
+}
+
 function makeMat(opts?: {
   color?: string | number;
   roughness?: number;
@@ -140,12 +242,23 @@ function makeMat(opts?: {
   emissiveIntensity?: number;
   flatShading?: boolean;
   side?: THREE.Side;
+  texture?: ProceduralSurfaceKind | string;
 }): THREE.MeshStandardMaterial {
   const opacity = opts?.opacity ?? 1;
+  const texKind = opts?.texture as ProceduralSurfaceKind | undefined;
+  const validTex =
+    texKind && ["wood", "concrete", "grid", "grass", "asphalt", "tile", "metal"].includes(texKind)
+      ? createProceduralSurfaceTexture(
+          texKind,
+          typeof opts?.color === "string" ? opts.color : "#334155"
+        )
+      : null;
+
   return new THREE.MeshStandardMaterial({
-    color: toColor(opts?.color, 0xe5e7eb),
-    roughness: clamp(opts?.roughness ?? 0.76, 0.05, 1),
-    metalness: clamp(opts?.metalness ?? 0.06, 0, 1),
+    color: validTex ? new THREE.Color(0xffffff) : toColor(opts?.color, 0xe5e7eb),
+    map: validTex,
+    roughness: clamp(opts?.roughness ?? (texKind === "metal" ? 0.34 : 0.72), 0.05, 1),
+    metalness: clamp(opts?.metalness ?? (texKind === "metal" ? 0.62 : 0.08), 0, 1),
     opacity,
     transparent: opts?.transparent ?? opacity < 0.99,
     emissive: opts?.emissive ? toColor(opts.emissive, 0x000000) : new THREE.Color(0x000000),
@@ -651,6 +764,14 @@ export function createDiorama3DSdk() {
       fill.position.set(-16, 10, -14);
       world.root.add(fill);
       world.fillLight = fill;
+
+      // Blender-style crisp back rim light for strong miniature silhouette separation
+      const rim = new THREE.DirectionalLight(
+        toColor(isDark ? "#38BDF8" : "#FFF3D6", 0xfff3d6),
+        isDark ? 0.82 : 0.55
+      );
+      rim.position.set(0, 14, -18);
+      world.root.add(rim);
 
       if (opts?.stars) {
         const rand = seededRng(509);
@@ -2531,6 +2652,82 @@ export function createDiorama3DSdk() {
       );
       screw.position.set(0, 0.36, 0);
       grp.add(screw);
+
+      applyTransform(grp, opts);
+      return attach3D(parent, grp, opts?.name);
+    },
+
+    /**
+     * Blender-Style Miniature Cutaway Diorama Island Pedestal (multi-layer stratified base + PBR top + glowing rim).
+     * Gives any 3D stage an instant tactile miniature look instead of floating shapes in a void.
+     */
+    dioramaIsland(
+      parentOrOpts?: ParentTarget | Record<string, unknown> | null,
+      maybeOpts?: {
+        name?: string;
+        surface?: ProceduralSurfaceKind | string;
+        width?: number;
+        depth?: number;
+        height?: number;
+        topColor?: string;
+        sideColor?: string;
+        accentColor?: string;
+        pos?: Vec3Tuple;
+        rot?: Vec3Tuple;
+        scale?: Vec3Tuple | number;
+      }
+    ) {
+      const { parent, opts } = resolveParentAndOpts(parentOrOpts, maybeOpts);
+      const grp = new THREE.Group();
+      const w = clamp(Number(opts?.width ?? 7.4), 2.5, 18);
+      const d = clamp(Number(opts?.depth ?? 7.4), 2.5, 18);
+      const h = clamp(Number(opts?.height ?? 1.5), 0.5, 4.5);
+      const surface = (opts?.surface as ProceduralSurfaceKind) || "grid";
+      const defaultTop =
+        surface === "grass"
+          ? "#3F9B4F"
+          : surface === "wood"
+            ? "#8B5E3C"
+            : surface === "asphalt"
+              ? "#262C36"
+              : surface === "concrete"
+                ? "#64748B"
+                : surface === "tile"
+                  ? "#CBD5E1"
+                  : "#172033";
+      const topColor = opts?.topColor || defaultTop;
+      const sideColor = opts?.sideColor || (surface === "grass" ? "#6D4C3D" : "#0F172A");
+      const accentColor = opts?.accentColor || "#38BDF8";
+
+      const lowerH = h * 0.68;
+      const lowerMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w * 0.96, lowerH, d * 0.96),
+        makeMat({ color: sideColor, roughness: 0.86, texture: "concrete" })
+      );
+      lowerMesh.position.y = -h * 0.66;
+      grp.add(lowerMesh);
+
+      const bandH = h * 0.14;
+      const bandMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w * 0.985, bandH, d * 0.985),
+        makeMat({
+          color: accentColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.45,
+          roughness: 0.35,
+          metalness: 0.4,
+        })
+      );
+      bandMesh.position.y = -h * 0.25;
+      grp.add(bandMesh);
+
+      const topH = h * 0.22;
+      const topMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w, topH, d),
+        makeMat({ color: topColor, roughness: 0.7, texture: surface })
+      );
+      topMesh.position.y = -topH / 2;
+      grp.add(topMesh);
 
       applyTransform(grp, opts);
       return attach3D(parent, grp, opts?.name);

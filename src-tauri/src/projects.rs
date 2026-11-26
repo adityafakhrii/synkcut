@@ -19,6 +19,7 @@ pub struct ProjectSummary {
     pub scene_count: usize,
     pub duration_ms: u64,
     pub has_footage: bool,
+    pub poster_data_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -126,6 +127,11 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         .and_then(|o| o["text"].as_str())
         .map(ToString::to_string);
 
+    let poster_data_url = val["meta"]["posterDataUrl"]
+        .as_str()
+        .filter(|s| s.starts_with("data:image/") && s.len() <= 250_000)
+        .map(ToString::to_string);
+
     let now = Utc::now().to_rfc3339();
     let created_at = val["meta"]["createdAt"]
         .as_str()
@@ -149,6 +155,7 @@ fn extract_summary(val: &Value) -> Result<ProjectSummary, String> {
         scene_count,
         duration_ms,
         has_footage,
+        poster_data_url,
         created_at,
         updated_at,
     })

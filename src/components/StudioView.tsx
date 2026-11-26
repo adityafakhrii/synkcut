@@ -100,6 +100,7 @@ import {
 } from "../lib/tauriBridge";
 import AiMotionEditor from "./AiMotionEditor";
 import DesignReferencePanel from "./DesignReferencePanel";
+import { captureProjectPosterDataUrl } from "./ProjectPosterCanvas";
 import { formatGenerationDuration } from "../lib/friendlyError";
 
 export type ManualDrawerTab = "visual" | "style" | "audio";
@@ -464,7 +465,11 @@ export default function StudioView({
     const timer = window.setTimeout(async () => {
       setSaveState("saving");
       try {
-        await saveProject(project);
+        const poster = captureProjectPosterDataUrl(project, 1000);
+        const toSave = poster
+          ? { ...project, meta: { ...project.meta, posterDataUrl: poster } }
+          : project;
+        await saveProject(toSave);
         setSaveState("saved");
         onProjectSaved();
       } catch (err) {
@@ -1973,7 +1978,11 @@ export default function StudioView({
             onClick={async () => {
               if (saveState === "dirty") {
                 try {
-                  await saveProject(project);
+                  const poster = captureProjectPosterDataUrl(project, 1000);
+                  const toSave = poster
+                    ? { ...project, meta: { ...project.meta, posterDataUrl: poster } }
+                    : project;
+                  await saveProject(toSave);
                   onProjectSaved();
                 } catch {
                   // ignore

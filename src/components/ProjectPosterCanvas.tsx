@@ -12,6 +12,7 @@ interface ProjectPosterCanvasProps {
 
 // Shared offscreen 1080x1920 buffer for crisp 4x supersampled thumbnail rendering
 let sharedOffscreenCanvas: HTMLCanvasElement | null = null;
+let sharedThumbCanvas: HTMLCanvasElement | null = null;
 function getOffscreenCanvas(): HTMLCanvasElement {
   if (!sharedOffscreenCanvas) {
     sharedOffscreenCanvas = document.createElement("canvas");
@@ -19,6 +20,52 @@ function getOffscreenCanvas(): HTMLCanvasElement {
     sharedOffscreenCanvas.height = 1920;
   }
   return sharedOffscreenCanvas;
+}
+
+function getThumbCanvas(): HTMLCanvasElement {
+  if (!sharedThumbCanvas) {
+    sharedThumbCanvas = document.createElement("canvas");
+    sharedThumbCanvas.width = 360;
+    sharedThumbCanvas.height = 640;
+  }
+  return sharedThumbCanvas;
+}
+
+/**
+ * Renders the real video frame at `timeMs` (default: 1.0s / 1000ms) onto an offscreen canvas
+ * and encodes a compact 360x640 JPEG data URL (~18-25 KB) for My Projects poster thumbnails.
+ */
+export function captureProjectPosterDataUrl(
+  project: SynkcutProject,
+  timeMs = 1000
+): string | null {
+  if (typeof document === "undefined") return null;
+  try {
+    const totalMs = project.scenes.reduce((max, s) => Math.max(max, s.endMs || 0), 0);
+    const targetMs =
+      totalMs > 1200 ? Math.min(timeMs, totalMs - 150) : Math.max(150, Math.round(totalMs * 0.45));
+
+    const offscreen = getOffscreenCanvas();
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) return null;
+
+    renderProjectFrame(offCtx, project, targetMs, {
+      showSafeZone: false,
+      isPosterThumbnail: true,
+    });
+
+    const thumb = getThumbCanvas();
+    const tCtx = thumb.getContext("2d");
+    if (!tCtx) return null;
+    tCtx.imageSmoothingEnabled = true;
+    tCtx.imageSmoothingQuality = "high";
+    tCtx.clearRect(0, 0, thumb.width, thumb.height);
+    tCtx.drawImage(offscreen, 0, 0, thumb.width, thumb.height);
+    const url = thumb.toDataURL("image/jpeg", 0.78);
+    return url.startsWith("data:image/") ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildPreviewProjectFromSummary(summary: ProjectSummary): SynkcutProject {
@@ -86,12 +133,20 @@ function buildPreviewProjectFromSummary(summary: ProjectSummary): SynkcutProject
 export default function ProjectPosterCanvas({
   project,
   summary,
-  previewTimeMs = 1150,
+  previewTimeMs = 1000,
   className = "",
 }: ProjectPosterCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const savedPosterUrl =
+    (summary?.posterDataUrl && summary.posterDataUrl.startsWith("data:image/")
+      ? summary.posterDataUrl
+      : null) ||
+    (project?.meta?.posterDataUrl && project.meta.posterDataUrl.startsWith("data:image/")
+      ? project.meta.posterDataUrl
+      : null);
 
   useEffect(() => {
+    if (savedPosterUrl) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -118,7 +173,19 @@ export default function ProjectPosterCanvas({
 
     draw();
     document.fonts?.ready.then(draw).catch(() => {});
-  }, [project, summary, previewTimeMs]);
+  }, [project, summary, previewTimeMs, savedPosterUrl]);
+
+  if (savedPosterUrl) {
+    return (
+      <img
+        src={savedPosterUrl}
+        alt={summary?.name || project?.meta?.name || "Thumbnail Proyek"}
+        className={className}
+        style={{ display: "block" }}
+        loading="lazy"
+      />
+    );
+  }
 
   return (
     <canvas

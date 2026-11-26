@@ -3153,7 +3153,15 @@ NO `window`, `document`, `fetch`, `eval`, `import`, `setTimeout`, or infinite lo
 - `M.drawProgressRing(ctx, cx, cy, r, progress, { color?, trackColor?, lineWidth?, label?, labelColor? })`
 - `M.drawParticles(ctx, cx, cy, count, progress, { seed=1, color?, color2?, spread=260, size=10, shape='circle'|'star'|'rect' })`
 - `M.drawSpotlight(ctx, cx, cy, radius, color, alpha=0.28)`
-CRITICAL LAYOUT RULE: Keep hero visuals inside `y = height * 0.11 .. height * 0.68` and `x = width * 0.08 .. width * 0.92` so bottom captions (`y = 74%..88%`) NEVER overlap!"#;
+PRO 2D EDITORIAL COMPONENTS (ALWAYS PREFER THESE over bare rectangles so every frame looks like Vox / Fern / Apple Keynote!):
+- `M.drawEditorialHeader(ctx, state, { eyebrow:'KATEGORI', title:'Judul Tajam 2-5 Kata', accentWord:'Tajam', y? })` -> top header zone (`y ~ 0.125`)!
+- `M.drawStatHero(ctx, state, { eyebrow?, value:2.5, from:0, prefix:'', suffix:' MB', decimals:1, label:'Rata-rata ukuran halaman web', delta:'+420% sejak 2010', accentColor?, progress?, cy? })` -> glowing hero KPI card!
+- `M.drawComparisonBars(ctx, state, { title:'Perbandingan Ukuran', items:[{ label:'2010', value:400, displayValue:'400 KB' }, { label:'2025', value:2500, displayValue:'2.5 MB', highlight:true }], progress?, y?, h? })` -> animated editorial bar chart!
+- `M.drawSplitCompare(ctx, state, { left:{ badge:'DULU', title:'Web 2010', value:'400 KB', bullets:['HTML ringan','Muat < 1 dtk'] }, right:{ badge:'SEKARANG', title:'Web 2025', value:'2.5 MB', bullets:['Bundle JS berat','Tracker & video'] }, y?, h? })` -> high-contrast VS split card!
+- `M.drawDeviceMockup(ctx, state, { kind:'browser'|'phone'|'terminal', title?, url:'https://...', loadingProgress?, metrics:[{ label:'SIZE', value:'2.5 MB' }, { label:'SCRIPT', value:'64 req' }], lines:['bundle.js · 1.8 MB', 'tracker.js · 420 KB'], y?, h? })` -> rich live UI mockup (NEVER draw an empty browser box!)
+- `M.drawNodeFlow(ctx, state, { nodes:[{ label:'Prompt User', sub:'Ketik 1 kalimat' }, { label:'Server GPU', sub:'Hitung jutaan bobot' }, { label:'Jawaban', sub:'Tampil di layar' }], activeProgress?, y?, h? })` -> animated flow with moving signal pulses!
+- `M.drawMetricGrid(ctx, state, { items:[{ label:'JS BUNDLE', value:'1.8 MB', sub:'Framework & library' }, { label:'TRACKER', value:'38+', sub:'Skrip iklan aktif' }, { label:'FONT', value:'680 KB', sub:'4 varian custom' }, { label:'MEDIA', value:'2.4 MB', sub:'Gambar resolusi 4K' }], y?, h? })` -> 2x2 Bento data grid!
+CRITICAL 3-ZONE DENSITY RULE: NEVER leave the upper half empty! Fill `y = height * 0.11 .. height * 0.24` with `M.drawEditorialHeader` (or bold pill+headline) AND fill `y = height * 0.25 .. height * 0.68` with a rich Pro Component + custom Canvas/SVG details so 60%+ of the stage looks dense, layered, and agency-grade! Keep `y = 74%..90%` clean for captions!"#;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -3177,6 +3185,8 @@ pub struct PlanStoryboardRequest {
     pub project_title: String,
     pub format: String,
     pub full_script: String,
+    #[serde(default)]
+    pub user_prompt: Option<String>,
     pub duration_ms: u64,
     #[serde(default)]
     pub words: Vec<WordTimestamp>,
@@ -3201,6 +3211,8 @@ pub struct PlanStoryboardResponse {
 pub struct GenerateBeatCodesRequest {
     pub project_title: String,
     pub format: String,
+    #[serde(default)]
+    pub user_prompt: Option<String>,
     pub beats: Vec<StoryboardBeat>,
     #[serde(default)]
     pub words: Vec<WordTimestamp>,
@@ -3404,7 +3416,7 @@ pub async fn ai_plan_storyboard(
         1. Tentukan `recommendedMedium` terbaik untuk topik ini:\n\
            - Jika user melampirkan referensi desain yang sudah punya `renderMedium`, PATUHI 100% medium referensi tersebut.\n\
            - Jika user tidak menyebutkan 2D/3D dan tanpa referensi: untuk promo produk, iklan SaaS/edtech, penawaran harga, aplikasi, atau review (`ad_promo`, `review`), pilih `\"2d_freeform\"` agar tipografi kinetik, UI demo, & ilustrasi produknya tajam dan modern. Untuk cerita spasial, dunia fisik, arsitektur, eksperimen sains, atau storytelling antar tokoh (`storytelling`, `education`) yang memang jauh lebih hidup secara 3D, pilih `\"3d_diorama\"` — atau `\"2d_freeform\"` jika lebih kuat sebagai explainer grafis.\n\
-        2. Jika user tidak melampirkan referensi, rancang `autoDesign` (palet warna hex, mood terang/gelap, font, gaya subtitle, BGM) yang OTENTIK dengan karakter produk/topik (misal edukasi anak = cerah & playful; kopi/kuliner = hangat & kaya; tech/AI = modern presisi; editorial/luxury = kontras elegan) — JANGAN selalu hitam-hijau monoton!\n\
+        2. WAJIB PATUHI 100% ARAHAN TEMA/WARNA DI PROMPT ASLI USER! Jika user menyebut 'tema gelap', 'dark mode', 'gelap elegan', 'neon', 'cyberpunk', maka `autoDesign.isLight` WAJIB `false` dengan background gelap pekat (`#090D16`..`#111827`) dan warna aksen persis yang diminta user (misal cyan `#22D3EE` & kuning stabilo `#FACC15`). Sebaliknya jika user minta terang/kertas/putih, baru pakai `isLight: true`. Jika user tidak menyebut warna/tema, rancang `autoDesign` yang OTENTIK & kontras tinggi sesuai karakter topik.\n\
         3. DILARANG KERAS mengulang pola visual atau metafora yang sama pada 2 beat berturut-turut, dan DILARANG memakai aset/konsep yang tidak nyambung dengan topik.\n\
         4. Pilih 2-3 ID skill motion terbaik dari katalog skill untuk tiap beat.\n\
         Balas HANYA dalam JSON valid.";
@@ -3430,8 +3442,16 @@ pub async fn ai_plan_storyboard(
           }".to_string()
     };
 
+    let raw_user_prompt_line = req
+        .user_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|p| format!("Prompt Asli & Arahan Visual User (WAJIB DIPATUHI 100% — tema gelap/terang, warna aksen, gaya, 2D/3D): \"{p}\"\n"))
+        .unwrap_or_default();
+
     let user_prompt = format!(
-        "Proyek: \"{}\" (format: {})\n{}\n{}\n\n\
+        "Proyek: \"{}\" (format: {})\n{}{}\n{}\n\n\
         Katalog Motion Skills tersedia (pilih ID yang paling cocok per beat):\n{}\n\n\
         Daftar Micro-Beat (durasi dikunci ke suara dubbing):\n{}\n\n\
         Balas JSON persis seperti ini:\n\
@@ -3452,6 +3472,7 @@ pub async fn ai_plan_storyboard(
         }}",
         req.project_title.trim(),
         req.format,
+        raw_user_prompt_line,
         design_hint,
         if brand_headings.is_empty() {
             String::new()
@@ -3498,8 +3519,16 @@ pub async fn ai_plan_storyboard(
         val.get("autoDesign")
             .filter(|v| v.is_object())
             .map(|ad| {
-                let mut sanitized =
-                    sanitize_custom_design_value(ad, &format!("{} {}", req.project_title, req.full_script), &[]);
+                let mut sanitized = sanitize_custom_design_value(
+                    ad,
+                    &format!(
+                        "{} {} {}",
+                        req.user_prompt.as_deref().unwrap_or(""),
+                        req.project_title,
+                        req.full_script
+                    ),
+                    &[],
+                );
                 sanitized.render_medium = recommended_medium.clone();
                 serde_json::to_value(sanitized).ok()
             })
@@ -3613,15 +3642,15 @@ async fn generate_single_beat_code(
         .unwrap_or_default();
 
     let system_prompt = format!(
-        "Kamu adalah Senior Motion Graphics Engineer (Remotion + Canvas 2D + SVG + Disney Animation Physics).\n\
-        Tugasmu menulis KODE ANIMASI PROCEDURAL BARU DARI NOL untuk 1 beat video pendek vertikal 9:16.\n\
-        ATURAN WAJIB:\n\
+        "Kamu adalah Senior Motion Graphics Engineer (Vox / Fern / Apple Keynote / Remotion + Canvas 2D).\n\
+        Tugasmu menulis KODE ANIMASI 2D KELAS AGENSI untuk 1 beat video pendek vertikal 9:16.\n\
+        ATURAN WAJIB ANTI-SEPI:\n\
         1. Panggil `M.drawBackdrop(ctx, state)` di baris pertama.\n\
-        2. Gambar ilustrasi/visual NYATA sesuai `visualConcept` menggunakan Canvas 2D, gradien, `Path2D`/`M.drawSvgPath`, `M.drawLiquidWave`, `M.drawBrowserWindow`, `M.drawCursor`, `M.drawCounter`, `M.drawKineticHeadline`, `M.drawParticles`, `M.withCamera`, `M.spring`, dan `M.interpolate`.\n\
-        3. DILARANG KERAS memakai aset tidak nyambung atau placeholder dummy!\n\
-        4. Gunakan `const {{ width, height, u, frame, fps, progress, design }} = state; const P = design.palette;` — semua koordinat & ukuran WAJIB proporsional terhadap `width`, `height`, dan `u`!\n\
-        5. Jaga area utama di `y = height * 0.11 .. height * 0.68` dan `x = width * 0.08 .. width * 0.92` (JANGAN menutupi zona caption bawah `74%..90%`).\n\
-        6. Animasi HARUS terasa hidup & mulus (pakai `M.spring`, stagger, subtle continuous motion, dan exit momentum 0.2s terakhir).\n\
+        2. WAJIB 3-ZONE VISUAL DENSITY: Isi zona atas (`y = 0.12..0.24`) dengan `M.drawEditorialHeader` (eyebrow + headline tajam) DAN isi zona tengah (`y = 0.25..0.68`) dengan komponen kaya detail (`M.drawStatHero`, `M.drawComparisonBars`, `M.drawSplitCompare`, `M.drawDeviceMockup`, `M.drawNodeFlow`, `M.drawMetricGrid`) ditambah sentuhan Canvas 2D / `M.drawParticles` / `M.drawSpotlight` / `M.drawCursor`! DILARANG KERAS cuma menggambar 1 kotak kosong kecil di tengah layar!\n\
+        3. DILARANG KERAS memakai aset/teks dummy yang tidak nyambung — semua angka, label, & item HARUS 100% relevan dengan narasi beat ini!\n\
+        4. Gunakan `const {{ width, height, u, frame, fps, progress, design }} = state; const P = design.palette;` — semua koordinat & warna WAJIB mengikuti `design.palette` (`P.accentPrimary`, `P.accentSecondary`, `P.textPrimary`, `P.surfaceBg`)!\n\
+        5. Jaga area utama di `y = height * 0.11 .. height * 0.69` (JANGAN menutupi zona caption bawah `74%..90%`).\n\
+        6. Animasi HARUS terasa hidup & mulus (pakai `M.spring`, stagger, `M.withCamera` subtle push-in, dan subtle continuous motion).\n\
         7. Kembalikan JSON: {{\"code\": \"...pure JS function body...\"}}.\n\n\
         {MOTION_SDK_COMPACT_REFERENCE}\n\n\
         {skills_rules}"
@@ -3703,24 +3732,36 @@ pub async fn ai_generate_beat_codes(
         .and_then(|sr| sr["logoDataUrl"].as_str())
         .is_some_and(|s| s.starts_with("data:image/"));
 
-    let design_summary = sanitized_custom
-        .as_ref()
-        .map(|d| {
-            format!(
-                "{} (isLight={}, bgTop={}, bgBottom={}, textPrimary={}, accentPrimary={}, accentSecondary={}, cardStyle={}, pattern={}) — {}",
-                d.name,
-                d.is_light,
-                d.palette.bg_top,
-                d.palette.bg_bottom,
-                d.palette.text_primary,
-                d.palette.accent_primary,
-                d.palette.accent_secondary,
-                d.visual_style.card_style,
-                d.visual_style.background_pattern,
-                d.art_direction_notes
-            )
-        })
-        .unwrap_or_else(|| format!("Tema {}, aksen {}", motion_theme, effective_accent));
+    let user_prompt_ctx = req
+        .user_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|p| format!(" | Prompt Asli User: \"{p}\""))
+        .unwrap_or_default();
+
+    let design_summary = format!(
+        "{}{}",
+        sanitized_custom
+            .as_ref()
+            .map(|d| {
+                format!(
+                    "{} (isLight={}, bgTop={}, bgBottom={}, textPrimary={}, accentPrimary={}, accentSecondary={}, cardStyle={}, pattern={}) — {}",
+                    d.name,
+                    d.is_light,
+                    d.palette.bg_top,
+                    d.palette.bg_bottom,
+                    d.palette.text_primary,
+                    d.palette.accent_primary,
+                    d.palette.accent_secondary,
+                    d.visual_style.card_style,
+                    d.visual_style.background_pattern,
+                    d.art_direction_notes
+                )
+            })
+            .unwrap_or_else(|| format!("Tema {}, aksen {}", motion_theme, effective_accent)),
+        user_prompt_ctx
+    );
 
     // Generate all beat codes in parallel batches of up to 4 concurrent LLM calls!
     let total_beats = req.beats.len();
@@ -4008,6 +4049,7 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 - In `animateCode`: `D3.poseCharacter(world.characters.hero, { action:'idle'|'point'|'wave'|'handshake'|'walk'|'think'|'surprised'|'sit'|'sleep'|'talk'|'cheer', phase: tSec, headTurn?: 0 })`
 
 `D3` HIGH-CRAFT BLENDER-STYLE 3D PREFABS (ALWAYS PREFER THESE over raw boxes! All accept `(parent, opts)` & have crisp PBR materials + Canvas UI textures):
+- `D3.dioramaIsland(parent, { name?, surface:'grid'|'wood'|'grass'|'concrete'|'tile'|'asphalt', width:7.4, depth:7.4, height:1.5, topColor?, sideColor?, accentColor?, pos? })` -> multi-layer miniature cutaway pedestal (top surface sits cleanly at `y = 0` — place characters & props at `y = 0` on top of it!)
 - `D3.laptop(parent, { name?, pos?, rot?, scale?, screenText:'Makasih!', accent:'#FACC15', bodyColor? })`
 - `D3.smartphone(parent, { name?, pos?, rot?, scale?, screenText:'Chat AI', accent:'#38BDF8', bodyColor? })`
 - `D3.serverRack(parent, { name?, pos?, rot?, scale?, blades:6, ledColor:'#FF4D2E', heatGlow:true })`
@@ -4022,7 +4064,7 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 
 `D3` Basic 3D Primitives (pass `world` OR a parent THREE.Group as 1st arg!):
 - `D3.group(parent, { name?, pos?, rot?, scale? })`
-- `D3.box(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, emissiveIntensity?, pos?, rot?, scale? })`
+- `D3.box(parent, { name?, size:[w,h,d], color, texture?:'wood'|'concrete'|'grid'|'grass'|'asphalt'|'tile'|'metal', roughness?, metalness?, opacity?, emissive?, emissiveIntensity?, pos?, rot?, scale? })`
 - `D3.roundedBox(parent, { name?, size:[w,h,d], color, roughness?, metalness?, opacity?, emissive?, pos?, rot?, scale? })`
 - `D3.plane(parent, { name?, size:[w,h], color, roughness?, metalness?, opacity?, pos?, rot?, scale? })`
 - `D3.capsule(parent, { name?, radius?, length?, color, roughness?, metalness?, pos?, rot?, scale? })`
@@ -4058,6 +4100,8 @@ You write TWO deterministic pure JS function bodies (NO window/document/fetch/ev
 pub struct Generate3DDioramaRequest {
     pub project_title: String,
     pub format: String,
+    #[serde(default)]
+    pub user_prompt: Option<String>,
     pub beats: Vec<StoryboardBeat>,
     #[serde(default)]
     pub words: Vec<WordTimestamp>,
@@ -4141,7 +4185,8 @@ pub async fn ai_generate_3d_diorama(
 
     let resolved = byok::resolve_active_provider(&app)?;
     let full_text_context = format!(
-        "{} {}",
+        "{} {} {}",
+        req.user_prompt.as_deref().unwrap_or(""),
         req.project_title,
         req.beats
             .iter()
@@ -4237,10 +4282,10 @@ pub async fn ai_generate_3d_diorama(
         let setup_system = format!(
             "Kamu adalah Technical 3D Artist (Blender Diorama / Three.js PBR) kelas dunia di Synkcut.\n\
             Tugasmu menulis `setupCode` (body fungsi `setupWorld(world, D3)`) yang DETAIL, TAJAM, KONTRAS TINGGI, dan 100% sesuai topik user (target 35–65 baris).\n\
-            ATURAN WAJIB ANTI-JELEK:\n\
-            1. WAJIB pakai **High-Craft 3D Prefabs** (`D3.laptop`, `D3.smartphone`, `D3.serverRack`, `D3.gpuChip`, `D3.coolingTower`, `D3.waterBottle`, `D3.chatBubble3D`, `D3.barChart3D`, `D3.building`, `D3.globe`, `D3.lightbulb`, `D3.createCharacter`) kapan pun objek itu cocok dengan topik — JANGAN membangun laptop/server/grafik cuma dari kotak polos tanpa detail!\n\
-            2. WAJIB KELOMPOKKAN OBJEK KE DALAM 3–5 STAGE GROUP (`const s1 = D3.group(world, {{ name:'stage_1', pos:[0,0,0] }}); ...`) agar tiap fase cerita punya panggung bersih di pusat `[0,0,0]` dan bisa di-toggle dengan `D3.showOnly(world, ...)` di Tahap 2 — DILARANG menumpuk papan/kartu di depan kamera (`z > 1.5`) saat stage lain tampil!\n\
-            3. KONTRAS & PENCAHAYAAN ANTI-SILAU: DILARANG membuat semua objek + lantai + langit sama-sama krem/putih pucat! Jika tema terang, pakai langit biru cerah (`bgTop:'#3B9AE1'`, `bgBottom:'#CFE9FA'`) atau studio kontras gelap-terang (`#1E293B` vs `#FACC15` / `#38BDF8` / `#F97316`). Pastikan setiap objek utama punya siluet dan warna yang langsung menonjol!\n\
+            ATURAN WAJIB ANTI-JELEK (BLENDER MINIATURE LOOK):\n\
+            1. WAJIB pakai **High-Craft 3D Prefabs** (`D3.dioramaIsland`, `D3.laptop`, `D3.smartphone`, `D3.serverRack`, `D3.gpuChip`, `D3.coolingTower`, `D3.waterBottle`, `D3.chatBubble3D`, `D3.barChart3D`, `D3.building`, `D3.globe`, `D3.lightbulb`, `D3.createCharacter`) + parameter `texture:'wood'|'concrete'|'grid'|'grass'|'metal'|'tile'` pada lantai/dinding agar TIDAK terlihat seperti plastik polos!\n\
+            2. WAJIB KELOMPOKKAN OBJEK KE DALAM 3–5 STAGE GROUP (`const s1 = D3.group(world, {{ name:'stage_1', pos:[0,0,0] }}); D3.dioramaIsland(s1, {{ surface:'grid', accentColor:'#38BDF8' }}); ...`) agar tiap fase cerita berdiri di atas panggung pulau miniatur cutaway yang rapi di `[0,0,0]` dan bisa di-toggle dengan `D3.showOnly(world, ...)` di Tahap 2 — DILARANG menumpuk papan/kartu di depan kamera (`z > 1.5`) saat stage lain tampil!\n\
+            3. KONTRAS, KOMPOSISI PADAT & PENCAHAYAAN ANTI-SILAU: Isi setiap stage dengan 1 objek hero besar + 3–5 prop pendukung di sekitarnya (pohon, meja, lampu, partikel, kabel `D3.tube`, karakter) agar padat seperti miniatur Blender! DILARANG membuat semua objek + lantai + langit sama-sama krem/putih pucat! Patuhi 100% tema gelap/terang & warna aksen dari prompt user.\n\
             4. Balas HANYA JSON valid:\n\
             {{\n\
               \"worldPreset\": \"custom|ocean_cross_section|ground_cutaway|desert_cutaway|room_cutaway|outdoor_farm|studio_stage\",\n\
@@ -4255,8 +4300,17 @@ pub async fn ai_generate_3d_diorama(
             {skills_rules}"
         );
 
+        let user_prompt_note = req
+            .user_prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("Prompt Visual Asli User: \"{p}\"\n"))
+            .unwrap_or_default();
+
         let setup_user = format!(
             "Proyek: \"{}\" (format: {})\n\
+            {user_prompt_note}\
             Arahan Referensi: {} — {}\n\
             Palet: bgTop={}, bgBottom={}, accent={}, isLight={}\n\n\
             Ringkasan Beat ({} beat):\n{}\n\n\

@@ -541,6 +541,7 @@ function summarizeProject(p: SynkcutProject): ProjectSummary {
     sceneCount: p.scenes.length,
     durationMs: Math.max(0, ...p.scenes.map((s) => s.endMs)),
     hasFootage: p.scenes.some((s) => Boolean(s.media.path)),
+    posterDataUrl: p.meta.posterDataUrl ?? null,
     createdAt: p.meta.createdAt || now,
     updatedAt: p.meta.updatedAt || now,
   };
@@ -1054,6 +1055,7 @@ export async function aiPlanStoryboard(req: {
   projectTitle: string;
   format: string;
   fullScript: string;
+  userPrompt?: string | null;
   durationMs: number;
   words: WordTimestamp[];
   customDesign?: CustomDesignDirection | null;
@@ -1092,6 +1094,7 @@ export async function aiPlanStoryboard(req: {
       projectTitle: req.projectTitle,
       format: req.format,
       fullScript: req.fullScript,
+      userPrompt: req.userPrompt ?? null,
       durationMs: req.durationMs,
       words: req.words,
       customDesign: req.customDesign ?? null,
@@ -1103,6 +1106,7 @@ export async function aiPlanStoryboard(req: {
 export async function aiGenerateBeatCodes(req: {
   projectTitle: string;
   format: string;
+  userPrompt?: string | null;
   beats: StoryboardBeat[];
   words: WordTimestamp[];
   customDesign?: CustomDesignDirection | null;
@@ -1149,6 +1153,7 @@ export async function aiRepairBeatCode(req: {
 export async function aiGenerate3dDiorama(req: {
   projectTitle: string;
   format: string;
+  userPrompt?: string | null;
   beats: StoryboardBeat[];
   words: WordTimestamp[];
   customDesign?: CustomDesignDirection | null;

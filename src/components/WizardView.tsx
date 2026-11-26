@@ -552,6 +552,7 @@ export default function WizardView({
               projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
               format,
               fullScript: fullScriptText.trim(),
+              userPrompt: topic.trim() || null,
               durationMs: estMs,
               words: [],
               customDesign: styleRefResult?.customDesign ?? null,
@@ -593,6 +594,7 @@ export default function WizardView({
               projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
               format,
               fullScript: fullScriptText.trim(),
+              userPrompt: topic.trim() || null,
               durationMs: finalAudio?.durationMs ?? targetDuration * 1000,
               words: finalAudio?.words ?? [],
               customDesign: styleRefResult?.customDesign ?? null,
@@ -652,6 +654,7 @@ export default function WizardView({
           rawProj = await aiGenerate3dDiorama({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "3D Scene",
             format,
+            userPrompt: topic.trim() || null,
             beats: syncedBeats,
             words: finalAudio?.words ?? [],
             customDesign: effectiveCustomDesign,
@@ -672,6 +675,7 @@ export default function WizardView({
           rawProj = await aiGenerateBeatCodes({
             projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "Konten Baru",
             format,
+            userPrompt: topic.trim() || null,
             beats: syncedBeats,
             words: finalAudio?.words ?? [],
             customDesign: effectiveCustomDesign,

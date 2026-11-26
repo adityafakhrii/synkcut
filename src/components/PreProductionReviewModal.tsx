@@ -48,6 +48,7 @@ export interface PreProductionDraft {
   projectTitle: string;
   format: ContentFormat;
   visualMode: "motion" | "footage" | "hybrid";
+  userPrompt?: string;
   hooks: HookOption[];
   selectedHookId: string;
   bodySegments: string[];
@@ -128,7 +129,7 @@ export default function PreProductionReviewModal({
     preference: mediumChoice,
     styleRef: draft.styleRef,
     aiRecommendedMedium,
-    topicOrScript: `${projectTitle} ${fullScript}`,
+    topicOrScript: `${draft.userPrompt ?? ""} ${projectTitle} ${fullScript}`,
   });
   const activeDesign = draft.styleRef?.customDesign ?? autoDesign ?? null;
 
@@ -298,6 +299,7 @@ export default function PreProductionReviewModal({
         projectTitle: projectTitle.trim() || "Video Baru",
         format: draft.format,
         fullScript: fullScript.trim(),
+        userPrompt: draft.userPrompt ?? null,
         durationMs: overrideDurationMs ?? audioResult?.durationMs ?? 24000,
         words: overrideWords ?? audioResult?.words ?? [],
         customDesign: draft.styleRef?.customDesign ?? null,
@@ -407,6 +409,7 @@ export default function PreProductionReviewModal({
           projectTitle: projectTitle.trim() || "Video AI Motion",
           format: draft.format,
           fullScript: fullScript.trim(),
+          userPrompt: draft.userPrompt ?? null,
           durationMs: activeAudio.durationMs,
           words: activeAudio.words,
           customDesign,
@@ -449,6 +452,7 @@ export default function PreProductionReviewModal({
         rawProject = await aiGenerate3dDiorama({
           projectTitle: projectTitle.trim() || "3D Scene",
           format: draft.format,
+          userPrompt: draft.userPrompt ?? null,
           beats: activeBeats,
           words: activeAudio.words,
           customDesign,
@@ -469,6 +473,7 @@ export default function PreProductionReviewModal({
         rawProject = await aiGenerateBeatCodes({
           projectTitle: projectTitle.trim() || "Video AI Motion",
           format: draft.format,
+          userPrompt: draft.userPrompt ?? null,
           beats: activeBeats,
           words: activeAudio.words,
           customDesign,

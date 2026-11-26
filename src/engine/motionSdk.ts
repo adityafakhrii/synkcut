@@ -1117,5 +1117,700 @@ export function createMotionSdk(state: BeatRenderState) {
       ctx.fill();
       ctx.restore();
     },
+
+    /* ==================== V2.4 PRO 2D EDITORIAL COMPONENT KIT ==================== */
+
+    /** Top editorial header zone: animated eyebrow pill + crisp bold headline + accent rule */
+    drawEditorialHeader(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        eyebrow?: string;
+        title: string;
+        accentWord?: string;
+        y?: number;
+      }
+    ) {
+      const topY = opts.y ?? st.height * 0.125;
+      const enter = spring(st.frame, st.fps, { stiffness: 210, damping: 20 });
+      const dy = (1 - enter) * 28 * st.u;
+      ctx.save();
+      ctx.globalAlpha = clamp(enter * 1.4, 0, 1);
+
+      let cursorY = topY + dy;
+      if (opts.eyebrow && opts.eyebrow.trim()) {
+        const label = opts.eyebrow.trim().toUpperCase();
+        ctx.font = font("mono", 800, 22 * st.u);
+        const tw = ctx.measureText(label).width;
+        const pw = Math.min(st.width * 0.82, tw + 44 * st.u);
+        const ph = 42 * st.u;
+        ctx.fillStyle = withAlpha(P.accentPrimary, design.isLight ? 0.16 : 0.18);
+        drawRoundRect(ctx, st.width / 2 - pw / 2, cursorY, pw, ph, ph / 2);
+        ctx.fill();
+        ctx.strokeStyle = withAlpha(P.accentPrimary, 0.55);
+        ctx.lineWidth = 2 * st.u;
+        ctx.stroke();
+
+        ctx.fillStyle = design.isLight ? P.textPrimary : P.accentPrimary;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, st.width / 2, cursorY + ph / 2 + 1 * st.u, pw - 24 * st.u);
+        cursorY += ph + 24 * st.u;
+      }
+
+      const rawTitle = String(opts.title || "").trim();
+      if (rawTitle) {
+        const maxW = st.width * 0.84;
+        const size = fitText(ctx, rawTitle, maxW * 1.75, 58 * st.u, 36 * st.u, resolveDesignFont(design, "heading"), 900);
+        ctx.font = font("heading", 900, size);
+        const lines = wrapText(ctx, rawTitle, maxW).slice(0, 2);
+        const lh = size * 1.18;
+        const accentKey = (opts.accentWord || "").trim().toLowerCase();
+        lines.forEach((line, li) => {
+          const ly = cursorY + li * lh + size * 0.5;
+          const words = line.split(/\s+/).filter(Boolean);
+          const sp = ctx.measureText(" ").width;
+          const widths = words.map((w) => ctx.measureText(w).width);
+          const totalW = widths.reduce((a, b) => a + b, 0) + sp * Math.max(0, words.length - 1);
+          let wx = st.width / 2 - totalW / 2;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          words.forEach((w, wi) => {
+            const isAcc = accentKey ? w.toLowerCase().includes(accentKey) : false;
+            ctx.fillStyle = isAcc ? P.accentPrimary : P.textPrimary;
+            ctx.fillText(w, wx, ly);
+            wx += widths[wi] + sp;
+          });
+        });
+        cursorY += lines.length * lh + 16 * st.u;
+      }
+
+      // Crisp animated accent underline
+      const barW = 110 * st.u * clamp(enter, 0, 1);
+      ctx.fillStyle = P.accentPrimary;
+      drawRoundRect(ctx, st.width / 2 - barW / 2, cursorY, barW, 5 * st.u, 3 * st.u);
+      ctx.fill();
+      ctx.restore();
+    },
+
+    /** Agency-grade Hero Stat Card with radial glow, animated counter, label, and delta badge */
+    drawStatHero(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        eyebrow?: string;
+        value: number;
+        from?: number;
+        prefix?: string;
+        suffix?: string;
+        decimals?: number;
+        label: string;
+        delta?: string;
+        accentColor?: string;
+        progress?: number;
+        cy?: number;
+      }
+    ) {
+      const enter = spring(st.frame, st.fps, { stiffness: 185, damping: 18 });
+      const countP = clamp(opts.progress ?? clamp(st.progress * 1.65, 0, 1));
+      const cy = opts.cy ?? st.height * 0.455;
+      const cardW = st.width * 0.84;
+      const cardH = st.height * 0.34;
+      const x = (st.width - cardW) / 2;
+      const y = cy - cardH / 2 + (1 - enter) * 44 * st.u;
+      const accent = opts.accentColor || P.accentPrimary;
+
+      ctx.save();
+      ctx.globalAlpha = clamp(enter * 1.5, 0, 1);
+
+      // Ambient spotlight behind hero card
+      const glow = ctx.createRadialGradient(st.width / 2, cy, 10 * st.u, st.width / 2, cy, cardW * 0.62);
+      glow.addColorStop(0, withAlpha(accent, design.isLight ? 0.18 : 0.28));
+      glow.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, cy - cardH, st.width, cardH * 2);
+
+      // Layered glass/editorial card
+      ctx.shadowColor = design.isLight ? "rgba(15,23,42,0.12)" : "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = 42 * st.u;
+      ctx.shadowOffsetY = 18 * st.u;
+      ctx.fillStyle = P.surfaceBg;
+      drawRoundRect(ctx, x, y, cardW, cardH, 32 * st.u);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+
+      ctx.strokeStyle = withAlpha(accent, 0.5);
+      ctx.lineWidth = 2.5 * st.u;
+      ctx.stroke();
+
+      // Top accent strip
+      ctx.fillStyle = accent;
+      drawRoundRect(ctx, x + 36 * st.u, y, cardW - 72 * st.u, 6 * st.u, 3 * st.u);
+      ctx.fill();
+
+      // Optional eyebrow
+      if (opts.eyebrow) {
+        ctx.fillStyle = P.textSecondary;
+        ctx.font = font("mono", 700, 24 * st.u);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(opts.eyebrow.toUpperCase(), st.width / 2, y + 66 * st.u, cardW - 64 * st.u);
+      }
+
+      // Giant animated counter
+      const val = lerp(opts.from ?? 0, opts.value, ease.outExpo(countP));
+      const dec = opts.decimals ?? (Math.abs(opts.value) < 10 && !Number.isInteger(opts.value) ? 1 : 0);
+      const formatted =
+        dec > 0 ? val.toFixed(dec).replace(".", ",") : Math.round(val).toLocaleString("id-ID");
+      const numStr = `${opts.prefix ?? ""}${formatted}${opts.suffix ?? ""}`;
+      const numSize = fitText(ctx, numStr, cardW - 84 * st.u, 152 * st.u, 72 * st.u, resolveDesignFont(design, "display"), 900);
+      ctx.font = font("display", 900, numSize);
+      ctx.fillStyle = accent;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(numStr, st.width / 2, y + cardH * 0.45, cardW - 64 * st.u);
+
+      // Subtitle label
+      ctx.fillStyle = P.textPrimary;
+      ctx.font = font("heading", 700, 34 * st.u);
+      const labelLines = wrapText(ctx, opts.label, cardW - 96 * st.u).slice(0, 2);
+      labelLines.forEach((line, i) => {
+        ctx.fillText(line, st.width / 2, y + cardH * 0.72 + i * 40 * st.u, cardW - 80 * st.u);
+      });
+
+      // Optional delta pill
+      if (opts.delta) {
+        const dp = spring(st.frame, st.fps, { stiffness: 200, damping: 16, delay: 8 });
+        ctx.save();
+        ctx.globalAlpha = clamp(dp, 0, 1);
+        ctx.font = font("mono", 800, 25 * st.u);
+        const dw = ctx.measureText(opts.delta).width + 44 * st.u;
+        const dh = 46 * st.u;
+        const dy2 = y + cardH - dh / 2;
+        ctx.fillStyle = P.accentSecondary || accent;
+        drawRoundRect(ctx, st.width / 2 - dw / 2, dy2, dw, dh, dh / 2);
+        ctx.fill();
+        ctx.fillStyle = P.accentInk || "#0B0F17";
+        ctx.fillText(opts.delta, st.width / 2, dy2 + dh / 2 + 1 * st.u, dw - 20 * st.u);
+        ctx.restore();
+      }
+
+      ctx.restore();
+    },
+
+    /** Agency-grade Animated Comparison Bar Chart inside an editorial card */
+    drawComparisonBars(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        title?: string;
+        items: Array<{ label: string; value: number; displayValue?: string; color?: string; highlight?: boolean }>;
+        progress?: number;
+        y?: number;
+        h?: number;
+      }
+    ) {
+      const items = Array.isArray(opts.items) ? opts.items.slice(0, 5) : [];
+      if (items.length === 0) return;
+      const enter = spring(st.frame, st.fps, { stiffness: 190, damping: 20 });
+      const cardW = st.width * 0.86;
+      const cardH = opts.h ?? st.height * 0.41;
+      const x = (st.width - cardW) / 2;
+      const y = (opts.y ?? st.height * 0.26) + (1 - enter) * 32 * st.u;
+      const maxVal = Math.max(1, ...items.map((it) => Math.abs(Number(it.value) || 0)));
+
+      ctx.save();
+      ctx.globalAlpha = clamp(enter * 1.4, 0, 1);
+
+      // Card container
+      ctx.shadowColor = design.isLight ? "rgba(15,23,42,0.1)" : "rgba(0,0,0,0.42)";
+      ctx.shadowBlur = 34 * st.u;
+      ctx.shadowOffsetY = 14 * st.u;
+      ctx.fillStyle = P.surfaceBg;
+      drawRoundRect(ctx, x, y, cardW, cardH, 28 * st.u);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = P.surfaceBorder;
+      ctx.lineWidth = 2 * st.u;
+      ctx.stroke();
+
+      let topOffset = 34 * st.u;
+      if (opts.title) {
+        ctx.fillStyle = P.textPrimary;
+        ctx.font = font("heading", 800, 32 * st.u);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(opts.title, x + 36 * st.u, y + 30 * st.u, cardW - 72 * st.u);
+        topOffset = 88 * st.u;
+      }
+
+      const padX = 36 * st.u;
+      const innerW = cardW - padX * 2;
+      const availH = cardH - topOffset - 34 * st.u;
+      const rowH = availH / items.length;
+      const barH = Math.min(36 * st.u, Math.max(20 * st.u, rowH * 0.38));
+
+      items.forEach((it, idx) => {
+        const sp = stagger(idx, 5, st.frame, st.fps, { stiffness: 170, damping: 18 });
+        const fillRatio = clamp((Math.abs(Number(it.value) || 0) / maxVal) * clamp(opts.progress ?? sp, 0, 1), 0.04, 1);
+        const ry = y + topOffset + idx * rowH;
+        const barCol = it.color || (it.highlight ? P.accentSecondary : P.accentPrimary);
+
+        // Label + Value row
+        ctx.font = font("heading", it.highlight ? 800 : 700, 26 * st.u);
+        ctx.fillStyle = it.highlight ? P.textPrimary : P.textSecondary;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(it.label, x + padX, ry + rowH * 0.42, innerW * 0.66);
+
+        const disp = it.displayValue ?? Math.round(it.value * clamp(sp, 0, 1)).toLocaleString("id-ID");
+        ctx.font = font("mono", 800, 26 * st.u);
+        ctx.fillStyle = it.highlight ? barCol : P.textPrimary;
+        ctx.textAlign = "right";
+        ctx.fillText(disp, x + cardW - padX, ry + rowH * 0.42);
+
+        // Track
+        const by = ry + rowH * 0.48;
+        ctx.fillStyle = design.isLight ? "rgba(15,23,42,0.08)" : "rgba(255,255,255,0.08)";
+        drawRoundRect(ctx, x + padX, by, innerW, barH, barH / 2);
+        ctx.fill();
+
+        // Filled bar with gradient
+        const bw = Math.max(barH, innerW * fillRatio);
+        const grad = ctx.createLinearGradient(x + padX, by, x + padX + bw, by);
+        grad.addColorStop(0, withAlpha(barCol, 0.78));
+        grad.addColorStop(1, barCol);
+        ctx.fillStyle = grad;
+        drawRoundRect(ctx, x + padX, by, bw, barH, barH / 2);
+        ctx.fill();
+      });
+
+      ctx.restore();
+    },
+
+    /** High-contrast 2-Column Split Comparison (Before vs After / Old vs New) with VS badge */
+    drawSplitCompare(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        left: { badge?: string; title: string; value?: string; bullets?: string[] };
+        right: { badge?: string; title: string; value?: string; bullets?: string[]; accent?: string };
+        y?: number;
+        h?: number;
+      }
+    ) {
+      const enterL = spring(st.frame, st.fps, { stiffness: 185, damping: 18, delay: 0 });
+      const enterR = spring(st.frame, st.fps, { stiffness: 185, damping: 18, delay: 6 });
+      const totalW = st.width * 0.88;
+      const gap = 22 * st.u;
+      const colW = (totalW - gap) / 2;
+      const cardH = opts.h ?? st.height * 0.42;
+      const startX = (st.width - totalW) / 2;
+      const baseY = opts.y ?? st.height * 0.255;
+      const rAccent = opts.right.accent || P.accentPrimary;
+
+      const drawCol = (
+        cx: number,
+        enter: number,
+        data: { badge?: string; title: string; value?: string; bullets?: string[] },
+        isRight: boolean
+      ) => {
+        ctx.save();
+        ctx.globalAlpha = clamp(enter * 1.4, 0, 1);
+        const ox = (1 - enter) * (isRight ? 40 : -40) * st.u;
+        const x = cx + ox;
+
+        ctx.fillStyle = isRight
+          ? withAlpha(rAccent, design.isLight ? 0.12 : 0.14)
+          : P.surfaceBg;
+        drawRoundRect(ctx, x, baseY, colW, cardH, 26 * st.u);
+        ctx.fill();
+        ctx.strokeStyle = isRight ? withAlpha(rAccent, 0.75) : P.surfaceBorder;
+        ctx.lineWidth = (isRight ? 3 : 2) * st.u;
+        ctx.stroke();
+
+        let cy = baseY + 34 * st.u;
+        if (data.badge) {
+          ctx.font = font("mono", 800, 21 * st.u);
+          ctx.fillStyle = isRight ? rAccent : P.textSecondary;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          ctx.fillText(data.badge.toUpperCase(), x + 28 * st.u, cy, colW - 56 * st.u);
+          cy += 38 * st.u;
+        }
+
+        ctx.font = font("heading", 900, 34 * st.u);
+        ctx.fillStyle = P.textPrimary;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        const tLines = wrapText(ctx, data.title, colW - 56 * st.u).slice(0, 2);
+        tLines.forEach((ln) => {
+          ctx.fillText(ln, x + 28 * st.u, cy, colW - 56 * st.u);
+          cy += 42 * st.u;
+        });
+
+        if (data.value) {
+          cy += 10 * st.u;
+          const vSize = fitText(ctx, data.value, colW - 56 * st.u, 64 * st.u, 36 * st.u, resolveDesignFont(design, "display"), 900);
+          ctx.font = font("display", 900, vSize);
+          ctx.fillStyle = isRight ? rAccent : P.textSecondary;
+          ctx.fillText(data.value, x + 28 * st.u, cy, colW - 56 * st.u);
+          cy += vSize + 24 * st.u;
+        } else {
+          cy += 18 * st.u;
+        }
+
+        const bullets = Array.isArray(data.bullets) ? data.bullets.slice(0, 4) : [];
+        ctx.font = font("body", 600, 24 * st.u);
+        bullets.forEach((b, bi) => {
+          const bp = stagger(bi + (isRight ? 2 : 0), 4, st.frame, st.fps);
+          ctx.save();
+          ctx.globalAlpha = clamp(bp, 0, 1);
+          ctx.fillStyle = isRight ? rAccent : P.textSecondary;
+          ctx.beginPath();
+          ctx.arc(x + 36 * st.u, cy + 14 * st.u, 5 * st.u, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = P.textPrimary;
+          const bLines = wrapText(ctx, b, colW - 76 * st.u).slice(0, 2);
+          bLines.forEach((bl) => {
+            ctx.fillText(bl, x + 52 * st.u, cy, colW - 72 * st.u);
+            cy += 32 * st.u;
+          });
+          cy += 12 * st.u;
+          ctx.restore();
+        });
+        ctx.restore();
+      };
+
+      drawCol(startX, enterL, opts.left, false);
+      drawCol(startX + colW + gap, enterR, opts.right, true);
+
+      // Center VS pill
+      const vsPop = spring(st.frame, st.fps, { stiffness: 240, damping: 14, delay: 10 });
+      ctx.save();
+      ctx.translate(st.width / 2, baseY + cardH * 0.45);
+      ctx.scale(clamp(vsPop, 0, 1.15), clamp(vsPop, 0, 1.15));
+      ctx.fillStyle = P.accentSecondary || "#FACC15";
+      ctx.beginPath();
+      ctx.arc(0, 0, 34 * st.u, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = P.bgTop;
+      ctx.lineWidth = 6 * st.u;
+      ctx.stroke();
+      ctx.fillStyle = P.accentInk || "#0B0F17";
+      ctx.font = font("display", 900, 26 * st.u);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("VS", 0, 2 * st.u);
+      ctx.restore();
+    },
+
+    /** Rich Browser / Phone / Terminal Mockup with LIVE animated UI content (never an empty box!) */
+    drawDeviceMockup(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        kind?: "browser" | "phone" | "terminal";
+        title?: string;
+        url?: string;
+        loadingProgress?: number;
+        metrics?: Array<{ label: string; value: string; color?: string }>;
+        lines?: string[];
+        y?: number;
+        h?: number;
+      }
+    ) {
+      const kind = opts.kind ?? "browser";
+      const enter = spring(st.frame, st.fps, { stiffness: 180, damping: 19 });
+      const w = kind === "phone" ? st.width * 0.54 : st.width * 0.86;
+      const h = opts.h ?? (kind === "phone" ? st.height * 0.47 : st.height * 0.41);
+      const x = (st.width - w) / 2;
+      const y = (opts.y ?? st.height * 0.25) + (1 - enter) * 38 * st.u;
+      const loadP = clamp(opts.loadingProgress ?? clamp(st.progress * 1.4, 0.15, 0.96));
+
+      ctx.save();
+      ctx.globalAlpha = clamp(enter * 1.4, 0, 1);
+
+      // Soft ambient glow behind device
+      const glow = ctx.createRadialGradient(st.width / 2, y + h / 2, 20 * st.u, st.width / 2, y + h / 2, w * 0.7);
+      glow.addColorStop(0, withAlpha(P.accentPrimary, design.isLight ? 0.15 : 0.24));
+      glow.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, y - 80 * st.u, st.width, h + 160 * st.u);
+
+      // Device chassis
+      ctx.shadowColor = "rgba(0,0,0,0.42)";
+      ctx.shadowBlur = 44 * st.u;
+      ctx.shadowOffsetY = 20 * st.u;
+      ctx.fillStyle = kind === "terminal" ? "#0B1120" : P.surfaceBg;
+      drawRoundRect(ctx, x, y, w, h, (kind === "phone" ? 44 : 24) * st.u);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = withAlpha(P.accentPrimary, 0.45);
+      ctx.lineWidth = 2.5 * st.u;
+      ctx.stroke();
+
+      // Clip interior
+      ctx.save();
+      drawRoundRect(ctx, x, y, w, h, (kind === "phone" ? 44 : 24) * st.u);
+      ctx.clip();
+
+      const headerH = (kind === "phone" ? 56 : 64) * st.u;
+      ctx.fillStyle = design.isLight && kind !== "terminal" ? "rgba(15,23,42,0.06)" : "rgba(255,255,255,0.06)";
+      ctx.fillRect(x, y, w, headerH);
+
+      if (kind === "phone") {
+        // Dynamic island notch
+        ctx.fillStyle = "#05070C";
+        drawRoundRect(ctx, x + w / 2 - 54 * st.u, y + 16 * st.u, 108 * st.u, 22 * st.u, 11 * st.u);
+        ctx.fill();
+      } else {
+        // Traffic lights + URL/title bar
+        ["#FF5F57", "#FEBC2E", "#28C840"].forEach((c, i) => {
+          ctx.fillStyle = c;
+          ctx.beginPath();
+          ctx.arc(x + 28 * st.u + i * 24 * st.u, y + headerH / 2, 7.5 * st.u, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        const barX = x + 106 * st.u;
+        const barW = w - 132 * st.u;
+        ctx.fillStyle = kind === "terminal" ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.22)";
+        drawRoundRect(ctx, barX, y + 14 * st.u, barW, headerH - 28 * st.u, 10 * st.u);
+        ctx.fill();
+        ctx.fillStyle = kind === "terminal" ? "#E2E8F0" : P.textPrimary;
+        ctx.font = font("mono", 600, 21 * st.u);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(opts.url || opts.title || "https://app.modern.web", barX + 16 * st.u, y + headerH / 2 + 1 * st.u, barW - 30 * st.u);
+      }
+
+      // Animated top progress bar
+      ctx.fillStyle = P.accentPrimary;
+      ctx.fillRect(x, y + headerH - 4 * st.u, w * loadP, 4 * st.u);
+
+      // Rich interior content
+      const pad = 28 * st.u;
+      let cy = y + headerH + 26 * st.u;
+      if (opts.title && kind !== "browser") {
+        ctx.fillStyle = kind === "terminal" ? "#38BDF8" : P.textPrimary;
+        ctx.font = font("heading", 800, 28 * st.u);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(opts.title, x + pad, cy, w - pad * 2);
+        cy += 44 * st.u;
+      }
+
+      // Metrics row inside device
+      const metrics = Array.isArray(opts.metrics) && opts.metrics.length > 0
+        ? opts.metrics.slice(0, 3)
+        : [
+            { label: "PAYLOAD", value: `${(0.4 + loadP * 4.8).toFixed(1)} MB`, color: P.accentSecondary },
+            { label: "SCRIPTS", value: `${Math.round(12 + loadP * 54)} req`, color: P.accentPrimary },
+          ];
+      const mGap = 14 * st.u;
+      const mW = (w - pad * 2 - mGap * (metrics.length - 1)) / metrics.length;
+      const mH = 92 * st.u;
+      metrics.forEach((m, mi) => {
+        const mx = x + pad + mi * (mW + mGap);
+        ctx.fillStyle = kind === "terminal" ? "rgba(255,255,255,0.05)" : design.isLight ? "rgba(15,23,42,0.05)" : "rgba(255,255,255,0.06)";
+        drawRoundRect(ctx, mx, cy, mW, mH, 16 * st.u);
+        ctx.fill();
+        ctx.fillStyle = kind === "terminal" ? "#94A3B8" : P.textSecondary;
+        ctx.font = font("mono", 700, 18 * st.u);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(m.label.toUpperCase(), mx + 16 * st.u, cy + 16 * st.u, mW - 32 * st.u);
+
+        ctx.fillStyle = m.color || P.accentPrimary;
+        ctx.font = font("display", 900, 32 * st.u);
+        ctx.fillText(m.value, mx + 16 * st.u, cy + 44 * st.u, mW - 32 * st.u);
+      });
+      cy += mH + 24 * st.u;
+
+      // Live waterfall / code / UI rows
+      const lines = Array.isArray(opts.lines) && opts.lines.length > 0
+        ? opts.lines.slice(0, 5)
+        : ["bundle.main.js  ·  1.8 MB", "analytics-tracker.js  ·  420 KB", "hero-banner-4k.png  ·  2.4 MB", "custom-fonts.woff2  ·  680 KB"];
+      const availRowH = Math.max(38 * st.u, (y + h - 22 * st.u - cy) / lines.length);
+      lines.forEach((ln, li) => {
+        const lp = stagger(li, 4, st.frame, st.fps);
+        const ry = cy + li * availRowH;
+        const barRatio = clamp((0.35 + ((li * 0.21) % 0.62)) * lp, 0.08, 0.96);
+
+        ctx.save();
+        ctx.globalAlpha = clamp(lp, 0, 1);
+        ctx.fillStyle = kind === "terminal" ? "rgba(255,255,255,0.04)" : design.isLight ? "rgba(15,23,42,0.04)" : "rgba(255,255,255,0.05)";
+        drawRoundRect(ctx, x + pad, ry, w - pad * 2, availRowH - 10 * st.u, 10 * st.u);
+        ctx.fill();
+
+        // Colored animated waterfall bar on right side
+        const col = li % 2 === 0 ? P.accentPrimary : P.accentSecondary;
+        ctx.fillStyle = withAlpha(col, 0.25);
+        drawRoundRect(ctx, x + pad, ry, (w - pad * 2) * barRatio, availRowH - 10 * st.u, 10 * st.u);
+        ctx.fill();
+
+        ctx.fillStyle = kind === "terminal" ? "#E2E8F0" : P.textPrimary;
+        ctx.font = font("mono", 600, 21 * st.u);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(ln, x + pad + 16 * st.u, ry + (availRowH - 10 * st.u) / 2, w - pad * 2 - 32 * st.u);
+        ctx.restore();
+      });
+
+      ctx.restore();
+      ctx.restore();
+    },
+
+    /** Animated System / Pipeline Node Flow with glowing signal pulses traveling between nodes */
+    drawNodeFlow(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        nodes: Array<{ label: string; sub?: string; accent?: string }>;
+        activeProgress?: number;
+        y?: number;
+        h?: number;
+      }
+    ) {
+      const nodes = Array.isArray(opts.nodes) ? opts.nodes.slice(0, 4) : [];
+      if (nodes.length === 0) return;
+      const baseY = opts.y ?? st.height * 0.245;
+      const totalH = opts.h ?? st.height * 0.44;
+      const cardW = st.width * 0.82;
+      const x = (st.width - cardW) / 2;
+      const gap = 36 * st.u;
+      const nodeH = Math.min(118 * st.u, (totalH - gap * (nodes.length - 1)) / nodes.length);
+      const pulseP = clamp(opts.activeProgress ?? st.progress);
+
+      ctx.save();
+      nodes.forEach((node, idx) => {
+        const sp = stagger(idx, 5, st.frame, st.fps, { stiffness: 190, damping: 18 });
+        const ny = baseY + idx * (nodeH + gap) + (1 - sp) * 26 * st.u;
+        const accent = node.accent || (idx === nodes.length - 1 ? P.accentSecondary : P.accentPrimary);
+        const isLit = pulseP * nodes.length >= idx;
+
+        // Connector line + traveling glowing pulse dot to next node
+        if (idx < nodes.length - 1) {
+          const lx = st.width / 2;
+          const y1 = ny + nodeH;
+          const y2 = ny + nodeH + gap;
+          ctx.strokeStyle = withAlpha(accent, isLit ? 0.85 : 0.28);
+          ctx.lineWidth = 4 * st.u;
+          ctx.beginPath();
+          ctx.moveTo(lx, y1);
+          ctx.lineTo(lx, y2);
+          ctx.stroke();
+
+          const segP = ((st.timeMs / 900 + idx * 0.33) % 1);
+          const py = lerp(y1 + 4 * st.u, y2 - 4 * st.u, segP);
+          ctx.fillStyle = accent;
+          ctx.beginPath();
+          ctx.arc(lx, py, 7 * st.u, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Node card
+        ctx.save();
+        ctx.globalAlpha = clamp(sp * 1.4, 0, 1);
+        ctx.fillStyle = isLit ? withAlpha(accent, design.isLight ? 0.12 : 0.15) : P.surfaceBg;
+        drawRoundRect(ctx, x, ny, cardW, nodeH, 22 * st.u);
+        ctx.fill();
+        ctx.strokeStyle = isLit ? accent : P.surfaceBorder;
+        ctx.lineWidth = (isLit ? 3 : 2) * st.u;
+        ctx.stroke();
+
+        // Step badge circle
+        const bx = x + 46 * st.u;
+        const by = ny + nodeH / 2;
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(bx, by, 24 * st.u, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = P.accentInk || "#0B0F17";
+        ctx.font = font("mono", 900, 24 * st.u);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(idx + 1), bx, by + 1 * st.u);
+
+        // Text
+        ctx.textAlign = "left";
+        ctx.fillStyle = P.textPrimary;
+        ctx.font = font("heading", 800, 30 * st.u);
+        ctx.fillText(node.label, x + 90 * st.u, node.sub ? by - 14 * st.u : by, cardW - 116 * st.u);
+        if (node.sub) {
+          ctx.fillStyle = P.textSecondary;
+          ctx.font = font("body", 600, 22 * st.u);
+          ctx.fillText(node.sub, x + 90 * st.u, by + 18 * st.u, cardW - 116 * st.u);
+        }
+        ctx.restore();
+      });
+      ctx.restore();
+    },
+
+    /** 2x2 Bento Metric Grid for dense multi-point data storytelling */
+    drawMetricGrid(
+      ctx: CanvasRenderingContext2D,
+      st: BeatRenderState,
+      opts: {
+        items: Array<{ label: string; value: string; sub?: string; accent?: string }>;
+        y?: number;
+        h?: number;
+      }
+    ) {
+      const items = Array.isArray(opts.items) ? opts.items.slice(0, 4) : [];
+      if (items.length === 0) return;
+      const totalW = st.width * 0.86;
+      const totalH = opts.h ?? st.height * 0.41;
+      const startX = (st.width - totalW) / 2;
+      const baseY = opts.y ?? st.height * 0.255;
+      const gap = 20 * st.u;
+      const cols = items.length <= 2 ? 1 : 2;
+      const rows = Math.ceil(items.length / cols);
+      const cellW = (totalW - gap * (cols - 1)) / cols;
+      const cellH = (totalH - gap * (rows - 1)) / rows;
+
+      ctx.save();
+      items.forEach((it, idx) => {
+        const sp = stagger(idx, 4, st.frame, st.fps, { stiffness: 195, damping: 18 });
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const cx = startX + col * (cellW + gap);
+        const cy = baseY + row * (cellH + gap) + (1 - sp) * 26 * st.u;
+        const accent = it.accent || (idx % 2 === 0 ? P.accentPrimary : P.accentSecondary);
+
+        ctx.save();
+        ctx.globalAlpha = clamp(sp * 1.4, 0, 1);
+        ctx.fillStyle = P.surfaceBg;
+        drawRoundRect(ctx, cx, cy, cellW, cellH, 24 * st.u);
+        ctx.fill();
+        ctx.strokeStyle = withAlpha(accent, 0.45);
+        ctx.lineWidth = 2 * st.u;
+        ctx.stroke();
+
+        // Accent bar
+        ctx.fillStyle = accent;
+        drawRoundRect(ctx, cx + 24 * st.u, cy + 20 * st.u, 48 * st.u, 6 * st.u, 3 * st.u);
+        ctx.fill();
+
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = P.textSecondary;
+        ctx.font = font("mono", 700, 20 * st.u);
+        ctx.fillText(it.label.toUpperCase(), cx + 24 * st.u, cy + 40 * st.u, cellW - 48 * st.u);
+
+        const vSize = fitText(ctx, it.value, cellW - 48 * st.u, 60 * st.u, 32 * st.u, resolveDesignFont(design, "display"), 900);
+        ctx.fillStyle = accent;
+        ctx.font = font("display", 900, vSize);
+        ctx.fillText(it.value, cx + 24 * st.u, cy + 76 * st.u, cellW - 48 * st.u);
+
+        if (it.sub) {
+          ctx.fillStyle = P.textPrimary;
+          ctx.font = font("body", 600, 22 * st.u);
+          ctx.fillText(it.sub, cx + 24 * st.u, cy + cellH - 46 * st.u, cellW - 48 * st.u);
+        }
+        ctx.restore();
+      });
+      ctx.restore();
+    },
   };
 }

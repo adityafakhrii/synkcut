@@ -438,6 +438,7 @@ export interface SynkcutProject {
     format: ContentFormat;
     aspectRatio: "9:16";
     fps: 30 | 60;
+    posterDataUrl?: string | null;
     createdAt?: string;
     updatedAt?: string;
   };
@@ -479,6 +480,7 @@ export interface ProjectSummary {
   sceneCount: number;
   durationMs: number;
   hasFootage: boolean;
+  posterDataUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
