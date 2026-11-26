@@ -11,6 +11,7 @@ import { renderProjectFrame } from "./canvasRenderer";
 import { ensureBrandLogoDecoded } from "./motionSdk";
 import { getProjectDurationMs } from "./sampleProject";
 import {
+  exportHyperframeMp4,
   isTauriRuntime,
   muxExportMp4,
   toAssetUrl,
@@ -18,6 +19,7 @@ import {
   type ExportResult,
   type SfxMixEvent,
 } from "../lib/tauriBridge";
+import { buildPlayableHyperframeHtml, isHyperframeProject } from "./hyperframeRuntime";
 
 export class ExportCancelledError extends Error {
   constructor() {
@@ -162,6 +164,41 @@ export async function exportProjectToMp4(
   const durationMs = getProjectDurationMs(project);
   const durationSec = durationMs / 1000;
   const totalFrames = Math.max(1, Math.ceil(durationSec * fps));
+
+  // v3.0 HyperFrames Deterministic Export (Windows Edge/Chrome Headless CDP -> Bundled FFmpeg)
+  if (isHyperframeProject(project) && isTauriRuntime()) {
+    options.onProgress?.({
+      percent: 3,
+      stage: "init",
+      message: `Menyiapkan export HyperFrames ${width}×${height} @ ${fps}fps (${totalFrames} frame)...`,
+      currentFrame: 0,
+      totalFrames,
+      elapsedMs: 0,
+      etaMs: null,
+    });
+    const exportHtml = buildPlayableHyperframeHtml(project, "./vendor/");
+    const result = await exportHyperframeMp4({
+      html: exportHtml,
+      durationSec,
+      fps,
+      width,
+      height,
+      outputPath: options.outputPath,
+      audioPath: options.audioPath,
+      generateDemoAudio: options.generateDemoAudio,
+      mixPlan: buildMixPlan(project),
+    });
+    options.onProgress?.({
+      percent: 100,
+      stage: "done",
+      message: "Export MP4 HyperFrames selesai!",
+      currentFrame: totalFrames,
+      totalFrames,
+      elapsedMs: performance.now() - startedAt,
+      etaMs: 0,
+    });
+    return result;
+  }
 
   options.onProgress?.({
     percent: 2,

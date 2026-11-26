@@ -3,10 +3,17 @@ import {
   aiCritique3dFrames,
   aiRepair3dDiorama,
   aiRepairBeatCode,
+  aiRepairHyperframeVideo,
+  captureHyperframePoster,
   isTauriRuntime,
 } from "../lib/tauriBridge";
 import { verifyBeatCodeOffscreen } from "./freeformMotionRenderer";
 import { verifyDiorama3DOffscreen } from "./diorama3dRenderer";
+import {
+  buildPlayableHyperframeHtml,
+  isHyperframeProject,
+  verifyHyperframeOffscreen,
+} from "./hyperframeRuntime";
 
 export interface VerifyRepairResult {
   project: SynkcutProject;
@@ -36,6 +43,80 @@ export async function verifyAndRepairProjectBeats(
 
   let nextWorld3d = project.world3d ? { ...project.world3d } : null;
   const nextScenes = [...project.scenes];
+
+  // 0. Verify v3.0 Unified HyperFrames composition (HTML + Three.js + GSAP + SVG + Impeccable)
+  if (isHyperframeProject(project) && project.hyperframe) {
+    let html = project.hyperframe.html;
+    let lintFixes = project.hyperframe.lintFixes ?? [];
+    let passedHf = false;
+    let lastErrHf = "";
+
+    onProgress?.("Memvalidasi 5 titik waktu HyperFrames (WebGL + GSAP + Impeccable)...");
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const candidate: SynkcutProject = {
+        ...project,
+        hyperframe: { ...project.hyperframe, html, lintFixes },
+      };
+      const check = await verifyHyperframeOffscreen(candidate);
+      if (check.ok) {
+        passedHf = true;
+        verifiedCount++;
+        if (attempt > 0) repairedCount++;
+        break;
+      }
+      lastErrHf = check.error || "Error runtime pada komposisi HyperFrames.";
+      if (attempt < 2 && isTauriRuntime()) {
+        onProgress?.(`Auto-repair HyperFrames (percobaan ${attempt + 1}/2)...`);
+        try {
+          const repaired = await aiRepairHyperframeVideo({
+            projectTitle: project.meta.name,
+            brokenHtml: html,
+            errorMessage: lastErrHf,
+          });
+          html = repaired.html;
+          lintFixes = Array.from(new Set([...lintFixes, ...(repaired.lintFixes ?? [])]));
+        } catch {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+
+    const updatedProject: SynkcutProject = {
+      ...project,
+      version: "3.0",
+      hyperframe: {
+        ...project.hyperframe,
+        html,
+        lintFixes,
+        verified: passedHf,
+        verificationNote: passedHf
+          ? repairedCount > 0
+            ? "HyperFrames dipoles & lolos cek 5-frame"
+            : "Lolos cek 5-frame HyperFrames + Impeccable"
+          : `Peringatan verifikasi: ${lastErrHf.slice(0, 90)}`,
+      },
+    };
+
+    // Capture real 1-second video frame thumbnail via Rust Headless CDP!
+    if (isTauriRuntime() && !updatedProject.meta.posterDataUrl) {
+      onProgress?.("Mengambil thumbnail preview detik ke-1...");
+      const posterHtml = buildPlayableHyperframeHtml(updatedProject, "./vendor/");
+      const poster = await captureHyperframePoster({ html: posterHtml, timeSec: 1.0 });
+      if (poster) {
+        updatedProject.meta = { ...updatedProject.meta, posterDataUrl: poster };
+      }
+    }
+
+    return {
+      project: updatedProject,
+      verifiedCount,
+      repairedCount,
+      fallbackCount: passedHf ? 0 : 1,
+    };
+  }
 
   // 1. Verify unified 3D Diorama world if present
   const hasDioramaScenes = nextScenes.some(

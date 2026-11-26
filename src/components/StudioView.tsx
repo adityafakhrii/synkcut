@@ -76,6 +76,8 @@ import { verifyAndRepairProjectBeats } from "../engine/freeformPipeline";
 import { buildRemotionProjectFiles } from "../engine/remotionExporter";
 import {
   aiCopilotPatch,
+  aiPatchHyperframeVideo,
+  captureHyperframePoster,
   checkSidecars,
   ensureAudioPackAsset,
   exportRemotionProject,
@@ -100,7 +102,9 @@ import {
 } from "../lib/tauriBridge";
 import AiMotionEditor from "./AiMotionEditor";
 import DesignReferencePanel from "./DesignReferencePanel";
+import HyperframeCanvas from "./HyperframeCanvas";
 import { captureProjectPosterDataUrl } from "./ProjectPosterCanvas";
+import { buildPlayableHyperframeHtml, isHyperframeProject } from "../engine/hyperframeRuntime";
 import { formatGenerationDuration } from "../lib/friendlyError";
 
 export type ManualDrawerTab = "visual" | "style" | "audio";
@@ -465,10 +469,13 @@ export default function StudioView({
     const timer = window.setTimeout(async () => {
       setSaveState("saving");
       try {
-        const poster = captureProjectPosterDataUrl(project, 1000);
-        const toSave = poster
-          ? { ...project, meta: { ...project.meta, posterDataUrl: poster } }
-          : project;
+        let toSave = project;
+        if (!isHyperframeProject(project)) {
+          const poster = captureProjectPosterDataUrl(project, 1000);
+          if (poster) {
+            toSave = { ...project, meta: { ...project.meta, posterDataUrl: poster } };
+          }
+        }
         await saveProject(toSave);
         setSaveState("saved");
         onProjectSaved();
@@ -554,6 +561,7 @@ export default function StudioView({
 
   // Seamless Multi-Clip Pool Sync + Render 9:16 preview frame
   useEffect(() => {
+    if (isHyperframeProject(project)) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -1415,10 +1423,50 @@ export default function StudioView({
       return;
     }
 
-    // When running in Tauri desktop with BYOK configured, invoke real LLM JSON Patching!
+    // When running in Tauri desktop with BYOK configured, invoke real LLM Patching!
     if (isTauriRuntime() && activeByokOk) {
       setIsPatchingAi(true);
       try {
+        // v3.0 HyperFrames AI Director Live HTML/3D/GSAP Revision
+        if (isHyperframeProject(before) && before.hyperframe) {
+          const hfRes = await aiPatchHyperframeVideo({
+            projectTitle: before.meta.name,
+            currentHtml: before.hyperframe.html,
+            instruction: raw,
+            activeSceneIndex: targetAllScenes ? null : activeSceneIndex,
+          });
+          let patchedHf: SynkcutProject = {
+            ...before,
+            version: "3.0",
+            hyperframe: {
+              ...before.hyperframe,
+              html: hfRes.html,
+              lintFixes: Array.from(
+                new Set([...(before.hyperframe.lintFixes ?? []), ...(hfRes.lintFixes ?? [])])
+              ),
+              verified: false,
+            },
+          };
+          const verifiedHf = await verifyAndRepairProjectBeats(patchedHf);
+          patchedHf = verifiedHf.project;
+          const freshPoster = await captureHyperframePoster({
+            html: buildPlayableHyperframeHtml(patchedHf, "./vendor/"),
+            timeSec: 1.0,
+          });
+          if (freshPoster) {
+            patchedHf = { ...patchedHf, meta: { ...patchedHf.meta, posterDataUrl: freshPoster } };
+          }
+          commitProjectChange(() => patchedHf);
+          pushDirectorMessage("assistant", `${hfRes.reply} (${hfRes.providerUsed})`, {
+            changes: [
+              "Komposisi HyperFrames (HTML + Three.js + GSAP + SVG) diperbarui",
+              ...(hfRes.lintFixes ?? []),
+            ],
+            snapshotBefore: before,
+          });
+          return;
+        }
+
         const focusId = targetAllScenes ? null : (activeScene?.id ?? null);
         const res = await aiCopilotPatch(before, raw, focusId);
         const safePatched = normalizeProject(res.project, before);
@@ -1978,10 +2026,13 @@ export default function StudioView({
             onClick={async () => {
               if (saveState === "dirty") {
                 try {
-                  const poster = captureProjectPosterDataUrl(project, 1000);
-                  const toSave = poster
-                    ? { ...project, meta: { ...project.meta, posterDataUrl: poster } }
-                    : project;
+                  let toSave = project;
+                  if (!isHyperframeProject(project)) {
+                    const poster = captureProjectPosterDataUrl(project, 1000);
+                    if (poster) {
+                      toSave = { ...project, meta: { ...project.meta, posterDataUrl: poster } };
+                    }
+                  }
                   await saveProject(toSave);
                   onProjectSaved();
                 } catch {
@@ -2433,19 +2484,37 @@ export default function StudioView({
               </button>
             </div>
 
-            {/* Hero 9:16 Video Canvas */}
-            <canvas
-              ref={canvasRef}
-              width={1080}
-              height={1920}
-              className="max-h-full w-auto rounded-2xl"
-              style={{
-                aspectRatio: "9 / 16",
-                border: "1px solid var(--border-strong)",
-                boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)",
-                backgroundColor: "#090b0f",
-              }}
-            />
+            {/* Hero 9:16 Video Canvas (v3.0 HyperFrames Live Iframe OR Legacy Canvas 2D/WebGL) */}
+            {isHyperframeProject(project) ? (
+              <div
+                className="relative h-full max-h-full w-auto overflow-hidden rounded-2xl"
+                style={{
+                  aspectRatio: "9 / 16",
+                  border: "1px solid var(--border-strong)",
+                  boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)",
+                  backgroundColor: "#0e1218",
+                }}
+              >
+                <HyperframeCanvas
+                  project={project}
+                  currentTimeMs={currentTimeMs}
+                  showSafeZone={showSafeZone}
+                />
+              </div>
+            ) : (
+              <canvas
+                ref={canvasRef}
+                width={1080}
+                height={1920}
+                className="max-h-full w-auto rounded-2xl"
+                style={{
+                  aspectRatio: "9 / 16",
+                  border: "1px solid var(--border-strong)",
+                  boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)",
+                  backgroundColor: "#090b0f",
+                }}
+              />
+            )}
           </div>
 
           {/* Clean Transport + Unified Scene Strip */}

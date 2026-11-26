@@ -1270,23 +1270,121 @@ export async function aiRepair3dDiorama(req: {
   );
 }
 
+/* ==================== V3.0 HYPERFRAMES + 6 CRAFT SKILLS ==================== */
+
+export async function aiGenerateHyperframeVideo(req: {
+  projectTitle: string;
+  format: string;
+  userPrompt?: string | null;
+  beats: StoryboardBeat[];
+  words: WordTimestamp[];
+  customDesign?: CustomDesignDirection | null;
+  styleReference?: ProjectStyleReference | null;
+  audioPath: string | null;
+  audioSource: "tts" | "recorded" | "demo";
+  trimSilence: boolean;
+  captionPreset: string;
+  accentColor: string;
+  bgmPreset: string;
+  autoDucking: boolean;
+  autoSfx: boolean;
+}): Promise<SynkcutProject> {
+  const raw = await invoke<SynkcutProject>("ai_generate_hyperframe_video", {
+    req: {
+      ...req,
+      customDesign: req.customDesign ?? null,
+      styleReference: req.styleReference ?? null,
+    },
+  });
+  return normalizeProject(raw);
+}
+
+export async function aiRepairHyperframeVideo(req: {
+  projectTitle: string;
+  brokenHtml: string;
+  errorMessage: string;
+}): Promise<{ html: string; lintFixes: string[]; providerUsed: string }> {
+  return invoke<{ html: string; lintFixes: string[]; providerUsed: string }>(
+    "ai_repair_hyperframe_video",
+    { req }
+  );
+}
+
+export async function aiPatchHyperframeVideo(req: {
+  projectTitle: string;
+  currentHtml: string;
+  instruction: string;
+  activeSceneIndex?: number | null;
+}): Promise<{ html: string; reply: string; lintFixes: string[]; providerUsed: string }> {
+  return invoke<{ html: string; reply: string; lintFixes: string[]; providerUsed: string }>(
+    "ai_patch_hyperframe_video",
+    { req }
+  );
+}
+
+export async function captureHyperframePoster(params: {
+  html: string;
+  timeSec?: number;
+}): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<string>("capture_hyperframe_poster", {
+      req: {
+        html: params.html,
+        timeSec: params.timeSec ?? 1.0,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function exportHyperframeMp4(params: {
+  html: string;
+  durationSec: number;
+  fps: number;
+  width: number;
+  height: number;
+  outputPath: string;
+  audioPath: string | null;
+  generateDemoAudio: boolean;
+  mixPlan?: AudioMixPlan | null;
+}): Promise<ExportResult> {
+  return invoke<ExportResult>("export_hyperframe_mp4", {
+    req: {
+      html: params.html,
+      durationSec: params.durationSec,
+      fps: params.fps,
+      width: params.width,
+      height: params.height,
+      outputPath: params.outputPath,
+      audioPath: params.audioPath,
+      generateDemoAudio: params.generateDemoAudio,
+      mixPlan: params.mixPlan ?? null,
+    },
+  });
+}
+
 /**
  * AI Auto-Director helper: resolves visual medium cleanly without noisy example keyword biases.
  * Priority: explicit user switch > attached reference medium > AI Storyboard Director decision > explicit "3d/diorama" request > 2d_freeform.
  */
 export function resolveAutoRenderMedium(params: {
-  preference: "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
+  preference: "hyperframe" | "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
   styleRef?: StyleReferenceResult | null;
-  aiRecommendedMedium?: "2d_freeform" | "3d_diorama" | null;
+  aiRecommendedMedium?: "hyperframe" | "2d_freeform" | "3d_diorama" | null;
   topicOrScript: string;
-}): "3d_diorama" | "2d_freeform" {
+}): "hyperframe" | "3d_diorama" | "2d_freeform" {
+  if (params.preference === "hyperframe") return "hyperframe";
   if (params.preference === "3d_diorama") return "3d_diorama";
   if (params.preference === "2d_freeform") return "2d_freeform";
 
   const refMed = params.styleRef?.customDesign?.renderMedium;
+  if (refMed === "hyperframe") return "hyperframe";
   if (refMed === "3d_diorama") return "3d_diorama";
   if (refMed === "2d_freeform") return "2d_freeform";
 
+  if (params.aiRecommendedMedium === "hyperframe") return "hyperframe";
   if (params.aiRecommendedMedium === "3d_diorama") return "3d_diorama";
   if (params.aiRecommendedMedium === "2d_freeform") return "2d_freeform";
 
@@ -1307,7 +1405,7 @@ export function resolveAutoRenderMedium(params: {
     "blender 3d",
     "3d explainer",
   ];
-  return explicit3dCues.some((k) => lower.includes(k)) ? "3d_diorama" : "2d_freeform";
+  return explicit3dCues.some((k) => lower.includes(k)) ? "3d_diorama" : "hyperframe";
 }
 
 export async function pickRemotionExportFolder(): Promise<string | null> {

@@ -36,6 +36,7 @@ import {
   aiAssembleProject,
   aiGenerate3dDiorama,
   aiGenerateBeatCodes,
+  aiGenerateHyperframeVideo,
   aiGenerateScript,
   aiPlanStoryboard,
   extractFootageFrames,
@@ -148,7 +149,9 @@ export default function WizardView({
   const [visualMode, setVisualMode] = useState<"motion" | "footage" | "hybrid">(
     initialFormat === "education" ? "motion" : "hybrid"
   );
-  const [mediumChoice, setMediumChoice] = useState<"auto" | "3d_diorama" | "2d_freeform">("auto");
+  const [mediumChoice, setMediumChoice] = useState<
+    "hyperframe" | "auto" | "3d_diorama" | "2d_freeform"
+  >("hyperframe");
   const [showRefPanel, setShowRefPanel] = useState(false);
   const [styleRefResult, setStyleRefResult] = useState<StyleReferenceResult | null>(null);
   const [scriptInputMode, setScriptInputMode] = useState<"structured" | "raw">("structured");
@@ -478,7 +481,9 @@ export default function WizardView({
     }
   }
 
-  async function handleAssembleProject(overrideMedium?: "2d_freeform" | "3d_diorama") {
+  async function handleAssembleProject(
+    overrideMedium?: "hyperframe" | "2d_freeform" | "3d_diorama"
+  ) {
     setAssembleError(null);
     setFailedOn3d(false);
     if (isScriptMandatoryMissing) {
@@ -648,7 +653,35 @@ export default function WizardView({
             : bgmPreset;
 
         let rawProj: SynkcutProject;
-        if (effectiveMedium === "3d_diorama" && (visualMode === "motion" || footageClips.length === 0)) {
+        if (
+          effectiveMedium === "hyperframe" &&
+          (visualMode === "motion" || footageClips.length === 0)
+        ) {
+          attempted3d = true;
+          setAssembleStatus(
+            "HyperFrames v3 + 6 Craft Skills: Merancang HTML5 + Three.js + GSAP + SVG..."
+          );
+          rawProj = await aiGenerateHyperframeVideo({
+            projectTitle: projectTitle.trim() || topic.trim().slice(0, 32) || "HyperFrames Video",
+            format,
+            userPrompt: topic.trim() || null,
+            beats: syncedBeats,
+            words: finalAudio?.words ?? [],
+            customDesign: effectiveCustomDesign,
+            styleReference,
+            audioPath: finalAudio?.audioPath ?? null,
+            audioSource: finalAudio?.audioPath ? (audioTab === "tts" ? "tts" : "recorded") : "demo",
+            trimSilence,
+            captionPreset,
+            accentColor: effectiveAccent,
+            bgmPreset: effectiveBgm,
+            autoDucking,
+            autoSfx,
+          });
+        } else if (
+          effectiveMedium === "3d_diorama" &&
+          (visualMode === "motion" || footageClips.length === 0)
+        ) {
           attempted3d = true;
           setAssembleStatus("Tahap 1/2: Membangun objek, pencahayaan & dunia 3D...");
           rawProj = await aiGenerate3dDiorama({
@@ -1663,13 +1696,14 @@ export default function WizardView({
                     <div className="space-y-1.5">
                       <label className="block text-xs font-semibold">Gaya Visual Utama</label>
                       <div
-                        className="grid grid-cols-3 gap-1 rounded-lg p-1"
+                        className="grid grid-cols-2 gap-1 rounded-lg p-1 sm:grid-cols-4"
                         style={{
                           backgroundColor: "var(--bg-elevated)",
                           border: "1px solid var(--border-subtle)",
                         }}
                       >
                         {[
+                          { id: "hyperframe" as const, label: "HyperFrames v3", Icon: Layers },
                           { id: "auto" as const, label: "Otomatis AI", Icon: Sparkles },
                           { id: "3d_diorama" as const, label: "3D Scene", Icon: Box },
                           { id: "2d_freeform" as const, label: "2D Motion", Icon: Shapes },
@@ -1710,9 +1744,11 @@ export default function WizardView({
                       <span className="text-right font-semibold">
                         {visualMode === "footage"
                           ? `Auto-Cut ${footageClips.length} Klip Footage`
-                          : resolvedMedium === "3d_diorama"
-                            ? "3D Diorama & Karakter (Three.js · 0 Kredit Video)"
-                            : "2D Motion Bebas AI (Tanpa Template)"}
+                          : resolvedMedium === "hyperframe"
+                            ? "HyperFrames v3 (Three.js + GSAP + SVG + Impeccable)"
+                            : resolvedMedium === "3d_diorama"
+                              ? "3D Diorama & Karakter (Three.js · 0 Kredit Video)"
+                              : "2D Motion Bebas AI (Tanpa Template)"}
                       </span>
                     </div>
                     <div className="flex items-start justify-between gap-2">
@@ -1951,9 +1987,11 @@ export default function WizardView({
                   <div className="font-mono-num text-[11px]" style={{ color: "var(--text-secondary)" }}>
                     {visualMode === "footage"
                       ? `Footage (${footageClips.length} klip)`
-                      : resolvedMedium === "3d_diorama"
-                        ? "3D Scene (By-Code)"
-                        : "2D Motion Bebas AI"}
+                      : resolvedMedium === "hyperframe"
+                        ? "HyperFrames v3 (6 Craft Skills)"
+                        : resolvedMedium === "3d_diorama"
+                          ? "3D Scene (By-Code)"
+                          : "2D Motion Bebas AI"}
                     {" · "}
                     {audioResult
                       ? `Suara tersinkron (${formatSec(audioResult.durationMs)})`

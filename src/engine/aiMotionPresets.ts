@@ -12,6 +12,11 @@ export const AI_MOTION_ENGINES: Array<{
   shortDesc: string;
 }> = [
   {
+    id: "hyperframe",
+    label: "HyperFrames v3 · Three.js + GSAP + Impeccable",
+    shortDesc: "Komposisi HTML5 + Three.js r187 + GSAP 3 + SVG terverifikasi anti-slop",
+  },
+  {
     id: "diorama_3d",
     label: "3D Diorama & Karakter (By-Code)",
     shortDesc: "Dunia 3D cutaway PBR siang hari + karakter berpose + kamera 3D kontinu",
@@ -76,6 +81,13 @@ export function createDefaultAiMotion(
     : "";
 
   switch (engine) {
+    case "hyperframe":
+      return {
+        engine: "hyperframe",
+        theme: "paper",
+        title: shortSeed || "HyperFrames v3",
+        subtitle: "",
+      };
     case "diorama_3d":
       return {
         engine: "diorama_3d",

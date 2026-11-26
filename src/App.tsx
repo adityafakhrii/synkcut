@@ -20,7 +20,9 @@ import { BUILTIN_SAMPLES, createBlankProjectForFormat, type SampleTemplate } fro
 import { createBreakdown3DPreset, createDefaultAiMotion } from "./engine/aiMotionPresets";
 import { rebuildWordsFromScenes } from "./engine/sampleProject";
 import { normalizeProject } from "./engine/sceneOps";
+import { buildPlayableHyperframeHtml, isHyperframeProject } from "./engine/hyperframeRuntime";
 import {
+  captureHyperframePoster,
   deleteProject,
   duplicateProject,
   getByokStatus,
@@ -419,7 +421,12 @@ export default function App() {
   ) {
     const safeProject = normalizeProject(project);
     if (!safeProject.meta.posterDataUrl) {
-      const poster = captureProjectPosterDataUrl(safeProject, 1000);
+      const poster = isHyperframeProject(safeProject)
+        ? await captureHyperframePoster({
+            html: buildPlayableHyperframeHtml(safeProject, "./vendor/"),
+            timeSec: 1.0,
+          })
+        : captureProjectPosterDataUrl(safeProject, 1000);
       if (poster) {
         safeProject.meta = { ...safeProject.meta, posterDataUrl: poster };
       }
@@ -448,9 +455,14 @@ export default function App() {
   async function handleOpenProject(projectId: string) {
     try {
       const loaded = normalizeProject(await loadProject(projectId));
-      // Backfill 1-second video frame thumbnail for legacy projects created before v2.4.0
+      // Backfill 1-second video frame thumbnail for projects without a saved poster
       if (!loaded.meta.posterDataUrl) {
-        const poster = captureProjectPosterDataUrl(loaded, 1000);
+        const poster = isHyperframeProject(loaded)
+          ? await captureHyperframePoster({
+              html: buildPlayableHyperframeHtml(loaded, "./vendor/"),
+              timeSec: 1.0,
+            })
+          : captureProjectPosterDataUrl(loaded, 1000);
         if (poster) {
           loaded.meta = { ...loaded.meta, posterDataUrl: poster };
           saveProject(loaded)
@@ -589,7 +601,7 @@ export default function App() {
             className="font-mono-num text-[11px]"
             style={{ color: "var(--text-muted)" }}
           >
-            v2.1
+            v3.0
           </span>
         </div>
 

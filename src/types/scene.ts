@@ -28,6 +28,7 @@ export type SceneRole = "hook" | "body" | "cta";
 export type SceneVisualSource = "footage" | "motion";
 
 export type AiMotionEngine =
+  | "hyperframe"
   | "diorama_3d"
   | "custom_code"
   | "flow_diagram"
@@ -36,7 +37,24 @@ export type AiMotionEngine =
   | "stick_figure"
   | "breakdown_3d";
 
-export type RenderMedium = "auto" | "3d_diorama" | "2d_freeform" | "footage_montage";
+export type RenderMedium = "auto" | "hyperframe" | "3d_diorama" | "2d_freeform" | "footage_montage";
+
+export interface HyperframeConfig {
+  /** Self-contained deterministic HTML + CSS + Three.js + GSAP + SVG composition with window.render(tSec) */
+  html: string;
+  /** 1-sentence editorial visual summary */
+  summary: string;
+  /** Named material world (e.g. "Architectural Mineral Mist", "Editorial Slate Print") */
+  worldTheme: string;
+  /** Built-in craft skills applied */
+  skillsUsed?: string[];
+  /** Whether the HTML passed Anti-Slop lint + live render verification */
+  verified?: boolean;
+  /** Diagnostic note from linter / verifier */
+  verificationNote?: string;
+  /** List of automated Impeccable/Genjutsu anti-slop fixes applied */
+  lintFixes?: string[];
+}
 
 export type Diorama3DWorldPreset =
   | "custom"
@@ -347,8 +365,8 @@ export interface CustomDesignDirection {
   preferredMotion: MotionPreset;
   preferredTransition: TransitionPreset;
   preferredEngines: AiMotionEngine[];
-  /** v2.1 Auto-Director medium detection ("3d_diorama" | "2d_freeform" | "footage_montage") */
-  renderMedium?: "3d_diorama" | "2d_freeform" | "footage_montage";
+  /** v3.0 Auto-Director medium detection ("hyperframe" | "3d_diorama" | "2d_freeform" | "footage_montage") */
+  renderMedium?: "hyperframe" | "3d_diorama" | "2d_freeform" | "footage_montage";
   /** v2.1 3D cutaway world archetype */
   worldPreset?: Diorama3DWorldPreset | string;
   /** v2.1 Viral Shorts caption vertical placement */
@@ -431,7 +449,7 @@ export interface SceneItem {
 }
 
 export interface SynkcutProject {
-  version: "1.0" | "1.1" | "2.0" | "2.1";
+  version: "1.0" | "1.1" | "2.0" | "2.1" | "3.0";
   meta: {
     id: string;
     name: string;
@@ -444,6 +462,8 @@ export interface SynkcutProject {
   };
   styleReference?: ProjectStyleReference | null;
   footageLibrary?: FootageLibraryItem[];
+  /** v3.0 Unified HyperFrames composition (HTML + CSS + Three.js + GSAP 3 + SVG + Impeccable) */
+  hyperframe?: HyperframeConfig | null;
   /** Unified 3D Diorama world (Three.js PBR) rendered continuously across diorama_3d beats */
   world3d?: World3DConfig | null;
   globalStyle: {

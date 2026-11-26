@@ -52,6 +52,7 @@ const VALID_TRANSITIONS: TransitionPreset[] = [
 ];
 const VALID_ROLES: SceneRole[] = ["hook", "body", "cta"];
 const VALID_ENGINES: AiMotionEngine[] = [
+  "hyperframe",
   "diorama_3d",
   "custom_code",
   "flow_diagram",
@@ -202,8 +203,8 @@ export function sanitizeCustomDesign(raw: unknown): CustomDesignDirection | null
       preferredEngines.length > 0 ? preferredEngines : ["custom_code"],
     renderMedium: pickEnum(
       obj.renderMedium,
-      ["3d_diorama", "2d_freeform", "footage_montage"] as const,
-      "2d_freeform"
+      ["hyperframe", "3d_diorama", "2d_freeform", "footage_montage"] as const,
+      "hyperframe"
     ),
     worldPreset: typeof obj.worldPreset === "string" ? obj.worldPreset : "auto",
     captionPlacement: pickEnum(
@@ -242,7 +243,9 @@ export function sanitizeAiMotionSpec(
     takeaway,
   };
 
-  if (engine === "diorama_3d") {
+  if (engine === "hyperframe") {
+    // HyperFrames v3 scenes render via project.hyperframe deterministic HTML composition
+  } else if (engine === "diorama_3d") {
     const rawD3 = (obj.diorama3d && typeof obj.diorama3d === "object"
       ? obj.diorama3d
       : {}) as Record<string, unknown>;
@@ -776,6 +779,39 @@ export function normalizeProject(
       }
     : fallback?.world3d ?? null;
 
+  const rawHf =
+    obj.hyperframe === null
+      ? null
+      : obj.hyperframe && typeof obj.hyperframe === "object"
+        ? (obj.hyperframe as Record<string, unknown>)
+        : null;
+  const hyperframe = rawHf
+    ? {
+        html: asStr(rawHf.html, ""),
+        summary: asStr(rawHf.summary, "HyperFrames v3 Editorial Motion Composition"),
+        worldTheme: asStr(rawHf.worldTheme, "Architectural Mineral Mist"),
+        skillsUsed: Array.isArray(rawHf.skillsUsed)
+          ? rawHf.skillsUsed.map((s) => asStr(s, "").trim()).filter(Boolean)
+          : [
+              "hyperframes-engine",
+              "threejs-skills-r187",
+              "gsap-timeline-choreography",
+              "design-dna-tokens",
+              "motion-design-svg",
+              "genjutsu-impeccable-unslop",
+            ],
+        lintFixes: Array.isArray(rawHf.lintFixes)
+          ? rawHf.lintFixes.map((s) => asStr(s, "").trim()).filter(Boolean)
+          : [],
+        verified: typeof rawHf.verified === "boolean" ? rawHf.verified : false,
+        verificationNote:
+          typeof rawHf.verificationNote === "string" ? rawHf.verificationNote : undefined,
+      }
+    : fallback?.hyperframe ?? null;
+
+  const hasHyperframe =
+    Boolean(hyperframe && hyperframe.html.trim().length > 0) ||
+    reflowedScenes.some((s) => s.aiMotion?.engine === "hyperframe");
   const hasDiorama =
     Boolean(world3d) || reflowedScenes.some((s) => s.aiMotion?.engine === "diorama_3d");
   const hasCustomCode = reflowedScenes.some((s) => s.aiMotion?.engine === "custom_code");
@@ -784,13 +820,15 @@ export function normalizeProject(
 
   const normalized: SynkcutProject = {
     version:
-      hasDiorama || obj.version === "2.1"
-        ? "2.1"
-        : hasCustomCode || obj.version === "2.0"
-          ? "2.0"
-          : hasMotionOrCustom || obj.version === "1.1"
-            ? "1.1"
-            : "1.0",
+      hasHyperframe || obj.version === "3.0"
+        ? "3.0"
+        : hasDiorama || obj.version === "2.1"
+          ? "2.1"
+          : hasCustomCode || obj.version === "2.0"
+            ? "2.0"
+            : hasMotionOrCustom || obj.version === "1.1"
+              ? "1.1"
+              : "1.0",
     meta: {
       id: asStr(rawMeta.id, fallback?.meta.id ?? `proj_${Date.now()}`),
       name: asStr(rawMeta.name, fallback?.meta.name ?? "Proyek Synkcut"),
@@ -799,6 +837,12 @@ export function normalizeProject(
       fps: rawMeta.fps === 60 ? 60 : 30,
       createdAt: typeof rawMeta.createdAt === "string" ? rawMeta.createdAt : fallback?.meta.createdAt,
       updatedAt: typeof rawMeta.updatedAt === "string" ? rawMeta.updatedAt : fallback?.meta.updatedAt,
+      posterDataUrl:
+        typeof rawMeta.posterDataUrl === "string" && rawMeta.posterDataUrl.trim().length > 0
+          ? rawMeta.posterDataUrl
+          : rawMeta.posterDataUrl === null
+            ? null
+            : fallback?.meta.posterDataUrl ?? null,
     },
     styleReference:
       obj.styleReference && typeof obj.styleReference === "object"
@@ -806,6 +850,7 @@ export function normalizeProject(
         : fallback?.styleReference ?? null,
     footageLibrary,
     world3d,
+    hyperframe,
     globalStyle: {
       captionPreset: pickEnum(
         rawStyle.captionPreset,

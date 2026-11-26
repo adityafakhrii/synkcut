@@ -131,6 +131,77 @@ const BUILTIN_SKILLS: &[BuiltinSkillDef] = &[
 - Choreograph smooth continuous 3D camera motion across beats via `D3.lerpCamera(world, keyframes, state.globalProgress)`.
 - Layer 3D-tracked HUD graphics (`D3.drawBadgeAt3D`, `D3.drawCalloutAt3D`, `D3.drawRuler`, `D3.drawPopupTitle`) ONLY when relevant to the narration."#,
     },
+    BuiltinSkillDef {
+        id: "hyperframes-engine",
+        name: "HyperFrames Deterministic HTML Video",
+        source: "heygen-com/hyperframes",
+        category: "HyperFrames v3",
+        summary: "Write HTML, render video: komposisi HTML/CSS/SVG/GSAP/WebGL 1080×1920 deterministik via window.render(tSec).",
+        content: r#"# Skill: HyperFrames Deterministic HTML Video (heygen-com/hyperframes)
+- Author ONE self-contained 1080x1920 HTML5 composition driven strictly by `window.render(tSec)` (zero live `requestAnimationFrame` clocks, zero `setTimeout`, 100% deterministic at any timestamp).
+- Register the master paused GSAP timeline at `window.__timelines = { main: masterTl }` and call `masterTl.time(tSec, false)` inside `window.render(tSec)`.
+- Load ONLY local vendored runtimes (`./vendor/gsap.min.js`, `./vendor/three.module.js`, `./vendor/s3-kit.js`) so rendering works 100% offline with zero CDN timeouts.
+- Read `const TRANSCRIPT = /*TRANSCRIPT*/null;` so act boundaries and karaoke subtitles stay 100% locked to the real Neural TTS voiceover."#,
+    },
+    BuiltinSkillDef {
+        id: "threejs-skills-r187",
+        name: "Three.js Architectural 3D & PBR (r187)",
+        source: "CloudAI-X/threejs-skills",
+        category: "3D WebGL & PBR",
+        summary: "Three.js r187 modern PBR, LatheGeometry/TubeGeometry maquette, studio shadow floor, dan Gallery Rail anti-photobomb.",
+        content: r#"# Skill: Three.js r187 Architectural Maquettes (CloudAI-X/threejs-skills)
+- Use `S3.createStudioWorld(canvas, { fogHex, isDark, fov })` for calibrated ACESFilmic tone mapping, 2048px soft shadows, and seamless studio floor shadows.
+- Place each act's 3D miniature diorama along a non-colliding horizontal Gallery Rail (`x = -13, 0, +13, +26`) so NO foreground prop ever photobombs another act's camera!
+- Prefer sculpted tactile geometry (`S3.buildPlinth`, `S3.buildCoolingTower`, `S3.buildGlassBottle`, `S3.buildServerRack`, `S3.buildGpuModule`, `S3.buildSmartphone`, `S3.buildConduit`, `S3.buildGlobe`, `S3.buildBarMonolith`, or custom `LatheGeometry`/`TubeGeometry`) with procedural PBR textures (`S3.makeStoneTexture`, `S3.makeConcreteRibTexture`)."#,
+    },
+    BuiltinSkillDef {
+        id: "gsap-timeline-choreography",
+        name: "GSAP 3 Master Timeline Choreography",
+        source: "GSAP GreenSock",
+        category: "Animasi Timeline",
+        summary: "Satu timeline GSAP paused sinkron dubbing dengan kurva easing editorial konsisten (expo.out & power3.inOut).",
+        content: r#"# Skill: GSAP 3 Master Timeline Choreography
+- Build ONE `const masterTl = gsap.timeline({ paused: true });` driving both 3D camera rig (`camX/Y/Z`, `lookX/Y/Z`, `fov`, physical parameters) and HTML/SVG editorial transitions.
+- Stick to ONE cohesive easing family (`expo.out` for crisp entrances, `power3.inOut` for 3D camera crane glides, `power2.in` for clean exits). Avoid generic bouncy springs.
+- Keep smooth continuous micro-motion on the hero 3D object during every hold so no frame ever looks frozen."#,
+    },
+    BuiltinSkillDef {
+        id: "design-dna-tokens",
+        name: "Design DNA Material Token System",
+        source: "Design DNA Skill",
+        category: "Sistem Desain",
+        summary: "Ekstrak & terapkan CSS custom properties dari dunia material topik (Mineral Mist, Editorial Slate, Botanical Clay).",
+        content: r#"# Skill: Design DNA Material Token System
+- Define deliberate `:root` CSS tokens (`--paper`, `--paper-deep`, `--ink`, `--ink-secondary`, `--ink-muted`, `--hairline`, `--accent-primary`, `--accent-secondary`, `--font-serif`, `--font-sans`, `--font-mono`).
+- Derive the surface palette from the physical world of the topic (e.g., Cool Architectural Mineral Mist `#EAEEF2` for concrete/water/infrastructure; Deep Charcoal Print `#12151B` ONLY when user explicitly asks for dark mode; Warm Botanical Linen for craft/food). NEVER default reflexively to dark-neon sci-fi or plain beige.
+- Reserve chromatic accents strictly for physical meaning (max 1-2 purposeful accents); keep chrome quiet and neutral."#,
+    },
+    BuiltinSkillDef {
+        id: "motion-design-svg",
+        name: "Motion Design SVG & 3D Hairline Annotations",
+        source: "LottieFiles Motion Design Skill",
+        category: "Vektor & HUD",
+        summary: "Layer SVG 1080×1920 untuk pointer museum 3D-tracked, kurva data keyframed, dan tabel perbandingan Swiss-editorial.",
+        content: r#"# Skill: Motion Design SVG & 3D Hairline Annotations (LottieFiles)
+- Layer `<svg id="hud-svg" viewBox="0 0 1080 1920">` above the WebGL canvas for crisp vector callouts and animated data graphics.
+- Project real 3D coordinates via `S3.project3D(vec3, camera, 1080, 1920)` into clean museum-diagram hairline pointers (6px dot + 2px line + sentence-case label with contrast halo — NO heavy rounded sci-fi boxes!).
+- Use tabular-nums (`font-variant-numeric: tabular-nums`) and Swiss-editorial horizontal comparison rules with ONE accent highlight bar."#,
+    },
+    BuiltinSkillDef {
+        id: "genjutsu-impeccable-unslop",
+        name: "Genjutsu + Impeccable Anti-AI-Slop Craft",
+        source: "Genjutsu + Impeccable v4.11 + Unslop",
+        category: "Kualitas & Anti-Slop",
+        summary: "Larangan keras AI slop: 0% neon glow, 0% eyebrow pill, 0% blur kaca dekoratif, 0% emoji UI, WCAG AA ≥ 4.5:1.",
+        content: r#"# Skill: Genjutsu + Impeccable + Unslop Anti-AI-Slop Floor (NON-NEGOTIABLE)
+- ABSOLUTE BANS:
+  1. NO eyebrow/kicker pill tags above headings (`FAKTA AI`, `STEP 01`, etc.) — let the headline carry its own weight!
+  2. NO colored zero-offset neon glows (`box-shadow: 0 0 ...`, `text-shadow: 0 0 ...`) and NO decorative glassmorphism blur cards.
+  3. NO HUD corner brackets, fake telemetry clocks (`00:03.5`), or emojis inside UI screens.
+  4. NO identical repeated side-by-side stat card layouts across consecutive acts — give every act its own distinct editorial composition!
+  5. NO overused AI fonts (`Inter`, `Plus Jakarta Sans`, `Space Grotesk`, `Instrument Serif`). Use distinctive editorial pairings: `Newsreader` or `Bricolage Grotesque` + `DM Sans` (400-600 weights) + `JetBrains Mono` strictly for numeric data.
+- Keep display headlines balanced (`58px-72px`), sentence-case everywhere, WCAG AA contrast ≥ 4.5:1, and reserve `bottom: 190px..280px` cleanly for quiet underlined word-by-word karaoke subtitles."#,
+    },
 ];
 
 fn skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -511,10 +582,20 @@ mod tests {
 
     #[test]
     fn test_builtin_skills_include_3d_diorama_storytelling() {
-        assert!(
-            BUILTIN_SKILLS.iter().any(|s| s.id == "3d-diorama-storytelling"),
-            "3d-diorama-storytelling skill must be bundled offline"
-        );
-        assert_eq!(BUILTIN_SKILLS.len(), 7);
+        for required in [
+            "3d-diorama-storytelling",
+            "hyperframes-engine",
+            "threejs-skills-r187",
+            "gsap-timeline-choreography",
+            "design-dna-tokens",
+            "motion-design-svg",
+            "genjutsu-impeccable-unslop",
+        ] {
+            assert!(
+                BUILTIN_SKILLS.iter().any(|s| s.id == required),
+                "required skill `{required}` must be bundled offline"
+            );
+        }
+        assert_eq!(BUILTIN_SKILLS.len(), 13);
     }
 }

@@ -2,6 +2,8 @@ mod ai;
 mod audio;
 mod audio_pack;
 mod byok;
+mod hyperframes;
+mod hyperframes_export;
 mod motion_skills;
 mod projects;
 mod style_ref;
@@ -435,6 +437,29 @@ async fn mux_export_mp4(
     output_path: String,
     mix_plan: Option<AudioMixPlan>,
 ) -> Result<ExportResult, String> {
+    mux_export_mp4_internal(
+        app,
+        video_bytes,
+        temp_video_path,
+        audio_path,
+        generate_demo_audio,
+        duration_sec,
+        output_path,
+        mix_plan,
+    )
+    .await
+}
+
+pub(crate) async fn mux_export_mp4_internal(
+    app: AppHandle,
+    video_bytes: Option<Vec<u8>>,
+    temp_video_path: Option<String>,
+    audio_path: Option<String>,
+    generate_demo_audio: bool,
+    duration_sec: f64,
+    output_path: String,
+    mix_plan: Option<AudioMixPlan>,
+) -> Result<ExportResult, String> {
     if !output_path.trim().to_ascii_lowercase().ends_with(".mp4") {
         return Err("Path tujuan export wajib berakhiran .mp4.".to_string());
     }
@@ -791,6 +816,11 @@ pub fn run() {
             ai::ai_repair_3d_diorama,
             ai::ai_assemble_project,
             ai::ai_copilot_patch,
+            hyperframes::ai_generate_hyperframe_video,
+            hyperframes::ai_repair_hyperframe_video,
+            hyperframes::ai_patch_hyperframe_video,
+            hyperframes_export::export_hyperframe_mp4,
+            hyperframes_export::capture_hyperframe_poster,
             motion_skills::list_motion_skills,
             motion_skills::toggle_motion_skill,
             motion_skills::save_custom_motion_skill,

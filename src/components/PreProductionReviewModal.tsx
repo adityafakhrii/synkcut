@@ -24,6 +24,7 @@ import {
   aiAssembleProject,
   aiGenerate3dDiorama,
   aiGenerateBeatCodes,
+  aiGenerateHyperframeVideo,
   aiPlanStoryboard,
   generateTtsAudio,
   isTauriRuntime,
@@ -123,7 +124,9 @@ export default function PreProductionReviewModal({
     draft.autoDesign ?? null
   );
   const [isPlanningBeats, setIsPlanningBeats] = useState(false);
-  const [mediumChoice, setMediumChoice] = useState<"auto" | "3d_diorama" | "2d_freeform">("auto");
+  const [mediumChoice, setMediumChoice] = useState<
+    "hyperframe" | "auto" | "3d_diorama" | "2d_freeform"
+  >("hyperframe");
 
   const resolvedMedium = resolveAutoRenderMedium({
     preference: mediumChoice,
@@ -322,7 +325,9 @@ export default function PreProductionReviewModal({
     );
   }
 
-  async function handleConfirmGenerateVideo(overrideMedium?: "2d_freeform" | "3d_diorama") {
+  async function handleConfirmGenerateVideo(
+    overrideMedium?: "hyperframe" | "2d_freeform" | "3d_diorama"
+  ) {
     if (isGeneratingVideo || !fullScript.trim()) return;
     const myRunId = ++genRunIdRef.current;
     setFriendlyError(null);
@@ -446,7 +451,29 @@ export default function PreProductionReviewModal({
       const targetMedium = overrideMedium ?? resolvedMedium;
 
       let rawProject: SynkcutProject;
-      if (targetMedium === "3d_diorama" && draft.visualMode !== "hybrid") {
+      if (targetMedium === "hyperframe" && draft.visualMode !== "hybrid") {
+        attempted3d = true;
+        setProgressText(
+          "HyperFrames v3 + 6 Craft Skills: Merancang HTML5 + Three.js + GSAP + SVG anti-slop..."
+        );
+        rawProject = await aiGenerateHyperframeVideo({
+          projectTitle: projectTitle.trim() || "HyperFrames Video",
+          format: draft.format,
+          userPrompt: draft.userPrompt ?? null,
+          beats: activeBeats,
+          words: activeAudio.words,
+          customDesign,
+          styleReference,
+          audioPath: activeAudio.audioPath || null,
+          audioSource: activeAudio.audioPath ? "tts" : "demo",
+          trimSilence: true,
+          captionPreset,
+          accentColor,
+          bgmPreset: targetBgm,
+          autoDucking: true,
+          autoSfx: true,
+        });
+      } else if (targetMedium === "3d_diorama" && draft.visualMode !== "hybrid") {
         attempted3d = true;
         setProgressText("Tahap 1/2: Membangun objek, pencahayaan & dunia 3D...");
         rawProject = await aiGenerate3dDiorama({
@@ -803,6 +830,7 @@ export default function PreProductionReviewModal({
                     }}
                   >
                     {[
+                      { id: "hyperframe" as const, label: "HyperFrames v3" },
                       { id: "auto" as const, label: "Otomatis AI" },
                       { id: "3d_diorama" as const, label: "3D Diorama" },
                       { id: "2d_freeform" as const, label: "2D Motion" },
@@ -853,15 +881,19 @@ export default function PreProductionReviewModal({
                     className="rounded-full px-2 py-0.5 font-semibold"
                     style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
                   >
-                    {resolvedMedium === "3d_diorama"
-                      ? "Aktif: 3D Scene (Three.js)"
-                      : "Aktif: 2D Motion Bebas (Canvas + SVG)"}
+                    {resolvedMedium === "hyperframe"
+                      ? "Aktif: HyperFrames v3 (Three.js + GSAP + SVG + Impeccable)"
+                      : resolvedMedium === "3d_diorama"
+                        ? "Aktif: 3D Scene (Three.js)"
+                        : "Aktif: 2D Motion Bebas (Canvas + SVG)"}
                   </span>
                   <span>
-                    {aiMediumReason ||
-                      (resolvedMedium === "3d_diorama"
-                        ? "Dunia 3D kustom sesuai prompt · kamera 3D kontinu · BGM & SFX otomatis"
-                        : "Kode animasi baru tiap beat · palet & tipografi kustom · BGM & SFX otomatis")}
+                    {resolvedMedium === "hyperframe"
+                      ? "6 Craft Skills aktif · HTML5 + Three.js r187 + GSAP 3 + SVG · Linter Anti-Slop + Neural TTS"
+                      : aiMediumReason ||
+                        (resolvedMedium === "3d_diorama"
+                          ? "Dunia 3D kustom sesuai prompt · kamera 3D kontinu · BGM & SFX otomatis"
+                          : "Kode animasi baru tiap beat · palet & tipografi kustom · BGM & SFX otomatis")}
                   </span>
                 </div>
                 {activeDesign && (
